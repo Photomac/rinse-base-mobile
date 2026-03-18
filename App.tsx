@@ -1,20 +1,139 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useState, useEffect } from 'react'
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { NavigationContainer } from '@react-navigation/native'
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
+import { supabase } from './src/lib/supabase'
+import { LoginScreen } from './src/screens/LoginScreen'
+import { DashboardScreen } from './src/screens/DashboardScreen'
+import { TodayScreen } from './src/screens/TodayScreen'
+import { ScheduleScreen } from './src/screens/ScheduleScreen'
+import { MileageScreen } from './src/screens/MileageScreen'
+import { ProfileScreen } from './src/screens/ProfileScreen'
+import { JobDetailScreen } from './src/screens/JobDetailScreen'
+
+const TEAL = '#00C9A7'
+const NAVY = '#0A1628'
+const Tab = createBottomTabNavigator()
 
 export default function App() {
+  const [session, setSession] = useState<any>(null)
+  const [user, setUser] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [selectedJob, setSelectedJob] = useState<any>(null)
+  const [activeTab, setActiveTab] = useState('Dashboard')
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      if (session) loadUser(session.user.id)
+      else setLoading(false)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+      if (session) loadUser(session.user.id)
+      else { setUser(null); setLoading(false) }
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
+  async function loadUser(authId: string) {
+    const { data } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
+    setUser(data)
+    setLoading(false)
+  }
+
+  function handleNavigate(screen: string) {
+    const tabMap: Record<string, string> = {
+      dashboard: 'Dashboard',
+      jobs: 'Today',
+      schedule: 'Schedule',
+      mileage: 'Mileage',
+      profile: 'Profile',
+    }
+    if (tabMap[screen]) setActiveTab(tabMap[screen])
+  }
+
+  if (loading) {
+    return (
+      <View style={styles.loading}>
+        <View style={styles.logo}><Text style={styles.logoText}>RB</Text></View>
+        <ActivityIndicator color={TEAL} style={{ marginTop: 24 }} />
+      </View>
+    )
+  }
+
+  if (!session || !user) {
+    return <SafeAreaProvider><LoginScreen /></SafeAreaProvider>
+  }
+
+  if (selectedJob) {
+    return (
+      <SafeAreaProvider>
+        <JobDetailScreen
+          job={selectedJob}
+          user={user}
+          onBack={() => setSelectedJob(null)}
+          onStatusChange={(job: any, status: string) => setSelectedJob((prev: any) => prev ? { ...prev, status } : null)}
+        />
+      </SafeAreaProvider>
+    )
+  }
+
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
-  );
+    <SafeAreaProvider>
+      <NavigationContainer>
+        <Tab.Navigator
+          screenOptions={{
+            headerShown: false,
+            tabBarStyle: { backgroundColor: NAVY, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: 4, height: 64 },
+            tabBarActiveTintColor: TEAL,
+            tabBarInactiveTintColor: 'rgba(255,255,255,0.35)',
+            tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: 2 },
+          }}
+        >
+          <Tab.Screen
+            name="Dashboard"
+            options={{ tabBarLabel: 'Home', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⊞</Text> }}
+          >
+            {() => <DashboardScreen user={user} onJobPress={setSelectedJob} onNavigate={handleNavigate} />}
+          </Tab.Screen>
+
+          <Tab.Screen
+            name="Today"
+            options={{ tabBarLabel: "Today", tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>☀</Text> }}
+          >
+            {() => <TodayScreen user={user} onJobPress={setSelectedJob} />}
+          </Tab.Screen>
+
+          <Tab.Screen
+            name="Schedule"
+            options={{ tabBarLabel: 'Schedule', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>📅</Text> }}
+          >
+            {() => <ScheduleScreen user={user} onJobPress={setSelectedJob} />}
+          </Tab.Screen>
+
+          <Tab.Screen
+            name="Mileage"
+            options={{ tabBarLabel: 'Mileage', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>↗</Text> }}
+          >
+            {() => <MileageScreen user={user} />}
+          </Tab.Screen>
+
+          <Tab.Screen
+            name="Profile"
+            options={{ tabBarLabel: 'Profile', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>◉</Text> }}
+          >
+            {() => <ProfileScreen user={user} />}
+          </Tab.Screen>
+        </Tab.Navigator>
+      </NavigationContainer>
+    </SafeAreaProvider>
+  )
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
+  loading: { flex: 1, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' },
+  logo: { width: 72, height: 72, borderRadius: 20, backgroundColor: TEAL, alignItems: 'center', justifyContent: 'center' },
+  logoText: { color: '#fff', fontSize: 28, fontWeight: '800' },
+})
