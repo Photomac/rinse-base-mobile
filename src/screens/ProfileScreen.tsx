@@ -52,7 +52,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8F9FA' },
   header: { backgroundColor: NAVY, padding: 20 },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: '800' },
-  scroll: { padding: 16, paddingBottom: 40 },
+  scroll: { padding: 16, paddingBottom: 100 },
   avatarSection: { alignItems: 'center', marginBottom: 20, marginTop: 8 },
   avatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: TEAL, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   avatarText: { color: '#fff', fontSize: 28, fontWeight: '800' },

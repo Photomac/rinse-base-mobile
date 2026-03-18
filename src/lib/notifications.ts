@@ -33,7 +33,7 @@ export async function registerPushToken(user: any) {
 
   // Get Expo push token
   const tokenData = await Notifications.getExpoPushTokenAsync({
-    projectId: 'rinsebase-mobile', // Update with your EAS project ID
+    projectId: '4768586a-ae45-4b35-984c-a1803f1b2985', // Update with your EAS project ID
   })
   const token = tokenData.data
 
@@ -60,7 +60,7 @@ export async function sendSOSNotification(tenantId: string, crewName: string, lo
 
   // Filter to owners and managers only
   const alertTokens = tokens
-    .filter((t: any) => ['owner', 'manager'].includes(t.users?.role))
+    .filter((t: any) => ['owner', 'manager', 'dispatcher'].includes(t.users?.role))
     .map((t: any) => t.token)
 
   if (!alertTokens.length) return

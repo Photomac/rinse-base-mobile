@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "rinsebase-mobile",
-    "slug": "rinsebase-mobile",
+    "slug": "rinse-base-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -28,6 +28,12 @@
     },
     "plugins": [
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4768586a-ae45-4b35-984c-a1803f1b2985"
+      }
+    },
+    "owner": "photomacs-organization"
   }
 }

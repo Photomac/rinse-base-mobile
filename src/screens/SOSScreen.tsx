@@ -6,7 +6,7 @@ import { supabase } from '../lib/supabase'
 import { sendSOSNotification } from '../lib/notifications'
 
 const HOLD_DURATION = 3000
-const COUNTDOWN_SECONDS = 60
+const COUNTDOWN_SECONDS = 120
 
 interface Props {
   user: any
@@ -97,7 +97,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     holdTimer.current = setTimeout(() => {
       clearInterval(holdInterval.current)
       setHoldProgress(100)
-      sendSOS()
+      // sendSOS is handled by onLongPress
     }, HOLD_DURATION)
   }
 
@@ -166,7 +166,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
           <Text style={styles.instructionTitle}>Hold button for 3 seconds</Text>
           <Text style={styles.instructionSub}>
             This will alert your owner and manager immediately.{'\n'}
-            If no response in 60 seconds, 911 will be called.
+            If no response in 2 minutes, 911 will be called.
           </Text>
 
           {/* Big SOS hold button */}
@@ -187,7 +187,11 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
             )}
             <TouchableOpacity
               style={[styles.sosButton, phase === 'holding' && styles.sosButtonHolding]}
-              onPress={phase === 'holding' ? cancelHold : startHold}
+              onLongPress={sendSOS}
+              delayLongPress={3000}
+              onPressIn={startHold}
+              onPressOut={cancelHold}
+              onPress={() => {}}
               activeOpacity={0.85}
             >
               <Text style={styles.sosEmoji}>🆘</Text>
@@ -234,8 +238,8 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
             <Text style={styles.countdownLabel}>
               {countdown > 0 ? '911 auto-call in' : 'Calling 911...'}
             </Text>
-            <Text style={[styles.countdownNum, countdown <= 10 && { color: '#EF4444' }]}>
-              {countdown > 0 ? `${countdown}s` : '📞'}
+            <Text style={[styles.countdownNum, countdown <= 30 && { color: '#EF4444' }]}>
+              {countdown > 0 ? `${Math.floor(countdown/60)}:${String(countdown%60).padStart(2,'0')}` : '📞'}
             </Text>
             <Text style={styles.countdownSub}>
               {countdown > 0 ? 'Tap "I\'m OK" if this was a mistake' : 'Read your GPS coordinates to dispatcher'}
