@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, RefreshControl } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
@@ -18,6 +18,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate }: { user: any; o
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [sosLoading, setSosLoading] = useState(false)
+  const [sosHolding, setSosHolding] = useState(false)
+  const [sosProgress, setSosProgress] = useState(0)
+  const sosTimer = useRef<any>(null)
+  const sosInterval = useRef<any>(null)
 
   const load = useCallback(async () => {
     const now = new Date()
@@ -70,29 +74,36 @@ export function DashboardScreen({ user, onJobPress, onNavigate }: { user: any; o
 
   useEffect(() => { load() }, [load])
 
-  async function triggerSOS() {
-    Alert.alert(
-      '🆘 Send SOS Alert',
-      'This will immediately notify your owner and manager. Only use in a genuine emergency.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: '🆘 Send SOS Now', style: 'destructive',
-          onPress: async () => {
-            setSosLoading(true)
-            const { error } = await supabase.from('sos_alerts').insert({
-              tenant_id: user.tenant_id,
-              user_id: user.id,
-              triggered_at: new Date().toISOString(),
-              status: 'active',
-            })
-            setSosLoading(false)
-            if (error) Alert.alert('Error', 'Could not send SOS. Call your manager directly.')
-            else Alert.alert('🆘 SOS Sent', 'Your owner and manager have been notified. Help is on the way.')
-          }
-        }
-      ]
-    )
+  function startSosHold() {
+    setSosHolding(true)
+    setSosProgress(0)
+    let progress = 0
+    sosInterval.current = setInterval(() => {
+      progress += 100 / 30
+      setSosProgress(Math.min(progress, 100))
+    }, 100)
+    sosTimer.current = setTimeout(async () => {
+      clearInterval(sosInterval.current)
+      setSosHolding(false)
+      setSosProgress(0)
+      setSosLoading(true)
+      const { error } = await supabase.from('sos_alerts').insert({
+        tenant_id: user.tenant_id,
+        user_id: user.id,
+        triggered_at: new Date().toISOString(),
+        status: 'active',
+      })
+      setSosLoading(false)
+      if (error) Alert.alert('Error', 'Could not send SOS. Call your manager directly.')
+      else Alert.alert('SOS Sent', 'Your owner and manager have been notified. Help is on the way.')
+    }, 3000)
+  }
+
+  function cancelSosHold() {
+    clearTimeout(sosTimer.current)
+    clearInterval(sosInterval.current)
+    setSosHolding(false)
+    setSosProgress(0)
   }
 
   const now = new Date()
@@ -113,9 +124,23 @@ export function DashboardScreen({ user, onJobPress, onNavigate }: { user: any; o
               <Text style={styles.greeting}>{greeting}, {user.full_name?.split(' ')[0]} 👋</Text>
               <Text style={styles.date}>{now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
             </View>
-            {/* SOS Button */}
-            <TouchableOpacity style={styles.sosBtn} onPress={triggerSOS} disabled={sosLoading}>
-              {sosLoading ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.sosBtnText}>🆘</Text>}
+            <TouchableOpacity
+              style={[styles.sosBtn, sosHolding && { transform: [{ scale: 1.1 }] }]}
+              onPressIn={startSosHold}
+              onPressOut={cancelSosHold}
+              disabled={sosLoading}
+              activeOpacity={0.8}
+            >
+              {sosLoading
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <>
+                    <Text style={styles.sosBtnText}>🆘</Text>
+                    <Text style={styles.sosHoldLabel}>{sosHolding ? `${Math.round(sosProgress / 33.3)}s...` : 'Hold 3s'}</Text>
+                    {sosHolding && (
+                      <View style={[styles.sosProgressBar, { width: `${sosProgress}%` }]} />
+                    )}
+                  </>
+              }
             </TouchableOpacity>
           </View>
 
@@ -267,7 +292,9 @@ const styles = StyleSheet.create({
   greeting: { color: '#fff', fontSize: 22, fontWeight: '800' },
   date: { color: 'rgba(255,255,255,0.5)', fontSize: 12, marginTop: 2 },
   sosBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center', shadowColor: '#EF4444', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8 },
-  sosBtnText: { fontSize: 24 },
+  sosBtnText: { fontSize: 20 },
+  sosHoldLabel: { fontSize: 7, color: 'rgba(255,255,255,0.8)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.3 },
+  sosProgressBar: { position: 'absolute', bottom: 0, left: 0, height: 3, backgroundColor: '#fff', borderRadius: 2 },
   statsBar: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 14, padding: 14, marginBottom: 20 },
   stat: { flex: 1, alignItems: 'center' },
   statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.1)' },
