@@ -11,6 +11,7 @@ import { ScheduleScreen } from './src/screens/ScheduleScreen'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
+import { SOSScreen } from './src/screens/SOSScreen'
 
 const TEAL = '#00C9A7'
 const NAVY = '#0A1628'
@@ -22,6 +23,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [selectedJob, setSelectedJob] = useState<any>(null)
   const [activeTab, setActiveTab] = useState('Dashboard')
+  const [showSOS, setShowSOS] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -67,6 +69,18 @@ export default function App() {
     return <SafeAreaProvider><LoginScreen /></SafeAreaProvider>
   }
 
+  if (showSOS) {
+    return (
+      <SafeAreaProvider>
+        <SOSScreen
+          user={user}
+          onCancel={() => setShowSOS(false)}
+          onSent={() => {}}
+        />
+      </SafeAreaProvider>
+    )
+  }
+
   if (selectedJob) {
     return (
       <SafeAreaProvider>
@@ -96,7 +110,7 @@ export default function App() {
             name="Dashboard"
             options={{ tabBarLabel: 'Home', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⊞</Text> }}
           >
-            {() => <DashboardScreen user={user} onJobPress={setSelectedJob} onNavigate={handleNavigate} />}
+            {() => <DashboardScreen user={user} onJobPress={setSelectedJob} onNavigate={handleNavigate} onSOS={() => setShowSOS(true)} />}
           </Tab.Screen>
 
           <Tab.Screen

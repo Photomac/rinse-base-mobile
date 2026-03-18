@@ -10,7 +10,7 @@ function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
-export function DashboardScreen({ user, onJobPress, onNavigate }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void }) {
+export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void; onSOS: () => void }) {
   const [todayJobs, setTodayJobs] = useState<any[]>([])
   const [activeJob, setActiveJob] = useState<any>(null)
   const [nextJob, setNextJob] = useState<any>(null)
@@ -125,22 +125,12 @@ export function DashboardScreen({ user, onJobPress, onNavigate }: { user: any; o
               <Text style={styles.date}>{now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
             </View>
             <TouchableOpacity
-              style={[styles.sosBtn, sosHolding && { transform: [{ scale: 1.1 }] }]}
-              onPressIn={startSosHold}
-              onPressOut={cancelSosHold}
-              disabled={sosLoading}
+              style={styles.sosBtn}
+              onPress={onSOS}
               activeOpacity={0.8}
             >
-              {sosLoading
-                ? <ActivityIndicator color="#fff" size="small" />
-                : <>
-                    <Text style={styles.sosBtnText}>🆘</Text>
-                    <Text style={styles.sosHoldLabel}>{sosHolding ? `${Math.round(sosProgress / 33.3)}s...` : 'Hold 3s'}</Text>
-                    {sosHolding && (
-                      <View style={[styles.sosProgressBar, { width: `${sosProgress}%` }]} />
-                    )}
-                  </>
-              }
+              <Text style={styles.sosBtnText}>🆘</Text>
+              <Text style={styles.sosHoldLabel}>SOS</Text>
             </TouchableOpacity>
           </View>
 
