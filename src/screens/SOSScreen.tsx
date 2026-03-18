@@ -3,6 +3,7 @@ import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Pressable, Alert,
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
+import { sendSOSNotification } from '../lib/notifications'
 
 const HOLD_DURATION = 3000
 const COUNTDOWN_SECONDS = 60
@@ -115,6 +116,8 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     setPhase('sent')
     setHoldProgress(0)
     // Then do async work
+    // Send push to all owners/managers
+    sendSOSNotification(user.tenant_id, user.full_name, locationLabel).catch(console.warn)
     supabase.from('sos_alerts').insert({
       tenant_id: user.tenant_id,
       user_id: user.id,

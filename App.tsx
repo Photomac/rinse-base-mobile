@@ -12,6 +12,7 @@ import { MileageScreen } from './src/screens/MileageScreen'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
 import { SOSScreen } from './src/screens/SOSScreen'
+import { registerPushToken } from './src/lib/notifications'
 
 const TEAL = '#00C9A7'
 const NAVY = '#0A1628'
@@ -43,6 +44,7 @@ export default function App() {
     const { data } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
     setUser(data)
     setLoading(false)
+    if (data) registerPushToken(data).catch(console.warn)
   }
 
   function handleNavigate(screen: string) {
