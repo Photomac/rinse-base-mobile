@@ -39,30 +39,55 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }, [])
 
   async function loadChecklist() {
-    // Look up address by street to get address_id
     const street = job.client_addresses?.street
     if (!street) return
     setLoadingChecklist(true)
+
+    // Get address ID
     const { data: addrData } = await supabase
       .from('client_addresses')
       .select('id')
       .eq('street', street)
       .eq('tenant_id', user.tenant_id)
       .maybeSingle()
-    console.log('ADDRESS LOOKUP:', street, '->', addrData?.id)
     if (!addrData?.id) { setLoadingChecklist(false); return }
-    const { data } = await supabase
+
+    // Load checklist template
+    const { data: templateData } = await supabase
       .from('address_checklist_templates')
       .select('id, room, title, sort_order')
       .eq('address_id', addrData.id)
-      .order('room')
-      .order('sort_order')
-    console.log('CHECKLIST DATA:', JSON.stringify(data))
-    if (data && data.length > 0) {
-      const items = data.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title }))
+      .order('room').order('sort_order')
+
+    if (templateData && templateData.length > 0) {
+      const items = templateData.map(item => ({
+        id: item.id,
+        label: `${item.room} — ${item.title}`,
+        room: item.room,
+        title: item.title,
+      }))
       setChecklist(items)
+
+      // Load saved checklist state for this job
+      const { data: savedItems } = await supabase
+        .from('job_checklist_items')
+        .select('id, task, room')
+        .eq('job_id', job.id)
+      
+      if (savedItems && savedItems.length > 0) {
+        const savedChecked: Record<string, boolean> = {}
+        items.forEach(item => {
+          const isSaved = savedItems.some(s => s.task === item.title && s.room === item.room)
+          if (isSaved) savedChecked[item.id] = true
+        })
+        setChecked(savedChecked)
+      }
+
       // Load photo counts per item
-      const { data: photos } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
+      const { data: photos } = await supabase
+        .from('job_photos')
+        .select('caption')
+        .eq('job_id', job.id)
       if (photos) {
         const counts: Record<string, number> = {}
         items.forEach(item => {
@@ -72,6 +97,29 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       }
     }
     setLoadingChecklist(false)
+  }
+
+  async function saveCheckItem(item: any, isChecked: boolean) {
+    if (isChecked) {
+      const { error } = await supabase.from('job_checklist_items').upsert({
+        tenant_id: user.tenant_id,
+        job_id: job.id,
+        room: item.room,
+        task: item.title,
+        sort_order: 0,
+        completed: true,
+        completed_at: new Date().toISOString(),
+        completed_by: user.id,
+      }, { onConflict: 'job_id,task,room' })
+      if (error) console.log('CHECKLIST SAVE ERROR:', JSON.stringify(error))
+      else console.log('CHECKLIST SAVED:', item.title)
+    } else {
+      await supabase.from('job_checklist_items')
+        .delete()
+        .eq('job_id', job.id)
+        .eq('task', item.title)
+        .eq('room', item.room)
+    }
   }
 
   const completedCount = Object.values(checked).filter(Boolean).length
@@ -168,7 +216,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <ActivityIndicator color={TEAL} style={{ marginVertical: 20 }} />
             ) : checklist.map((item: any) => (
               <View key={item.id} style={styles.checkItem}>
-                <TouchableOpacity onPress={() => setChecked(prev => ({ ...prev, [item.id]: !prev[item.id] }))} style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 }}>
+                <TouchableOpacity onPress={() => {
+                    const newVal = !checked[item.id]
+                    setChecked(prev => ({ ...prev, [item.id]: newVal }))
+                    saveCheckItem(item, newVal)
+                  }} style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 }}>
                   <View style={[styles.checkbox, checked[item.id] && styles.checkboxDone]}>
                     {checked[item.id] && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
                   </View>
