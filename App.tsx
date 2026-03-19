@@ -102,7 +102,7 @@ export default function App() {
         <Tab.Navigator
           screenOptions={{
             headerShown: false,
-            tabBarStyle: { backgroundColor: NAVY, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: 4, height: 64 },
+            tabBarStyle: { backgroundColor: NAVY, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: 16, height: 80 },
             tabBarActiveTintColor: TEAL,
             tabBarInactiveTintColor: 'rgba(255,255,255,0.35)',
             tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: 2 },
@@ -112,35 +112,35 @@ export default function App() {
             name="Dashboard"
             options={{ tabBarLabel: 'Home', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⊞</Text> }}
           >
-            {() => <DashboardScreen user={user} onJobPress={setSelectedJob} onNavigate={handleNavigate} onSOS={() => setShowSOS(true)} />}
+            {() => <DashboardScreen key={user?.id} user={user} onJobPress={setSelectedJob} onNavigate={handleNavigate} onSOS={() => setShowSOS(true)} />}
           </Tab.Screen>
 
           <Tab.Screen
             name="Today"
             options={{ tabBarLabel: "Today", tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>☀</Text> }}
           >
-            {() => <TodayScreen user={user} onJobPress={setSelectedJob} />}
+            {() => <TodayScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
           </Tab.Screen>
 
           <Tab.Screen
             name="Schedule"
             options={{ tabBarLabel: 'Schedule', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>📅</Text> }}
           >
-            {() => <ScheduleScreen user={user} onJobPress={setSelectedJob} />}
+            {() => <ScheduleScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
           </Tab.Screen>
 
           <Tab.Screen
             name="Mileage"
             options={{ tabBarLabel: 'Mileage', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>↗</Text> }}
           >
-            {() => <MileageScreen user={user} />}
+            {() => <MileageScreen key={user?.id} user={user} />}
           </Tab.Screen>
 
           <Tab.Screen
             name="Profile"
             options={{ tabBarLabel: 'Profile', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>◉</Text> }}
           >
-            {() => <ProfileScreen user={user} />}
+            {() => <ProfileScreen key={user?.id} user={user} />}
           </Tab.Screen>
         </Tab.Navigator>
       </NavigationContainer>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
@@ -28,7 +28,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [weekOffset, setWeekOffset] = useState(0)
 
-  const load = useCallback(async () => {
+  async function load() {
     const now = new Date()
     const start = new Date(now); start.setDate(now.getDate() - 14); start.setHours(0,0,0,0)
     const end = new Date(now); end.setDate(now.getDate() + 21); end.setHours(23,59,59,999)
@@ -50,9 +50,9 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     setJobs(myJobs)
     setLoading(false)
     setRefreshing(false)
-  }, [user])
+  }
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [])
 
   // Build week days
   const now = new Date()

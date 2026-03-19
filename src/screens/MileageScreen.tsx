@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, RefreshControl, ActivityIndicator } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
@@ -19,14 +19,14 @@ export function MileageScreen({ user }: { user: any }) {
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'Job travel', notes: '' })
 
-  const load = useCallback(async () => {
+  async function load() {
     const { data } = await supabase.from('mileage_logs').select('*').eq('tenant_id', user.tenant_id).eq('user_id', user.id).order('started_at', { ascending: false }).limit(50)
     setTrips(data ?? [])
     setLoading(false)
     setRefreshing(false)
-  }, [user])
+  }
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [])
 
   async function handleSubmit() {
     if (!form.from || !form.to) { Alert.alert('Error', 'Enter origin and destination'); return }

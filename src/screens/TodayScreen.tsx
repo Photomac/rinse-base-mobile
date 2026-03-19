@@ -29,7 +29,7 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
     const start = new Date(now); start.setHours(0,0,0,0)
     const end = new Date(now); end.setHours(23,59,59,999)
     const { data } = await supabase.from('jobs')
-      .select('id, status, scheduled_start, scheduled_end, is_turnover, supplies_needed, supplies_notes, clients!jobs_client_id_fkey(full_name, phone), client_addresses!jobs_address_id_fkey(id, street, city, state, zip, nickname, lockbox_code, arrival_instructions, lat, lng), service_types(name), job_assignments(user_id, is_lead)')
+      .select('id, address_id, status, scheduled_start, scheduled_end, is_turnover, supplies_needed, supplies_notes, clients!jobs_client_id_fkey(full_name, phone), client_addresses!jobs_address_id_fkey(id, street, city, state, zip, nickname, lockbox_code, arrival_instructions, lat, lng), service_types(name), job_assignments(user_id, is_lead)')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', start.toISOString())
       .lte('scheduled_start', end.toISOString())

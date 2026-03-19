@@ -1,14 +1,13 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, Linking, ActivityIndicator } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { JobPhotosScreen } from './JobPhotosScreen'
 
 const TEAL = '#00C9A7'
 const NAVY = '#0A1628'
 
-function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
-
-const CHECKLIST = [
+const DEFAULT_CHECKLIST = [
   { id: '1', label: 'Kitchen — counters, sink, stovetop, microwave' },
   { id: '2', label: 'Bathrooms — toilet, sink, tub/shower, mirrors' },
   { id: '3', label: 'Floors — vacuum/sweep all rooms' },
@@ -19,17 +18,67 @@ const CHECKLIST = [
   { id: '8', label: 'Final walkthrough — nothing missed' },
 ]
 
+function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
+
 export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: any; user: any; onBack: () => void; onStatusChange: (job: any, status: string) => void }) {
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [clockedIn, setClockedIn] = useState(job.status === 'in_progress')
+  const [showPhotos, setShowPhotos] = useState(false)
+  const [checklist, setChecklist] = useState(DEFAULT_CHECKLIST)
+  const [loadingChecklist, setLoadingChecklist] = useState(false)
+  const [itemPhotos, setItemPhotos] = useState<Record<string, number>>({})
+  const [activePhotoItem, setActivePhotoItem] = useState<any>(null)
 
-  const addr = job.client_addresses
-  const client = job.clients
+  const addr = job.client_addresses as any
+  const client = job.clients as any
+
+  useEffect(() => {
+    loadChecklist()
+  }, [])
+
+  async function loadChecklist() {
+    // Look up address by street to get address_id
+    const street = job.client_addresses?.street
+    if (!street) return
+    setLoadingChecklist(true)
+    const { data: addrData } = await supabase
+      .from('client_addresses')
+      .select('id')
+      .eq('street', street)
+      .eq('tenant_id', user.tenant_id)
+      .maybeSingle()
+    console.log('ADDRESS LOOKUP:', street, '->', addrData?.id)
+    if (!addrData?.id) { setLoadingChecklist(false); return }
+    const { data } = await supabase
+      .from('address_checklist_templates')
+      .select('id, room, title, sort_order')
+      .eq('address_id', addrData.id)
+      .order('room')
+      .order('sort_order')
+    console.log('CHECKLIST DATA:', JSON.stringify(data))
+    if (data && data.length > 0) {
+      const items = data.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title }))
+      setChecklist(items)
+      // Load photo counts per item
+      const { data: photos } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
+      if (photos) {
+        const counts: Record<string, number> = {}
+        items.forEach(item => {
+          counts[item.id] = photos.filter(p => p.caption === item.title).length
+        })
+        setItemPhotos(counts)
+      }
+    }
+    setLoadingChecklist(false)
+  }
+
   const completedCount = Object.values(checked).filter(Boolean).length
-  const allChecked = CHECKLIST.every(i => checked[i.id])
-  const progressPct = Math.round((completedCount / CHECKLIST.length) * 100)
+  const allChecked = checklist.every(i => checked[i.id])
+  const progressPct = Math.round((completedCount / checklist.length) * 100)
+
+  if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} onBack={() => { setShowPhotos(false); loadChecklist() }} />
 
   async function handleClockIn() {
     setSaving(true)
@@ -41,7 +90,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   async function completeJob() {
     setSaving(true)
-    await supabase.from('jobs').update({ status: 'completed', crew_done_at: new Date().toISOString() }).eq('id', job.id)
+    await supabase.from('jobs').update({ status: 'completed' }).eq('id', job.id)
     onStatusChange(job, 'completed')
     onBack()
     setSaving(false)
@@ -90,6 +139,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <Text style={styles.callBtnText}>📞 Call {client.full_name?.split(' ')[0]}</Text>
             </TouchableOpacity>
           )}
+          <TouchableOpacity style={styles.photosBtn} onPress={() => setShowPhotos(true)}>
+            <Text style={styles.photosBtnText}>📸 Job Photos</Text>
+          </TouchableOpacity>
         </View>
 
         {job.supplies_needed?.length > 0 && (
@@ -109,16 +161,26 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           <View style={styles.card}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <Text style={styles.sectionTitle}>Cleaning checklist</Text>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: TEAL }}>{completedCount}/{CHECKLIST.length}</Text>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: TEAL }}>{completedCount}/{checklist.length}</Text>
             </View>
             <View style={styles.progressBg}><View style={[styles.progressFill, { width: `${progressPct}%` as any }]} /></View>
-            {CHECKLIST.map(item => (
-              <TouchableOpacity key={item.id} style={styles.checkItem} onPress={() => setChecked(prev => ({ ...prev, [item.id]: !prev[item.id] }))} activeOpacity={0.6}>
-                <View style={[styles.checkbox, checked[item.id] && styles.checkboxDone]}>
-                  {checked[item.id] && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
-                </View>
-                <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.label}</Text>
-              </TouchableOpacity>
+            {loadingChecklist ? (
+              <ActivityIndicator color={TEAL} style={{ marginVertical: 20 }} />
+            ) : checklist.map((item: any) => (
+              <View key={item.id} style={styles.checkItem}>
+                <TouchableOpacity onPress={() => setChecked(prev => ({ ...prev, [item.id]: !prev[item.id] }))} style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 }}>
+                  <View style={[styles.checkbox, checked[item.id] && styles.checkboxDone]}>
+                    {checked[item.id] && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
+                  </View>
+                  <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.label}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.itemPhotoBtn, itemPhotos[item.id] > 0 && styles.itemPhotoBtnDone]}
+                  onPress={() => { setActivePhotoItem(item); setShowPhotos(true) }}
+                >
+                  <Text style={styles.itemPhotoBtnText}>{itemPhotos[item.id] > 0 ? `📷 ${itemPhotos[item.id]}` : '📷'}</Text>
+                </TouchableOpacity>
+              </View>
             ))}
           </View>
         )}
@@ -161,6 +223,8 @@ const styles = StyleSheet.create({
   infoValue: { fontSize: 14, color: '#111827', fontWeight: '600', marginTop: 2 },
   callBtn: { marginTop: 4, backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', borderRadius: 10, padding: 12, alignItems: 'center' },
   callBtnText: { color: '#15803D', fontSize: 13, fontWeight: '700' },
+  photosBtn: { marginTop: 8, backgroundColor: '#F5F3FF', borderWidth: 1, borderColor: '#DDD6FE', borderRadius: 10, padding: 12, alignItems: 'center' },
+  photosBtnText: { color: '#7C3AED', fontSize: 13, fontWeight: '700' },
   clockInBtn: { backgroundColor: TEAL, borderRadius: 14, padding: 18, alignItems: 'center', marginBottom: 12 },
   clockInText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   sectionTitle: { fontSize: 14, fontWeight: '700', color: '#111827' },
@@ -174,4 +238,7 @@ const styles = StyleSheet.create({
   completeBtn: { backgroundColor: '#10B981', borderRadius: 14, padding: 18, alignItems: 'center', marginBottom: 12 },
   completeBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   completedBanner: { backgroundColor: '#D1FAE5', borderRadius: 14, padding: 18, alignItems: 'center' },
+  itemPhotoBtn: { padding: 8, borderRadius: 8, backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#E5E7EB' },
+  itemPhotoBtnDone: { backgroundColor: '#ECFDF5', borderColor: '#6EE7B7' },
+  itemPhotoBtnText: { fontSize: 14 },
 })
