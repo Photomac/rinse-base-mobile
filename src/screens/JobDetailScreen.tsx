@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert,
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { JobPhotosScreen } from './JobPhotosScreen'
+import { useLang } from '../contexts/LangContext'
 
 const TEAL = '#00C9A7'
 const NAVY = '#0A1628'
@@ -53,6 +54,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [pauseReason, setPauseReason] = useState('')
   const timerRef = useRef<any>(null)
 
+  const { t } = useLang()
   const addr = job.client_addresses as any
   const client = job.clients as any
   const isClockedIn = !!activeEntry && !isPaused
@@ -304,7 +306,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
               {!isStarted && (
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={handleClockIn} disabled={saving}>
-                  {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>▶ Clock in</Text>}
+                  {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>{t('clock_in_short')}</Text>}
                 </TouchableOpacity>
               )}
               {isClockedIn && (
@@ -324,7 +326,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               )}
               {isPaused && (
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={handleResume} disabled={saving}>
-                  {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>▶ Resume</Text>}
+                  {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>{t('resume')}</Text>}
                 </TouchableOpacity>
               )}
             </View>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { NavigationContainer } from '@react-navigation/native'
@@ -26,6 +26,7 @@ export default function App() {
   const [selectedJob, setSelectedJob] = useState<any>(null)
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [showSOS, setShowSOS] = useState(false)
+  const navigationRef = useRef<any>(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -56,7 +57,9 @@ export default function App() {
       mileage: 'Mileage',
       profile: 'Profile',
     }
-    if (tabMap[screen]) setActiveTab(tabMap[screen])
+    if (tabMap[screen] && navigationRef.current) {
+      navigationRef.current.navigate(tabMap[screen])
+    }
   }
 
   if (loading) {
@@ -114,7 +117,10 @@ export default function App() {
             name="Dashboard"
             options={{ tabBarLabel: 'Home', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⊞</Text> }}
           >
-            {() => <DashboardScreen key={user?.id} user={user} onJobPress={setSelectedJob} onNavigate={handleNavigate} onSOS={() => setShowSOS(true)} />}
+            {({ navigation }: any) => <DashboardScreen key={user?.id} user={user} onJobPress={setSelectedJob} onNavigate={(screen: string) => {
+              const tabMap: Record<string, string> = { dashboard: 'Dashboard', jobs: 'Today', schedule: 'Schedule', mileage: 'Mileage', profile: 'Profile' }
+              if (tabMap[screen]) navigation.navigate(tabMap[screen])
+            }} onSOS={() => setShowSOS(true)} />}
           </Tab.Screen>
 
           <Tab.Screen
