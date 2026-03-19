@@ -12,6 +12,7 @@ import { MileageScreen } from './src/screens/MileageScreen'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
 import { SOSScreen } from './src/screens/SOSScreen'
+import { ChatListScreen, ChatScreen } from './src/screens/ChatScreens'
 import { registerPushToken } from './src/lib/notifications'
 import { LangProvider } from './src/contexts/LangContext'
 
@@ -26,6 +27,7 @@ export default function App() {
   const [selectedJob, setSelectedJob] = useState<any>(null)
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [showSOS, setShowSOS] = useState(false)
+  const [activeChannel, setActiveChannel] = useState<any>(null)
   const navigationRef = useRef<any>(null)
 
   useEffect(() => {
@@ -73,6 +75,16 @@ export default function App() {
 
   if (!session || !user) {
     return <LangProvider><SafeAreaProvider><LoginScreen /></SafeAreaProvider></LangProvider>
+  }
+
+  if (activeChannel) {
+    return (
+      <LangProvider>
+      <SafeAreaProvider>
+        <ChatScreen channel={activeChannel} user={user} onBack={() => setActiveChannel(null)} />
+      </SafeAreaProvider>
+      </LangProvider>
+    )
   }
 
   if (showSOS) {
@@ -142,6 +154,13 @@ export default function App() {
             options={{ tabBarLabel: 'Mileage', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>↗</Text> }}
           >
             {() => <MileageScreen key={user?.id} user={user} />}
+          </Tab.Screen>
+
+          <Tab.Screen
+            name="Chat"
+            options={{ tabBarLabel: 'Chat', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>💬</Text> }}
+          >
+            {() => <ChatListScreen user={user} onOpenChannel={setActiveChannel} onNewDM={() => {}} />}
           </Tab.Screen>
 
           <Tab.Screen

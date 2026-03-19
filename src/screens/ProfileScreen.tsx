@@ -1,7 +1,9 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import * as ImagePicker from 'expo-image-picker'
+import { Image } from 'react-native'
 import { useLang } from '../contexts/LangContext'
 
 const TEAL = '#00C9A7'
@@ -12,15 +14,74 @@ const ROLE_LABELS: Record<string, string> = {
   lead_cleaner: 'Lead Cleaner', cleaner: 'Cleaner', trainee: 'Trainee',
 }
 
-export function ProfileScreen({ user }: { user: any }) {
+export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpdate?: (url: string) => void }) {
   const { lang, toggleLanguage } = useLang()
   const initials = user.full_name?.split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase() || '?'
+  const [avatarUrl, setAvatarUrl] = React.useState(user.avatar_url || null)
+  const [uploading, setUploading] = React.useState(false)
+
+  async function pickAvatar() {
+    Alert.alert('Profile Photo', 'Choose a photo source', [
+      { text: 'Camera', onPress: takePhoto },
+      { text: 'Photo Library', onPress: pickFromGallery },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }
+
+  async function takePhoto() {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync()
+    if (status !== 'granted') { Alert.alert('Permission needed', 'Allow camera access'); return }
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1,1], quality: 0.7 })
+    if (result.canceled) return
+    uploadAvatar(result.assets[0].uri)
+  }
+
+  async function pickFromGallery() {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (status !== 'granted') { Alert.alert('Permission needed', 'Allow photo access'); return }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1,1], quality: 0.7 })
+    if (result.canceled) return
+    uploadAvatar(result.assets[0].uri)
+  }
+
+  async function uploadAvatar(uri: string) {
+    setUploading(true)
+    try {
+      const fileName = user.id + '/avatar.jpg'
+      const formData = new FormData()
+      formData.append('file', { uri, name: fileName, type: 'image/jpeg' } as any)
+      const { data: { session } } = await supabase.auth.getSession()
+      const token = session?.access_token
+      const res = await fetch(
+        'https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/avatars/' + fileName,
+        { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'x-upsert': 'true' }, body: formData }
+      )
+      if (!res.ok) throw new Error('Upload failed')
+      const url = 'https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/public/avatars/' + fileName + '?t=' + Date.now()
+      await supabase.from('users').update({ avatar_url: url }).eq('id', user.id)
+      setAvatarUrl(url)
+      onAvatarUpdate?.(url)
+      Alert.alert('✅ Photo updated!')
+    } catch(e: any) {
+      Alert.alert('Error', e.message)
+    }
+    setUploading(false)
+  }
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}><Text style={styles.headerTitle}>◉ Profile</Text></View>
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.avatarSection}>
-          <View style={styles.avatar}><Text style={styles.avatarText}>{initials}</Text></View>
+          <TouchableOpacity onPress={pickAvatar} disabled={uploading}>
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.avatarPhoto} />
+            ) : (
+              <View style={styles.avatar}><Text style={styles.avatarText}>{initials}</Text></View>
+            )}
+            <View style={styles.avatarEditBadge}>
+              <Text style={{ fontSize: 10, color: '#fff' }}>{uploading ? '...' : '📷'}</Text>
+            </View>
+          </TouchableOpacity>
           <Text style={styles.name}>{user.full_name}</Text>
           <View style={styles.roleBadge}><Text style={styles.roleText}>{ROLE_LABELS[user.role] || user.role}</Text></View>
         </View>
@@ -60,6 +121,8 @@ const styles = StyleSheet.create({
   scroll: { padding: 16, paddingBottom: 100 },
   avatarSection: { alignItems: 'center', marginBottom: 20, marginTop: 8 },
   avatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: TEAL, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  avatarPhoto: { width: 80, height: 80, borderRadius: 40, marginBottom: 12 },
+  avatarEditBadge: { position: 'absolute', bottom: 12, right: 0, width: 22, height: 22, borderRadius: 11, backgroundColor: NAVY, borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: '#fff', fontSize: 28, fontWeight: '800' },
   name: { fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 8 },
   roleBadge: { backgroundColor: '#F3F4F6', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20 },

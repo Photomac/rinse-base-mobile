@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert,
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { JobPhotosScreen } from './JobPhotosScreen'
+import { MessagesScreen } from './MessagesScreen'
 import { useLang } from '../contexts/LangContext'
 
 const TEAL = '#00C9A7'
@@ -40,6 +41,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [showPhotos, setShowPhotos] = useState(false)
+  const [showMessages, setShowMessages] = useState(false)
   const [checklist, setChecklist] = useState(DEFAULT_CHECKLIST as any[])
   const [loadingChecklist, setLoadingChecklist] = useState(false)
   const [itemPhotos, setItemPhotos] = useState<Record<string, number>>({})
@@ -223,6 +225,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const allChecked = checklist.every(i => checked[i.id])
   const progressPct = Math.round((completedCount / checklist.length) * 100)
 
+  if (showMessages) return <MessagesScreen job={job} user={user} onBack={() => setShowMessages(false)} />
   if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} onBack={() => { setShowPhotos(false); loadChecklist() }} />
 
   return (
@@ -263,6 +266,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           )}
           <TouchableOpacity style={styles.photosBtn} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
             <Text style={styles.photosBtnText}>📸 Job Photos</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.messagesBtn} onPress={() => setShowMessages(true)}>
+            <Text style={styles.messagesBtnText}>💬 Messages</Text>
           </TouchableOpacity>
         </View>
 
@@ -429,6 +435,8 @@ const styles = StyleSheet.create({
   infoValue: { fontSize: 14, color: '#111827', fontWeight: '600', marginTop: 2 },
   callBtn: { marginTop: 4, backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', borderRadius: 10, padding: 12, alignItems: 'center' },
   callBtnText: { color: '#15803D', fontSize: 13, fontWeight: '700' },
+  messagesBtn: { marginTop: 8, backgroundColor: '#ECFDF5', borderWidth: 1, borderColor: '#6EE7B7', borderRadius: 10, padding: 12, alignItems: 'center' },
+  messagesBtnText: { color: '#065F46', fontSize: 13, fontWeight: '700' },
   photosBtn: { marginTop: 8, backgroundColor: '#F5F3FF', borderWidth: 1, borderColor: '#DDD6FE', borderRadius: 10, padding: 12, alignItems: 'center' },
   photosBtnText: { color: '#7C3AED', fontSize: 13, fontWeight: '700' },
   sectionTitle: { fontSize: 14, fontWeight: '700', color: '#111827' },
