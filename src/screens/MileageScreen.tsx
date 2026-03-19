@@ -2,22 +2,29 @@ import React, { useState, useEffect } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, RefreshControl, ActivityIndicator } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { useLang } from '../contexts/LangContext'
 
 const TEAL = '#00C9A7'
 const NAVY = '#0A1628'
 const RATE = 0.67
-const PURPOSES = ['Job travel', 'Supply run', 'Equipment pickup', 'Client meeting', 'Training', 'Other']
+const PURPOSES_EN = ['Job travel', 'Supply run', 'Equipment pickup', 'Client meeting', 'Training', 'Other']
+const PURPOSES_KEYS: Record<string, any> = {
+  'Job travel': 'job_travel', 'Supply run': 'supply_run_miles',
+  'Equipment pickup': 'equipment_pickup', 'Client meeting': 'client_meeting',
+  'Training': 'training', 'Other': 'other'
+}
 
 function fmtDate(iso: string) { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }
 function fmt$(n: number) { return '$' + n.toFixed(2) }
 
 export function MileageScreen({ user }: { user: any }) {
+  const { t } = useLang()
   const [trips, setTrips] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'Job travel', notes: '' })
+  const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: t('job_travel'), notes: '' })
 
   async function load() {
     const { data } = await supabase.from('mileage_logs').select('*').eq('tenant_id', user.tenant_id).eq('user_id', user.id).order('started_at', { ascending: false }).limit(50)
@@ -41,7 +48,7 @@ export function MileageScreen({ user }: { user: any }) {
       purpose: form.purpose, notes: form.notes.trim() || null, flagged: false,
     })
     if (error) { Alert.alert('Error', error.message) }
-    else { setForm({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'Job travel', notes: '' }); setShowForm(false); load() }
+    else { setForm({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: t('job_travel'), notes: '' }); setShowForm(false); load() }
     setSaving(false)
   }
 
@@ -55,7 +62,7 @@ export function MileageScreen({ user }: { user: any }) {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>↗ My mileage</Text>
         <TouchableOpacity style={styles.addBtn} onPress={() => setShowForm(v => !v)}>
-          <Text style={styles.addBtnText}>{showForm ? '✕ Cancel' : '+ Log trip'}</Text>
+          <Text style={styles.addBtnText}>{showForm ? '✕ Cancel' : t('log_trip')}</Text>
         </TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={styles.scroll} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={TEAL} />}>
@@ -75,15 +82,15 @@ export function MileageScreen({ user }: { user: any }) {
             <Text style={styles.fieldLabel}>To *</Text>
             <TextInput style={styles.input} value={form.to} onChangeText={v => f('to', v)} placeholder="Destination" placeholderTextColor="#9CA3AF" />
             <Text style={styles.fieldLabel}>Miles *</Text>
-            <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder="e.g. 12.5" keyboardType="decimal-pad" placeholderTextColor="#9CA3AF" />
+            <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder={t('miles_placeholder')} keyboardType="decimal-pad" placeholderTextColor="#9CA3AF" />
             {form.miles && parseFloat(form.miles) > 0 && (
               <View style={styles.estimateBadge}><Text style={styles.estimateText}>💰 Estimated: {fmt$(parseFloat(form.miles) * RATE)}</Text></View>
             )}
             <Text style={styles.fieldLabel}>Purpose</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 6 }}>
-              {PURPOSES.map(p => (
+              {PURPOSES_EN.map(p => (
                 <TouchableOpacity key={p} style={[styles.chip, form.purpose === p && styles.chipActive]} onPress={() => f('purpose', p)}>
-                  <Text style={[styles.chipText, form.purpose === p && styles.chipTextActive]}>{p}</Text>
+                  <Text style={[styles.chipText, form.purpose === p && styles.chipTextActive]}>{t(PURPOSES_KEYS[p])}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>

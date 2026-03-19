@@ -3,6 +3,7 @@ import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Pressable, Alert,
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
+import { useLang } from '../contexts/LangContext'
 import { sendSOSNotification } from '../lib/notifications'
 
 const HOLD_DURATION = 3000
@@ -15,6 +16,7 @@ interface Props {
 }
 
 export function SOSScreen({ user, onCancel, onSent }: Props) {
+  const { t } = useLang()
   const [phase, setPhase] = useState<'ready' | 'holding' | 'sent' | 'responded'>('ready')
   const [holdProgress, setHoldProgress] = useState(0)
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS)
@@ -150,7 +152,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
             <Text style={styles.cancelTopText}>← Cancel</Text>
           </TouchableOpacity>
         )}
-        <Text style={styles.headerTitle}>Emergency SOS</Text>
+        <Text style={styles.headerTitle}>{t('emergency_sos')}</Text>
         <View style={{ width: 80 }} />
       </View>
 
@@ -205,7 +207,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
           </View>
 
           <Text style={styles.warningText}>
-            ⚠ Only use in a genuine emergency
+            {t('sos_warning')}
           </Text>
 
         </View>
@@ -214,18 +216,18 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
           {/* Pulsing alert */}
           <Animated.View style={[styles.sentCircle, { transform: [{ scale: pulseAnim }] }]}>
             <Text style={styles.sentEmoji}>🆘</Text>
-            <Text style={styles.sentTitle}>ALERT SENT</Text>
+            <Text style={styles.sentTitle}>{t('alert_sent')}</Text>
           </Animated.View>
 
           <Text style={styles.sentMessage}>
-            Your owner and manager have been notified.{'\n'}
-            Help is on the way.
+            {t('sos_sent_msg')}{'\n'}
+            {t('sos_sent_msg2')}
           </Text>
 
           {/* GPS coordinates */}
           {location && (
             <View style={styles.coordsCard}>
-              <Text style={styles.coordsLabel}>Your GPS coordinates</Text>
+              <Text style={styles.coordsLabel}>{t('your_gps')}</Text>
               <Text style={styles.coordsValue}>
                 {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
               </Text>
@@ -236,13 +238,13 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
           {/* Countdown */}
           <View style={styles.countdownCard}>
             <Text style={styles.countdownLabel}>
-              {countdown > 0 ? '911 auto-call in' : 'Calling 911...'}
+              {countdown > 0 ? '911 auto-call in' : t('calling_911')}
             </Text>
             <Text style={[styles.countdownNum, countdown <= 30 && { color: '#EF4444' }]}>
               {countdown > 0 ? `${Math.floor(countdown/60)}:${String(countdown%60).padStart(2,'0')}` : '📞'}
             </Text>
             <Text style={styles.countdownSub}>
-              {countdown > 0 ? 'Tap "I\'m OK" if this was a mistake' : 'Read your GPS coordinates to dispatcher'}
+              {countdown > 0 ? 'Tap "I\'m OK" if this was a mistake' : t('read_gps')}
             </Text>
           </View>
 
@@ -254,7 +256,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
           >
             {responding
               ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.okBtnText}>✓ I'm OK — Cancel SOS</Text>
+              : <Text style={styles.okBtnText}>✓ {t('im_ok')}</Text>
             }
           </TouchableOpacity>
         </ScrollView>

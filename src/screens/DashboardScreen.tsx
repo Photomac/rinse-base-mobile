@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, RefreshControl } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { useLang } from '../contexts/LangContext'
 
 const TEAL = '#00C9A7'
 const NAVY = '#0A1628'
@@ -11,6 +12,7 @@ function fmtTime(iso: string) {
 }
 
 export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void; onSOS: () => void }) {
+  const { t } = useLang()
   const [todayJobs, setTodayJobs] = useState<any[]>([])
   const [activeJob, setActiveJob] = useState<any>(null)
   const [nextJob, setNextJob] = useState<any>(null)
@@ -108,7 +110,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
   const now = new Date()
   const hour = now.getHours()
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const greeting = hour < 12 ? t('good_morning') : hour < 17 ? t('good_afternoon') : t('good_evening')
   const completedToday = todayJobs.filter(j => j.status === 'completed').length
 
   return (

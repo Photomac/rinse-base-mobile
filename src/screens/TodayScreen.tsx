@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator, Linking, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { useLang } from '../contexts/LangContext'
 
 const TEAL = '#00C9A7'
 const NAVY = '#0A1628'
@@ -19,6 +20,7 @@ function fmtTime(iso: string) {
 }
 
 export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
+  const { t } = useLang()
   const [jobs, setJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -55,7 +57,7 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
   }
 
   const now = new Date()
-  const greeting = now.getHours() < 12 ? 'Good morning' : now.getHours() < 17 ? 'Good afternoon' : 'Good evening'
+  const greeting = now.getHours() < 12 ? t('good_morning') : now.getHours() < 17 ? t('good_afternoon') : t('good_evening')
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -119,17 +121,17 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
                     )}
                     {job.status === 'scheduled' && (
                       <TouchableOpacity style={[styles.actionBtnPrimary, isUpdating && { opacity: 0.6 }]} onPress={() => updateStatus(job, 'en_route')} disabled={isUpdating}>
-                        <Text style={styles.actionBtnPrimaryText}>🚗 En route</Text>
+                        <Text style={styles.actionBtnPrimaryText}>{t('en_route')}</Text>
                       </TouchableOpacity>
                     )}
                     {job.status === 'en_route' && (
                       <TouchableOpacity style={[styles.actionBtnPrimary, isUpdating && { opacity: 0.6 }]} onPress={() => updateStatus(job, 'in_progress')} disabled={isUpdating}>
-                        <Text style={styles.actionBtnPrimaryText}>▶ Start job</Text>
+                        <Text style={styles.actionBtnPrimaryText}>{t('start_job')}</Text>
                       </TouchableOpacity>
                     )}
                     {job.status === 'in_progress' && (
-                      <TouchableOpacity style={[styles.actionBtnGreen, isUpdating && { opacity: 0.6 }]} onPress={() => Alert.alert('Complete?', 'Mark this job as completed?', [{ text: 'Cancel', style: 'cancel' }, { text: 'Complete', onPress: () => updateStatus(job, 'completed') }])} disabled={isUpdating}>
-                        <Text style={styles.actionBtnPrimaryText}>✓ Complete</Text>
+                      <TouchableOpacity style={[styles.actionBtnGreen, isUpdating && { opacity: 0.6 }]} onPress={() => Alert.alert('Complete?', t('complete_confirm'), [{ text: 'Cancel', style: 'cancel' }, { text: 'Complete', onPress: () => updateStatus(job, 'completed') }])} disabled={isUpdating}>
+                        <Text style={styles.actionBtnPrimaryText}>{t('complete')}</Text>
                       </TouchableOpacity>
                     )}
                   </View>

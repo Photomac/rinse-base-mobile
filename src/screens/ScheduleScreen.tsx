@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { useLang } from '../contexts/LangContext'
 
 const TEAL = '#00C9A7'
 const NAVY = '#0A1628'
@@ -14,27 +15,29 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled:   '#9CA3AF',
 }
 
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
 function isSameDay(a: Date, b: Date) { return a.toDateString() === b.toDateString() }
 function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
-function fmtDuration(start: string, end: string) {
-  const mins = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000)
-  return mins >= 60 ? `${Math.floor(mins/60)}h${mins%60 > 0 ? ` ${mins%60}m` : ''}` : `${mins}m`
-}
+function addDays(d: Date, n: number) { const r = new Date(d); r.setDate(r.getDate() + n); return r }
+
+type ViewMode = 'month' | 'week'
 
 export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
+  const { t } = useLang()
   const [jobs, setJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [selectedDate, setSelectedDate] = useState(new Date())
-  const [weekOffset, setWeekOffset] = useState(0)
+  const [anchor, setAnchor] = useState(new Date())
+  const [view, setView] = useState<ViewMode>('month')
+
+  useEffect(() => { load() }, [])
 
   async function load() {
     const now = new Date()
-    const start = new Date(now); start.setDate(now.getDate() - 14); start.setHours(0,0,0,0)
-    const end = new Date(now); end.setDate(now.getDate() + 21); end.setHours(23,59,59,999)
-
+    const start = new Date(now); start.setMonth(now.getMonth() - 1); start.setHours(0,0,0,0)
+    const end = new Date(now); end.setMonth(now.getMonth() + 2); end.setHours(23,59,59,999)
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
-
     const { data } = await supabase.from('jobs')
       .select('id, status, scheduled_start, scheduled_end, is_turnover, clients!jobs_client_id_fkey(full_name), client_addresses!jobs_address_id_fkey(street, city, nickname), job_assignments(user_id)')
       .eq('tenant_id', user.tenant_id)
@@ -42,112 +45,183 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
       .lte('scheduled_start', end.toISOString())
       .neq('status', 'cancelled')
       .order('scheduled_start')
-
     const myJobs = isOwner
       ? (data ?? [])
       : (data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
-
     setJobs(myJobs)
     setLoading(false)
-    setRefreshing(false)
   }
 
-  useEffect(() => { load() }, [])
+  function getJobsForDay(day: Date) {
+    return jobs.filter(j => isSameDay(new Date(j.scheduled_start), day))
+  }
+
+  const now = new Date()
+  const selectedJobs = getJobsForDay(selectedDate)
+
+  // Build month grid
+  function buildMonthGrid() {
+    const year = anchor.getFullYear()
+    const month = anchor.getMonth()
+    const firstDay = new Date(year, month, 1)
+    const lastDay = new Date(year, month + 1, 0)
+    const startPad = firstDay.getDay()
+    const days: (Date | null)[] = []
+    for (let i = 0; i < startPad; i++) days.push(null)
+    for (let i = 1; i <= lastDay.getDate(); i++) days.push(new Date(year, month, i))
+    while (days.length % 7 !== 0) days.push(null)
+    const weeks: (Date | null)[][] = []
+    for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7))
+    return weeks
+  }
 
   // Build week days
-  const now = new Date()
-  const weekStart = new Date(now)
-  weekStart.setDate(now.getDate() - now.getDay() + weekOffset * 7)
-  weekStart.setHours(0,0,0,0)
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d
-  })
+  function buildWeekDays() {
+    const weekStart = new Date(anchor)
+    weekStart.setDate(anchor.getDate() - anchor.getDay())
+    return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
+  }
 
-  const selectedJobs = jobs.filter(j => isSameDay(new Date(j.scheduled_start), selectedDate))
+  const monthLabel = anchor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  const weekStart = new Date(anchor); weekStart.setDate(anchor.getDate() - anchor.getDay())
+  const weekLabel = weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' – ' + addDays(weekStart, 6).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>📅 My schedule</Text>
-        <Text style={styles.headerSub}>{jobs.length} upcoming jobs</Text>
-      </View>
-
-      {/* Week navigator */}
-      <View style={styles.weekNav}>
-        <TouchableOpacity onPress={() => setWeekOffset(w => w - 1)} style={styles.navBtn}>
-          <Text style={styles.navBtnText}>‹</Text>
+        <TouchableOpacity onPress={() => {
+          if (view === 'month') setAnchor(a => new Date(a.getFullYear(), a.getMonth() - 1, 1))
+          else setAnchor(a => addDays(a, -7))
+        }}><Text style={styles.navBtn}>‹</Text></TouchableOpacity>
+        <TouchableOpacity onPress={() => { setAnchor(new Date()); setSelectedDate(new Date()) }}>
+          <Text style={styles.headerLabel}>{view === 'month' ? monthLabel : weekLabel}</Text>
         </TouchableOpacity>
-        <Text style={styles.weekLabel}>
-          {weekDays[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – {weekDays[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-        </Text>
-        <TouchableOpacity onPress={() => setWeekOffset(w => w + 1)} style={styles.navBtn}>
-          <Text style={styles.navBtnText}>›</Text>
-        </TouchableOpacity>
+        <TouchableOpacity onPress={() => {
+          if (view === 'month') setAnchor(a => new Date(a.getFullYear(), a.getMonth() + 1, 1))
+          else setAnchor(a => addDays(a, 7))
+        }}><Text style={styles.navBtn}>›</Text></TouchableOpacity>
       </View>
 
-      {/* Day selector */}
-      <View style={styles.dayRow}>
-        {weekDays.map((day, i) => {
-          const isToday = isSameDay(day, now)
-          const isSelected = isSameDay(day, selectedDate)
-          const dayJobs = jobs.filter(j => isSameDay(new Date(j.scheduled_start), day))
-          return (
-            <TouchableOpacity key={i} style={[styles.dayBtn, isSelected && styles.dayBtnSelected]} onPress={() => setSelectedDate(day)}>
-              <Text style={[styles.dayName, isSelected && styles.dayTextSelected, isToday && !isSelected && styles.dayTextToday]}>
-                {day.toLocaleDateString('en-US', { weekday: 'narrow' })}
-              </Text>
-              <Text style={[styles.dayNum, isSelected && styles.dayTextSelected, isToday && !isSelected && styles.dayTextToday]}>
-                {day.getDate()}
-              </Text>
-              {dayJobs.length > 0 && (
-                <View style={[styles.dayDot, isSelected && styles.dayDotSelected]} />
-              )}
-            </TouchableOpacity>
-          )
-        })}
+      {/* View toggle */}
+      <View style={styles.viewToggle}>
+        {(['month', 'week'] as ViewMode[]).map(v => (
+          <TouchableOpacity key={v} style={[styles.viewBtn, view === v && styles.viewBtnActive]} onPress={() => setView(v)}>
+            <Text style={[styles.viewBtnText, view === v && styles.viewBtnTextActive]}>
+              {v === 'month' ? 'Month' : 'Week'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+        <Text style={styles.jobCountLabel}>{jobs.length} jobs</Text>
       </View>
 
-      {/* Selected day jobs */}
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={TEAL} />}
-      >
-        <Text style={styles.selectedDateLabel}>
-          {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-          {isSameDay(selectedDate, now) ? ' · Today' : ''}
-        </Text>
+      <ScrollView>
+        {/* Day names header */}
+        <View style={styles.dayNamesRow}>
+          {DAY_NAMES.map(d => (
+            <Text key={d} style={styles.dayName}>{d}</Text>
+          ))}
+        </View>
 
         {loading ? (
           <ActivityIndicator color={TEAL} style={{ marginTop: 40 }} />
-        ) : selectedJobs.length === 0 ? (
-          <View style={styles.emptyDay}>
-            <Text style={styles.emptyIcon}>{isSameDay(selectedDate, now) ? '🌟' : '📅'}</Text>
-            <Text style={styles.emptyTitle}>No jobs {isSameDay(selectedDate, now) ? 'today' : 'this day'}</Text>
-            <Text style={styles.emptyText}>{isSameDay(selectedDate, now) ? 'Enjoy your day off!' : 'Nothing scheduled'}</Text>
+        ) : view === 'month' ? (
+          // Month view
+          <View>
+            {buildMonthGrid().map((week, wi) => (
+              <View key={wi} style={styles.weekRow}>
+                {week.map((day, di) => {
+                  if (!day) return <View key={di} style={styles.dayCell} />
+                  const dayJobs = getJobsForDay(day)
+                  const isToday = isSameDay(day, now)
+                  const isSelected = isSameDay(day, selectedDate)
+                  const isOtherMonth = day.getMonth() !== anchor.getMonth()
+                  return (
+                    <TouchableOpacity key={di} style={[styles.dayCell, isSelected && styles.dayCellSelected]} onPress={() => setSelectedDate(day)}>
+                      <View style={[styles.dayNum, isToday && styles.dayNumToday, isSelected && styles.dayNumSelected]}>
+                        <Text style={[styles.dayNumText, isToday && styles.dayNumTextToday, isSelected && styles.dayNumTextSelected, isOtherMonth && { opacity: 0.3 }]}>
+                          {day.getDate()}
+                        </Text>
+                      </View>
+                      {dayJobs.slice(0, 2).map((job, i) => (
+                        <View key={i} style={[styles.jobDot, { backgroundColor: STATUS_COLORS[job.status] || TEAL }]}>
+                          <Text style={styles.jobDotText} numberOfLines={1}>
+                            {(job.client_addresses as any)?.nickname || (job.clients as any)?.full_name}
+                          </Text>
+                        </View>
+                      ))}
+                      {dayJobs.length > 2 && (
+                        <Text style={styles.moreJobs}>+{dayJobs.length - 2}</Text>
+                      )}
+                    </TouchableOpacity>
+                  )
+                })}
+              </View>
+            ))}
           </View>
         ) : (
-          selectedJobs.map((job: any, idx) => {
-            const addr = job.client_addresses
-            const color = STATUS_COLORS[job.status] || STATUS_COLORS.scheduled
-            const isDone = job.status === 'completed'
+          // Week view
+          <View>
+            <View style={styles.weekRow}>
+              {buildWeekDays().map((day, i) => {
+                const dayJobs = getJobsForDay(day)
+                const isToday = isSameDay(day, now)
+                const isSelected = isSameDay(day, selectedDate)
+                return (
+                  <TouchableOpacity key={i} style={[styles.weekDayCell, isSelected && styles.dayCellSelected]} onPress={() => setSelectedDate(day)}>
+                    <View style={[styles.dayNum, isToday && styles.dayNumToday, isSelected && styles.dayNumSelected]}>
+                      <Text style={[styles.dayNumText, isToday && styles.dayNumTextToday, isSelected && styles.dayNumTextSelected]}>
+                        {day.getDate()}
+                      </Text>
+                    </View>
+                    {dayJobs.map((job, i) => (
+                      <View key={i} style={[styles.weekJobBlock, { backgroundColor: STATUS_COLORS[job.status] || TEAL }]}>
+                        <Text style={styles.weekJobText} numberOfLines={1}>
+                          {fmtTime(job.scheduled_start)}
+                        </Text>
+                        <Text style={styles.weekJobName} numberOfLines={1}>
+                          {(job.client_addresses as any)?.nickname || (job.clients as any)?.full_name}
+                        </Text>
+                      </View>
+                    ))}
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+          </View>
+        )}
+
+        {/* Selected day jobs */}
+        <View style={styles.selectedDaySection}>
+          <Text style={styles.selectedDayLabel}>
+            {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+            {isSameDay(selectedDate, now) ? ' · Today' : ''}
+          </Text>
+          {selectedJobs.length === 0 ? (
+            <View style={styles.emptyDay}>
+              <Text style={styles.emptyText}>{t('no_jobs_day')}</Text>
+            </View>
+          ) : selectedJobs.map((job: any) => {
+            const addr = job.client_addresses as any
+            const color = STATUS_COLORS[job.status] || TEAL
             return (
-              <TouchableOpacity key={job.id} style={[styles.jobCard, isDone && { opacity: 0.6 }]} onPress={() => onJobPress(job)}>
-                <View style={[styles.jobStripe, { backgroundColor: color }]} />
-                <View style={styles.jobContent}>
-                  <View style={styles.jobHeader}>
+              <TouchableOpacity key={job.id} style={[styles.jobCard, { borderLeftColor: color }]} onPress={() => onJobPress(job)}>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}</Text>
-                    <Text style={styles.jobDuration}>{fmtDuration(job.scheduled_start, job.scheduled_end)}</Text>
-                    <View style={[styles.statusDot, { backgroundColor: color }]} />
+                    <View style={[styles.statusBadge, { backgroundColor: color + '22' }]}>
+                      <Text style={[styles.statusText, { color }]}>{job.status.replace('_', ' ')}</Text>
+                    </View>
                   </View>
                   <Text style={styles.jobClient}>{addr?.nickname || (job.clients as any)?.full_name}</Text>
                   <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>
                   {job.is_turnover && <Text style={styles.turnoverTag}>🏠 Turnover</Text>}
                 </View>
-                <Text style={styles.jobArrow}>›</Text>
+                <Text style={{ color: '#D1D5DB', fontSize: 18 }}>›</Text>
               </TouchableOpacity>
             )
-          })
-        )}
+          })}
+        </View>
       </ScrollView>
     </SafeAreaView>
   )
@@ -155,37 +229,42 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8F9FA' },
-  header: { backgroundColor: NAVY, padding: 20, paddingBottom: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  headerTitle: { color: '#fff', fontSize: 20, fontWeight: '800' },
-  headerSub: { color: 'rgba(255,255,255,0.5)', fontSize: 12 },
-  weekNav: { backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12 },
-  navBtn: { padding: 8 },
-  navBtnText: { color: '#fff', fontSize: 24, fontWeight: '300' },
-  weekLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 13, fontWeight: '600' },
-  dayRow: { backgroundColor: NAVY, flexDirection: 'row', paddingHorizontal: 8, paddingBottom: 16 },
-  dayBtn: { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 12 },
-  dayBtnSelected: { backgroundColor: TEAL },
-  dayName: { color: 'rgba(255,255,255,0.5)', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 },
-  dayNum: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  dayTextSelected: { color: '#fff' },
-  dayTextToday: { color: TEAL },
-  dayDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)', marginTop: 3 },
-  dayDotSelected: { backgroundColor: '#fff' },
-  scroll: { padding: 16, paddingBottom: 40 },
-  selectedDateLabel: { fontSize: 14, fontWeight: '700', color: '#374151', marginBottom: 14 },
-  emptyDay: { alignItems: 'center', paddingTop: 60 },
-  emptyIcon: { fontSize: 40, marginBottom: 12, opacity: 0.4 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 4 },
+  header: { backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingBottom: 8 },
+  navBtn: { color: '#fff', fontSize: 28, fontWeight: '300', paddingHorizontal: 8 },
+  headerLabel: { color: '#fff', fontSize: 16, fontWeight: '700', textAlign: 'center' },
+  viewToggle: { backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, gap: 8 },
+  viewBtn: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  viewBtnActive: { backgroundColor: TEAL, borderColor: TEAL },
+  viewBtnText: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600' },
+  viewBtnTextActive: { color: '#fff' },
+  jobCountLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 11, marginLeft: 'auto' },
+  dayNamesRow: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  dayName: { flex: 1, textAlign: 'center', fontSize: 10, fontWeight: '700', color: '#9CA3AF', paddingVertical: 6, textTransform: 'uppercase' },
+  weekRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  dayCell: { flex: 1, minHeight: 64, padding: 2, borderRightWidth: 1, borderRightColor: '#F3F4F6', backgroundColor: '#fff' },
+  dayCellSelected: { backgroundColor: '#F0FDFB' },
+  weekDayCell: { flex: 1, minHeight: 80, padding: 4, borderRightWidth: 1, borderRightColor: '#F3F4F6', backgroundColor: '#fff' },
+  dayNum: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 2, alignSelf: 'center' },
+  dayNumToday: { backgroundColor: TEAL },
+  dayNumSelected: { backgroundColor: NAVY },
+  dayNumText: { fontSize: 12, color: '#374151', fontWeight: '500' },
+  dayNumTextToday: { color: '#fff', fontWeight: '700' },
+  dayNumTextSelected: { color: '#fff', fontWeight: '700' },
+  jobDot: { borderRadius: 3, padding: 1, marginBottom: 1, paddingHorizontal: 2 },
+  jobDotText: { fontSize: 8, color: '#fff', fontWeight: '600' },
+  moreJobs: { fontSize: 8, color: '#9CA3AF', textAlign: 'center' },
+  weekJobBlock: { borderRadius: 4, padding: 3, marginBottom: 2 },
+  weekJobText: { fontSize: 9, color: '#fff', fontWeight: '600' },
+  weekJobName: { fontSize: 8, color: 'rgba(255,255,255,0.85)' },
+  selectedDaySection: { padding: 16 },
+  selectedDayLabel: { fontSize: 14, fontWeight: '700', color: '#374151', marginBottom: 10 },
+  emptyDay: { alignItems: 'center', paddingVertical: 24 },
   emptyText: { fontSize: 13, color: '#9CA3AF' },
-  jobCard: { backgroundColor: '#fff', borderRadius: 14, marginBottom: 10, flexDirection: 'row', alignItems: 'center', overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
-  jobStripe: { width: 4, alignSelf: 'stretch' },
-  jobContent: { flex: 1, padding: 14 },
-  jobHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  jobCard: { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, flexDirection: 'row', alignItems: 'center', borderLeftWidth: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 1 },
   jobTime: { fontSize: 13, fontWeight: '700', color: '#111827' },
-  jobDuration: { fontSize: 11, color: '#9CA3AF', flex: 1 },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  jobClient: { fontSize: 15, fontWeight: '700', color: '#111827', marginBottom: 3 },
-  jobAddress: { fontSize: 12, color: '#9CA3AF' },
-  turnoverTag: { fontSize: 11, color: '#06B6D4', fontWeight: '700', marginTop: 4 },
-  jobArrow: { fontSize: 20, color: '#D1D5DB', paddingRight: 14 },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
+  statusText: { fontSize: 10, fontWeight: '700', textTransform: 'capitalize' },
+  jobClient: { fontSize: 14, fontWeight: '700', color: '#111827', marginBottom: 2 },
+  jobAddress: { fontSize: 11, color: '#9CA3AF' },
+  turnoverTag: { fontSize: 10, color: '#06B6D4', fontWeight: '700', marginTop: 3 },
 })

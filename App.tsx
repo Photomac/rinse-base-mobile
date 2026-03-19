@@ -13,6 +13,7 @@ import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
 import { SOSScreen } from './src/screens/SOSScreen'
 import { registerPushToken } from './src/lib/notifications'
+import { LangProvider } from './src/contexts/LangContext'
 
 const TEAL = '#00C9A7'
 const NAVY = '#0A1628'
@@ -68,35 +69,36 @@ export default function App() {
   }
 
   if (!session || !user) {
-    return <SafeAreaProvider><LoginScreen /></SafeAreaProvider>
+    return <LangProvider><SafeAreaProvider><LoginScreen /></SafeAreaProvider></LangProvider>
   }
 
   if (showSOS) {
     return (
-      <SafeAreaProvider>
+      <LangProvider><SafeAreaProvider>
         <SOSScreen
           user={user}
           onCancel={() => setShowSOS(false)}
           onSent={() => {}}
         />
-      </SafeAreaProvider>
+      </SafeAreaProvider></LangProvider>
     )
   }
 
   if (selectedJob) {
     return (
-      <SafeAreaProvider>
+      <LangProvider><SafeAreaProvider>
         <JobDetailScreen
           job={selectedJob}
           user={user}
           onBack={() => setSelectedJob(null)}
           onStatusChange={(job: any, status: string) => setSelectedJob((prev: any) => prev ? { ...prev, status } : null)}
         />
-      </SafeAreaProvider>
+      </SafeAreaProvider></LangProvider>
     )
   }
 
   return (
+    <LangProvider>
     <SafeAreaProvider>
       <NavigationContainer>
         <Tab.Navigator
@@ -145,6 +147,7 @@ export default function App() {
         </Tab.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>
+    </LangProvider>
   )
 }
 
