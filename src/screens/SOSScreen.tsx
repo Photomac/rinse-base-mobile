@@ -68,11 +68,6 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
           if (prev <= 1) {
             clearInterval(countdownInterval.current)
             // TODO: Trigger 911 call via RapidSOS/Twilio
-            Alert.alert(
-              '📞 Calling 911',
-              `No response from your team. Showing GPS coordinates:\n\n${location?.latitude?.toFixed(6)}, ${location?.longitude?.toFixed(6)}\n\nLocation: ${locationLabel}\n\nRead these to the 911 dispatcher.`,
-              [{ text: 'OK' }]
-            )
             return 0
           }
           return prev - 1
@@ -139,7 +134,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     clearInterval(countdownInterval.current)
     try { Vibration.cancel() } catch(e) {}
     setResponding(false)
-    onCancel()
+    setPhase('responded')
   }
 
   return (
@@ -261,6 +256,19 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
           </TouchableOpacity>
         </ScrollView>
       )}
+
+      {phase === 'responded' && (
+        <View style={styles.respondedOverlay}>
+          <View style={styles.respondedCard}>
+            <Text style={styles.respondedEmoji}>✓</Text>
+            <Text style={styles.respondedTitle}>False alarm reported</Text>
+            <Text style={styles.respondedSub}>Your team has been notified this was a false alarm.</Text>
+            <TouchableOpacity style={styles.respondedBtn} onPress={onCancel}>
+              <Text style={styles.respondedBtnText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </SafeAreaView>
   )
 }
@@ -301,4 +309,11 @@ const styles = StyleSheet.create({
   countdownSub: { color: 'rgba(255,255,255,0.5)', fontSize: 11, textAlign: 'center', marginTop: 4 },
   okBtn: { backgroundColor: '#10B981', borderRadius: 14, padding: 18, width: '100%', alignItems: 'center' },
   okBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  respondedOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', alignItems: 'center', justifyContent: 'center', padding: 32 },
+  respondedCard: { backgroundColor: '#0F172A', borderRadius: 20, padding: 32, alignItems: 'center', width: '100%', borderWidth: 1, borderColor: '#10B981' },
+  respondedEmoji: { fontSize: 48, color: '#10B981', fontWeight: '900', marginBottom: 12 },
+  respondedTitle: { color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 8, textAlign: 'center' },
+  respondedSub: { color: 'rgba(255,255,255,0.6)', fontSize: 14, textAlign: 'center', lineHeight: 22, marginBottom: 24 },
+  respondedBtn: { backgroundColor: '#10B981', borderRadius: 12, padding: 16, width: '100%', alignItems: 'center' },
+  respondedBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
 })
