@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "rinsebase-mobile",
+    "name": "Rinsebase",
     "slug": "rinse-base-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -9,14 +9,16 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0F172A"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.rinsebase.app"
     },
     "android": {
+      "package": "com.rinsebase.app",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0F172A",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -27,7 +29,15 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-image-picker",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Rinsebase uses your location for SOS emergency alerts.",
+          "locationWhenInUsePermission": "Rinsebase uses your location for SOS emergency alerts."
+        }
+      ]
     ],
     "extra": {
       "eas": {
