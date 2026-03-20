@@ -45,7 +45,7 @@ export default function App() {
   }, [])
 
   async function loadUser(authId: string) {
-    const { data } = await supabase.from('users').select('*').or(`auth_user_id.eq.\${authId},id.eq.\${authId}`).maybeSingle()
+    const { data } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
     setUser(data)
     setLoading(false)
     if (data) registerPushToken(data).catch(console.warn)
@@ -60,7 +60,7 @@ export default function App() {
         event: 'UPDATE',
         schema: 'public',
         table: 'jobs',
-        filter: `tenant_id=eq.\${user.tenant_id}`,
+        filter: `tenant_id=eq.${user.tenant_id}`,
       }, (payload: any) => {
         const job = payload.new
         const old = payload.old
@@ -70,7 +70,7 @@ export default function App() {
           Notifications.scheduleNotificationAsync({
             content: {
               title: '📅 Job rescheduled',
-              body: `Your job has been moved to \${newTime}`,
+              body: `Your job has been moved to ${newTime}`,
               sound: true,
             },
             trigger: null,
