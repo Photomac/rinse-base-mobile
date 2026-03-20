@@ -13,6 +13,7 @@ import { JobDetailScreen } from './src/screens/JobDetailScreen'
 import { SOSScreen } from './src/screens/SOSScreen'
 import { ChatListScreen, ChatScreen } from './src/screens/ChatScreens'
 import { registerPushToken } from './src/lib/notifications'
+import { startLocationTracking, stopLocationTracking } from './src/lib/locationTracker'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
 
@@ -48,7 +49,10 @@ export default function App() {
     const { data } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
     setUser(data)
     setLoading(false)
-    if (data) registerPushToken(data).catch(console.warn)
+    if (data) {
+      registerPushToken(data).catch(console.warn)
+      startLocationTracking(data).catch(console.warn)
+    }
   }
 
   // Real-time job change listener
