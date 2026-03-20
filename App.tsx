@@ -177,7 +177,7 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  loading: { flex: 1, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' },
+  loading: { flex: 1, backgroundColor: SLATE_DARK, alignItems: 'center', justifyContent: 'center' },
   logo: { width: 72, height: 72, borderRadius: 20, backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center' },
   logoText: { color: '#fff', fontSize: 28, fontWeight: '800' },
 })
