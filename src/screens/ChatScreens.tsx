@@ -3,18 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Keyboard
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
-
-const TEAL = '#00C9A7'
-const NAVY = '#0A1628'
-
-const ROLE_COLORS: Record<string, string> = {
-  owner: '#8B5CF6',
-  manager: '#3B82F6',
-  dispatcher: '#F59E0B',
-  lead_cleaner: '#10B981',
-  cleaner: '#00C9A7',
-  trainee: '#9CA3AF',
-}
+import { SLATE_DARK, GOLD, ROLE_COLORS } from '../lib/theme'
 
 // ── Channel List Screen ───────────────────────────────────────────
 export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; onOpenChannel: (channel: any) => void; onNewDM: () => void }) {
@@ -43,7 +32,6 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
   }
 
   async function openDM(otherUser: any) {
-    // Find or create DM channel
     const existing = channels.find(c =>
       c.channel_type === 'dm' &&
       c.participant_ids?.includes(user.id) &&
@@ -78,7 +66,6 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
         <Text style={styles.headerTitle}>💬 Messages</Text>
       </View>
 
-      {/* Tabs */}
       <View style={styles.tabRow}>
         {(['channels', 'dms'] as const).map(t => (
           <TouchableOpacity key={t} style={[styles.tabBtn, tab === t && styles.tabBtnActive]} onPress={() => setTab(t)}>
@@ -90,7 +77,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
       </View>
 
       {loading ? (
-        <View style={styles.centered}><ActivityIndicator color={TEAL} /></View>
+        <View style={styles.centered}><ActivityIndicator color={GOLD} /></View>
       ) : tab === 'channels' ? (
         <FlatList
           data={teamChannels}
@@ -105,7 +92,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
                 <Text style={styles.channelName}>{item.name}</Text>
                 {item.last_message && <Text style={styles.channelPreview} numberOfLines={1}>{item.last_message}</Text>}
               </View>
-              <Text style={{ color: '#D1D5DB', fontSize: 18 }}>›</Text>
+              <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
             </TouchableOpacity>
           )}
           ListEmptyComponent={<Text style={styles.emptyText}>No channels yet</Text>}
@@ -117,11 +104,11 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
           contentContainerStyle={{ padding: 16 }}
           renderItem={({ item }) => {
             const dmChannel = dmChannels.find(c => c.participant_ids?.includes(item.id))
-            const color = ROLE_COLORS[item.role] || TEAL
+            const color = ROLE_COLORS[item.role] || GOLD
             return (
               <TouchableOpacity style={styles.channelRow} onPress={() => openDM(item)}>
                 {item.avatar_url ? (
-                  <Image source={{ uri: item.avatar_url }} style={[styles.avatarPhoto, { width: 40, height: 40, borderRadius: 20 }]} />
+                  <Image source={{ uri: item.avatar_url }} style={styles.avatarPhoto} />
                 ) : (
                   <View style={[styles.avatar, { backgroundColor: color }]}>
                     <Text style={styles.avatarText}>{item.full_name?.split(' ')[0]?.[0] || '?'}</Text>
@@ -132,7 +119,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
                   <Text style={styles.channelRole}>{item.role?.replace('_', ' ')}</Text>
                   {dmChannel?.last_message && <Text style={styles.channelPreview} numberOfLines={1}>{dmChannel.last_message}</Text>}
                 </View>
-                <Text style={{ color: '#D1D5DB', fontSize: 18 }}>›</Text>
+                <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
               </TouchableOpacity>
             )
           }}
@@ -163,7 +150,6 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
       .select('*, users!chat_messages_sender_id_fkey(avatar_url, full_name)')
       .eq('channel_id', channel.id)
       .order('created_at')
-    // Merge avatar_url from users join
     const msgs = (data ?? []).map((m: any) => ({
       ...m,
       avatar_url: m.avatar_url || m.users?.avatar_url || null,
@@ -179,7 +165,6 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
     setSending(true)
     const msg = text.trim()
     setText('')
-    // Get latest avatar_url from DB
     const { data: freshUser } = await supabase.from('users').select('avatar_url').eq('id', user.id).maybeSingle()
     await supabase.from('chat_messages').insert({
       tenant_id: user.tenant_id,
@@ -190,7 +175,6 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
       avatar_url: freshUser?.avatar_url || user.avatar_url || null,
       body: msg,
     })
-    // Update channel last message
     await supabase.from('message_channels').update({
       last_message: msg,
       last_message_at: new Date().toISOString(),
@@ -209,7 +193,6 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
-  // Group by date
   const flatData: any[] = []
   let lastDate = ''
   messages.forEach(msg => {
@@ -232,7 +215,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         {loading ? (
-          <View style={styles.centered}><ActivityIndicator color={TEAL} size="large" /></View>
+          <View style={styles.centered}><ActivityIndicator color={GOLD} size="large" /></View>
         ) : (
           <FlatList
             ref={flatListRef}
@@ -247,7 +230,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
                 </View>
               )
               const isMe = item.sender_id === user.id
-              const color = ROLE_COLORS[item.sender_role] || TEAL
+              const color = ROLE_COLORS[item.sender_role] || GOLD
               return (
                 <View style={[styles.msgRow, isMe && styles.msgRowMe]}>
                   {item.avatar_url ? (
@@ -285,7 +268,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
             value={text}
             onChangeText={setText}
             placeholder="Message..."
-            placeholderTextColor="#9CA3AF"
+            placeholderTextColor="#94A3B8"
             multiline
             maxLength={500}
           />
@@ -303,47 +286,49 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
-  header: { backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  header: { backgroundColor: SLATE_DARK, flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
   backBtn: { padding: 4 },
-  backText: { color: TEAL, fontSize: 22, fontWeight: '300' },
+  backText: { color: GOLD, fontSize: 22, fontWeight: '300' },
   headerTitle: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  headerSub: { color: 'rgba(255,255,255,0.5)', fontSize: 11, marginTop: 1 },
-  tabRow: { flexDirection: 'row', backgroundColor: NAVY, paddingHorizontal: 16, paddingBottom: 12, gap: 8 },
+  headerSub: { color: 'rgba(255,255,255,0.45)', fontSize: 11, marginTop: 1 },
+  tabRow: { flexDirection: 'row', backgroundColor: SLATE_DARK, paddingHorizontal: 16, paddingBottom: 12, gap: 8 },
   tabBtn: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
-  tabBtnActive: { backgroundColor: TEAL, borderColor: TEAL },
+  tabBtnActive: { backgroundColor: GOLD, borderColor: GOLD },
   tabBtnText: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600' },
   tabBtnTextActive: { color: '#fff' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  channelRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: '#F3F4F6' },
-  channelIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' },
-  channelIconText: { color: TEAL, fontSize: 18, fontWeight: '700' },
-  channelName: { fontSize: 14, fontWeight: '700', color: '#111827' },
-  channelRole: { fontSize: 11, color: '#9CA3AF', textTransform: 'capitalize' },
-  channelPreview: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+  channelRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  channelIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: SLATE_DARK, alignItems: 'center', justifyContent: 'center' },
+  channelIconText: { color: GOLD, fontSize: 18, fontWeight: '700' },
+  channelName: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
+  channelRole: { fontSize: 11, color: '#94A3B8', textTransform: 'capitalize' },
+  channelPreview: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
+  // ── Avatar styles (fixed: avatarPhoto was missing before) ──
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  avatarPhoto: { width: 40, height: 40, borderRadius: 20, flexShrink: 0 },
   avatarText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  emptyText: { textAlign: 'center', color: '#9CA3AF', fontSize: 13, marginTop: 40 },
+  emptyText: { textAlign: 'center', color: '#94A3B8', fontSize: 13, marginTop: 40 },
   messageList: { padding: 16, paddingBottom: 8 },
   dateSep: { alignItems: 'center', marginVertical: 12 },
-  dateSepText: { fontSize: 11, color: '#9CA3AF', fontWeight: '600' },
+  dateSepText: { fontSize: 11, color: '#94A3B8', fontWeight: '600' },
   msgRow: { flexDirection: 'row', marginBottom: 12, alignItems: 'flex-end', gap: 8 },
   msgRowMe: { flexDirection: 'row-reverse' },
   bubble: { maxWidth: '75%', padding: 10, borderRadius: 16 },
-  bubbleMe: { backgroundColor: NAVY, borderBottomRightRadius: 4 },
-  bubbleOther: { backgroundColor: '#fff', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#E5E7EB' },
+  bubbleMe: { backgroundColor: SLATE_DARK, borderBottomRightRadius: 4 },
+  bubbleOther: { backgroundColor: '#fff', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#E2E8F0' },
   senderName: { fontSize: 10, fontWeight: '700', marginBottom: 3 },
-  senderRole: { color: '#9CA3AF', fontWeight: '400', textTransform: 'capitalize' },
-  msgText: { fontSize: 14, color: '#111827', lineHeight: 20 },
+  senderRole: { color: '#94A3B8', fontWeight: '400', textTransform: 'capitalize' },
+  msgText: { fontSize: 14, color: '#0F172A', lineHeight: 20 },
   msgTextMe: { color: '#fff' },
-  msgTime: { fontSize: 9, color: '#9CA3AF', marginTop: 4, textAlign: 'right' },
-  msgTimeMe: { color: 'rgba(255,255,255,0.5)' },
+  msgTime: { fontSize: 9, color: '#94A3B8', marginTop: 4, textAlign: 'right' },
+  msgTimeMe: { color: 'rgba(255,255,255,0.45)' },
   emptyState: { alignItems: 'center', paddingTop: 80 },
   emptyIcon: { fontSize: 48, marginBottom: 12, opacity: 0.3 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 4 },
-  inputRow: { flexDirection: 'row', padding: 12, paddingBottom: 24, gap: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB', backgroundColor: '#fff', alignItems: 'flex-end' },
-  input: { flex: 1, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, color: '#111827', maxHeight: 100, backgroundColor: '#F9FAFB' },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: TEAL, alignItems: 'center', justifyContent: 'center' },
-  sendBtnDisabled: { backgroundColor: '#E5E7EB' },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', marginBottom: 4 },
+  inputRow: { flexDirection: 'row', padding: 12, paddingBottom: 24, gap: 8, borderTopWidth: 1, borderTopColor: '#E2E8F0', backgroundColor: '#fff', alignItems: 'flex-end' },
+  input: { flex: 1, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, color: '#0F172A', maxHeight: 100, backgroundColor: '#F8FAFC' },
+  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center' },
+  sendBtnDisabled: { backgroundColor: '#E2E8F0' },
   sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
 })

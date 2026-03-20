@@ -4,8 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
 
-const TEAL = '#00C9A7'
-const NAVY = '#0A1628'
+import { SLATE_DARK, GOLD } from '../lib/theme'
+const TEAL = GOLD
+const NAVY = SLATE_DARK
 
 const PHOTO_TYPES = [
   { id: 'before',  label: '📷 Before', color: '#3B82F6' },

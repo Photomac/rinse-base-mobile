@@ -3,9 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert,
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { SLATE_DARK, GOLD } from '../lib/theme'
 
-const TEAL = '#00C9A7'
-const NAVY = '#0A1628'
 const RATE = 0.67
 const PURPOSES_EN = ['Job travel', 'Supply run', 'Equipment pickup', 'Client meeting', 'Training', 'Other']
 const PURPOSES_KEYS: Record<string, any> = {
@@ -65,24 +64,24 @@ export function MileageScreen({ user }: { user: any }) {
           <Text style={styles.addBtnText}>{showForm ? '✕ Cancel' : t('log_trip')}</Text>
         </TouchableOpacity>
       </View>
-      <ScrollView contentContainerStyle={styles.scroll} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={TEAL} />}>
+      <ScrollView contentContainerStyle={styles.scroll} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={GOLD} />}>
         <View style={styles.kpiRow}>
           <View style={styles.kpi}><Text style={styles.kpiValue}>{totalMiles.toFixed(1)}</Text><Text style={styles.kpiLabel}>Total miles</Text></View>
           <View style={[styles.kpi, styles.kpiMiddle]}><Text style={[styles.kpiValue, { color: '#F59E0B' }]}>{fmt$(pendingAmt)}</Text><Text style={styles.kpiLabel}>Pending</Text></View>
           <View style={styles.kpi}><Text style={[styles.kpiValue, { color: '#10B981' }]}>{fmt$(approvedAmt)}</Text><Text style={styles.kpiLabel}>Approved</Text></View>
         </View>
-        <View style={styles.rateBar}><Text style={styles.rateText}>Rate: <Text style={{ fontWeight: '700', color: '#111827' }}>${RATE.toFixed(3)}/mile</Text> · IRS 2026</Text></View>
+        <View style={styles.rateBar}><Text style={styles.rateText}>Rate: <Text style={{ fontWeight: '700', color: '#0F172A' }}>${RATE.toFixed(3)}/mile</Text> · IRS 2026</Text></View>
         {showForm && (
           <View style={styles.card}>
             <Text style={styles.formTitle}>🚗 Log a trip</Text>
             <Text style={styles.fieldLabel}>Date</Text>
-            <TextInput style={styles.input} value={form.date} onChangeText={v => f('date', v)} placeholderTextColor="#9CA3AF" />
+            <TextInput style={styles.input} value={form.date} onChangeText={v => f('date', v)} placeholderTextColor="#94A3B8" />
             <Text style={styles.fieldLabel}>From *</Text>
-            <TextInput style={styles.input} value={form.from} onChangeText={v => f('from', v)} placeholder="Starting location" placeholderTextColor="#9CA3AF" />
+            <TextInput style={styles.input} value={form.from} onChangeText={v => f('from', v)} placeholder="Starting location" placeholderTextColor="#94A3B8" />
             <Text style={styles.fieldLabel}>To *</Text>
-            <TextInput style={styles.input} value={form.to} onChangeText={v => f('to', v)} placeholder="Destination" placeholderTextColor="#9CA3AF" />
+            <TextInput style={styles.input} value={form.to} onChangeText={v => f('to', v)} placeholder="Destination" placeholderTextColor="#94A3B8" />
             <Text style={styles.fieldLabel}>Miles *</Text>
-            <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder={t('miles_placeholder')} keyboardType="decimal-pad" placeholderTextColor="#9CA3AF" />
+            <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder={t('miles_placeholder')} keyboardType="decimal-pad" placeholderTextColor="#94A3B8" />
             {form.miles && parseFloat(form.miles) > 0 && (
               <View style={styles.estimateBadge}><Text style={styles.estimateText}>💰 Estimated: {fmt$(parseFloat(form.miles) * RATE)}</Text></View>
             )}
@@ -99,7 +98,7 @@ export function MileageScreen({ user }: { user: any }) {
             </TouchableOpacity>
           </View>
         )}
-        {loading ? <ActivityIndicator color={TEAL} style={{ marginTop: 40 }} /> : trips.length === 0 ? (
+        {loading ? <ActivityIndicator color={GOLD} style={{ marginTop: 40 }} /> : trips.length === 0 ? (
           <View style={styles.empty}><Text style={styles.emptyIcon}>🚗</Text><Text style={styles.emptyTitle}>No trips yet</Text><Text style={styles.emptyText}>Log your mileage to get reimbursed</Text></View>
         ) : trips.map(trip => {
           const isApproved = !!trip.approved_at
@@ -127,43 +126,43 @@ export function MileageScreen({ user }: { user: any }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
-  header: { backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 20 },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  header: { backgroundColor: SLATE_DARK, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 20 },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: '800' },
-  addBtn: { backgroundColor: TEAL, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
+  addBtn: { backgroundColor: GOLD, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   addBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   scroll: { padding: 16, paddingBottom: 40 },
   kpiRow: { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 16, marginBottom: 12, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
   kpi: { flex: 1, alignItems: 'center', padding: 16 },
-  kpiMiddle: { borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#F3F4F6' },
-  kpiValue: { fontSize: 22, fontWeight: '900', color: TEAL, marginBottom: 2 },
-  kpiLabel: { fontSize: 10, color: '#9CA3AF', fontWeight: '600', textTransform: 'uppercase' },
-  rateBar: { backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#F3F4F6' },
-  rateText: { fontSize: 12, color: '#6B7280', textAlign: 'center' },
+  kpiMiddle: { borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#E2E8F0' },
+  kpiValue: { fontSize: 22, fontWeight: '900', color: GOLD, marginBottom: 2 },
+  kpiLabel: { fontSize: 10, color: '#94A3B8', fontWeight: '600', textTransform: 'uppercase' },
+  rateBar: { backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#E2E8F0' },
+  rateText: { fontSize: 12, color: '#64748B', textAlign: 'center' },
   card: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
-  formTitle: { fontSize: 15, fontWeight: '800', color: '#111827', marginBottom: 14 },
-  fieldLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 5, marginTop: 10 },
-  input: { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, padding: 12, fontSize: 14, color: '#111827' },
+  formTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A', marginBottom: 14 },
+  fieldLabel: { fontSize: 10, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 5, marginTop: 10 },
+  input: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, padding: 12, fontSize: 14, color: '#0F172A' },
   estimateBadge: { backgroundColor: '#ECFDF5', borderWidth: 1, borderColor: '#6EE7B7', borderRadius: 10, padding: 10, marginTop: 8 },
   estimateText: { color: '#065F46', fontSize: 13, fontWeight: '700', textAlign: 'center' },
-  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F9FAFB', marginRight: 8 },
-  chipActive: { backgroundColor: TEAL, borderColor: TEAL },
-  chipText: { fontSize: 12, color: '#6B7280', fontWeight: '600' },
+  chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#F8FAFC', marginRight: 8 },
+  chipActive: { backgroundColor: GOLD, borderColor: GOLD },
+  chipText: { fontSize: 12, color: '#64748B', fontWeight: '600' },
   chipTextActive: { color: '#fff' },
-  submitBtn: { backgroundColor: TEAL, borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 16 },
+  submitBtn: { backgroundColor: GOLD, borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 16 },
   submitBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyIcon: { fontSize: 40, marginBottom: 12, opacity: 0.3 },
-  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 4 },
-  emptyText: { fontSize: 13, color: '#9CA3AF' },
-  tripRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, gap: 10, borderWidth: 1, borderColor: '#F3F4F6' },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', marginBottom: 4 },
+  emptyText: { fontSize: 13, color: '#94A3B8' },
+  tripRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, gap: 10, borderWidth: 1, borderColor: '#E2E8F0' },
   dot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
   tripInfo: { flex: 1 },
-  tripRoute: { fontSize: 13, fontWeight: '600', color: '#111827', marginBottom: 2 },
-  tripMeta: { fontSize: 11, color: '#9CA3AF' },
+  tripRoute: { fontSize: 13, fontWeight: '600', color: '#0F172A', marginBottom: 2 },
+  tripMeta: { fontSize: 11, color: '#94A3B8' },
   tripRight: { alignItems: 'flex-end', gap: 2 },
   tripMiles: { fontSize: 13, fontWeight: '700' },
-  tripAmt: { fontSize: 13, fontWeight: '800', color: '#374151' },
+  tripAmt: { fontSize: 13, fontWeight: '800', color: '#334155' },
   tripStatus: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
   tripStatusText: { fontSize: 9, fontWeight: '700' },
 })

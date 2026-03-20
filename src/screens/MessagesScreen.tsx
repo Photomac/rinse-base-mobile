@@ -3,9 +3,10 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Keyboard
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { SLATE_DARK, GOLD } from '../lib/theme'
 
-const TEAL = '#00C9A7'
-const NAVY = '#0A1628'
+const TEAL = GOLD
+const NAVY = SLATE_DARK
 
 const SENDER_COLORS: Record<string, string> = {
   owner: '#8B5CF6',

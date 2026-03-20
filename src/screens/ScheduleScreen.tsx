@@ -3,9 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
-
-const TEAL = '#00C9A7'
-const NAVY = '#0A1628'
+import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const STATUS_COLORS: Record<string, string> = {
   scheduled:   '#3B82F6',
@@ -59,7 +57,6 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const now = new Date()
   const selectedJobs = getJobsForDay(selectedDate)
 
-  // Build month grid
   function buildMonthGrid() {
     const year = anchor.getFullYear()
     const month = anchor.getMonth()
@@ -75,7 +72,6 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     return weeks
   }
 
-  // Build week days
   function buildWeekDays() {
     const weekStart = new Date(anchor)
     weekStart.setDate(anchor.getDate() - anchor.getDay())
@@ -88,7 +84,6 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => {
           if (view === 'month') setAnchor(a => new Date(a.getFullYear(), a.getMonth() - 1, 1))
@@ -103,7 +98,6 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
         }}><Text style={styles.navBtn}>›</Text></TouchableOpacity>
       </View>
 
-      {/* View toggle */}
       <View style={styles.viewToggle}>
         {(['month', 'week'] as ViewMode[]).map(v => (
           <TouchableOpacity key={v} style={[styles.viewBtn, view === v && styles.viewBtnActive]} onPress={() => setView(v)}>
@@ -116,7 +110,6 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
       </View>
 
       <ScrollView>
-        {/* Day names header */}
         <View style={styles.dayNamesRow}>
           {DAY_NAMES.map(d => (
             <Text key={d} style={styles.dayName}>{d}</Text>
@@ -124,9 +117,8 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
         </View>
 
         {loading ? (
-          <ActivityIndicator color={TEAL} style={{ marginTop: 40 }} />
+          <ActivityIndicator color={GOLD} style={{ marginTop: 40 }} />
         ) : view === 'month' ? (
-          // Month view
           <View>
             {buildMonthGrid().map((week, wi) => (
               <View key={wi} style={styles.weekRow}>
@@ -144,7 +136,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                         </Text>
                       </View>
                       {dayJobs.slice(0, 2).map((job, i) => (
-                        <View key={i} style={[styles.jobDot, { backgroundColor: STATUS_COLORS[job.status] || TEAL }]}>
+                        <View key={i} style={[styles.jobDot, { backgroundColor: STATUS_COLORS[job.status] || GOLD }]}>
                           <Text style={styles.jobDotText} numberOfLines={1}>
                             {(job.client_addresses as any)?.nickname || (job.clients as any)?.full_name}
                           </Text>
@@ -160,7 +152,6 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
             ))}
           </View>
         ) : (
-          // Week view
           <View>
             <View style={styles.weekRow}>
               {buildWeekDays().map((day, i) => {
@@ -175,7 +166,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       </Text>
                     </View>
                     {dayJobs.map((job, i) => (
-                      <View key={i} style={[styles.weekJobBlock, { backgroundColor: STATUS_COLORS[job.status] || TEAL }]}>
+                      <View key={i} style={[styles.weekJobBlock, { backgroundColor: STATUS_COLORS[job.status] || GOLD }]}>
                         <Text style={styles.weekJobText} numberOfLines={1}>
                           {fmtTime(job.scheduled_start)}
                         </Text>
@@ -191,7 +182,6 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
           </View>
         )}
 
-        {/* Selected day jobs */}
         <View style={styles.selectedDaySection}>
           <Text style={styles.selectedDayLabel}>
             {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
@@ -203,7 +193,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
             </View>
           ) : selectedJobs.map((job: any) => {
             const addr = job.client_addresses as any
-            const color = STATUS_COLORS[job.status] || TEAL
+            const color = STATUS_COLORS[job.status] || GOLD
             return (
               <TouchableOpacity key={job.id} style={[styles.jobCard, { borderLeftColor: color }]} onPress={() => onJobPress(job)}>
                 <View style={{ flex: 1 }}>
@@ -217,7 +207,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                   <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>
                   {job.is_turnover && <Text style={styles.turnoverTag}>🏠 Turnover</Text>}
                 </View>
-                <Text style={{ color: '#D1D5DB', fontSize: 18 }}>›</Text>
+                <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
               </TouchableOpacity>
             )
           })}
@@ -228,43 +218,43 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
-  header: { backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingBottom: 8 },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  header: { backgroundColor: SLATE_DARK, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingBottom: 8 },
   navBtn: { color: '#fff', fontSize: 28, fontWeight: '300', paddingHorizontal: 8 },
   headerLabel: { color: '#fff', fontSize: 16, fontWeight: '700', textAlign: 'center' },
-  viewToggle: { backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, gap: 8 },
+  viewToggle: { backgroundColor: SLATE_DARK, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, gap: 8 },
   viewBtn: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
-  viewBtnActive: { backgroundColor: TEAL, borderColor: TEAL },
+  viewBtnActive: { backgroundColor: GOLD, borderColor: GOLD },
   viewBtnText: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600' },
   viewBtnTextActive: { color: '#fff' },
   jobCountLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 11, marginLeft: 'auto' },
-  dayNamesRow: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  dayName: { flex: 1, textAlign: 'center', fontSize: 10, fontWeight: '700', color: '#9CA3AF', paddingVertical: 6, textTransform: 'uppercase' },
-  weekRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
-  dayCell: { flex: 1, minHeight: 64, padding: 2, borderRightWidth: 1, borderRightColor: '#F3F4F6', backgroundColor: '#fff' },
-  dayCellSelected: { backgroundColor: '#F0FDFB' },
-  weekDayCell: { flex: 1, minHeight: 80, padding: 4, borderRightWidth: 1, borderRightColor: '#F3F4F6', backgroundColor: '#fff' },
+  dayNamesRow: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
+  dayName: { flex: 1, textAlign: 'center', fontSize: 10, fontWeight: '700', color: '#94A3B8', paddingVertical: 6, textTransform: 'uppercase' },
+  weekRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
+  dayCell: { flex: 1, minHeight: 64, padding: 2, borderRightWidth: 1, borderRightColor: '#E2E8F0', backgroundColor: '#fff' },
+  dayCellSelected: { backgroundColor: '#FEF9EC' },
+  weekDayCell: { flex: 1, minHeight: 80, padding: 4, borderRightWidth: 1, borderRightColor: '#E2E8F0', backgroundColor: '#fff' },
   dayNum: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 2, alignSelf: 'center' },
-  dayNumToday: { backgroundColor: TEAL },
-  dayNumSelected: { backgroundColor: NAVY },
+  dayNumToday: { backgroundColor: GOLD },
+  dayNumSelected: { backgroundColor: '#1E293B' },
   dayNumText: { fontSize: 12, color: '#374151', fontWeight: '500' },
   dayNumTextToday: { color: '#fff', fontWeight: '700' },
   dayNumTextSelected: { color: '#fff', fontWeight: '700' },
   jobDot: { borderRadius: 3, padding: 1, marginBottom: 1, paddingHorizontal: 2 },
   jobDotText: { fontSize: 8, color: '#fff', fontWeight: '600' },
-  moreJobs: { fontSize: 8, color: '#9CA3AF', textAlign: 'center' },
+  moreJobs: { fontSize: 8, color: '#94A3B8', textAlign: 'center' },
   weekJobBlock: { borderRadius: 4, padding: 3, marginBottom: 2 },
   weekJobText: { fontSize: 9, color: '#fff', fontWeight: '600' },
   weekJobName: { fontSize: 8, color: 'rgba(255,255,255,0.85)' },
   selectedDaySection: { padding: 16 },
-  selectedDayLabel: { fontSize: 14, fontWeight: '700', color: '#374151', marginBottom: 10 },
+  selectedDayLabel: { fontSize: 14, fontWeight: '700', color: '#334155', marginBottom: 10 },
   emptyDay: { alignItems: 'center', paddingVertical: 24 },
-  emptyText: { fontSize: 13, color: '#9CA3AF' },
+  emptyText: { fontSize: 13, color: '#94A3B8' },
   jobCard: { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, flexDirection: 'row', alignItems: 'center', borderLeftWidth: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 1 },
-  jobTime: { fontSize: 13, fontWeight: '700', color: '#111827' },
+  jobTime: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
   statusBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
   statusText: { fontSize: 10, fontWeight: '700', textTransform: 'capitalize' },
-  jobClient: { fontSize: 14, fontWeight: '700', color: '#111827', marginBottom: 2 },
-  jobAddress: { fontSize: 11, color: '#9CA3AF' },
+  jobClient: { fontSize: 14, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
+  jobAddress: { fontSize: 11, color: '#94A3B8' },
   turnoverTag: { fontSize: 10, color: '#06B6D4', fontWeight: '700', marginTop: 3 },
 })

@@ -16,8 +16,8 @@ import { ChatListScreen, ChatScreen } from './src/screens/ChatScreens'
 import { registerPushToken } from './src/lib/notifications'
 import { LangProvider } from './src/contexts/LangContext'
 
-const TEAL = '#00C9A7'
-const NAVY = '#0A1628'
+const GOLD = '#D4A843'
+const SLATE_DARK = '#0F172A'
 const Tab = createBottomTabNavigator()
 
 export default function App() {
@@ -68,7 +68,7 @@ export default function App() {
     return (
       <View style={styles.loading}>
         <View style={styles.logo}><Text style={styles.logoText}>RB</Text></View>
-        <ActivityIndicator color={TEAL} style={{ marginTop: 24 }} />
+        <ActivityIndicator color={GOLD} style={{ marginTop: 24 }} />
       </View>
     )
   }
@@ -119,8 +119,8 @@ export default function App() {
         <Tab.Navigator
           screenOptions={{
             headerShown: false,
-            tabBarStyle: { backgroundColor: NAVY, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: 16, height: 80 },
-            tabBarActiveTintColor: TEAL,
+            tabBarStyle: { backgroundColor: SLATE_DARK, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: 16, height: 80 },
+            tabBarActiveTintColor: GOLD,
             tabBarInactiveTintColor: 'rgba(255,255,255,0.35)',
             tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: 2 },
           }}
@@ -178,6 +178,6 @@ export default function App() {
 
 const styles = StyleSheet.create({
   loading: { flex: 1, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' },
-  logo: { width: 72, height: 72, borderRadius: 20, backgroundColor: TEAL, alignItems: 'center', justifyContent: 'center' },
+  logo: { width: 72, height: 72, borderRadius: 20, backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center' },
   logoText: { color: '#fff', fontSize: 28, fontWeight: '800' },
 })

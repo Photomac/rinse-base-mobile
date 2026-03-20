@@ -6,8 +6,9 @@ import { JobPhotosScreen } from './JobPhotosScreen'
 import { MessagesScreen } from './MessagesScreen'
 import { useLang } from '../contexts/LangContext'
 
-const TEAL = '#00C9A7'
-const NAVY = '#0A1628'
+import { SLATE_DARK, GOLD } from '../lib/theme'
+const TEAL = GOLD
+const NAVY = SLATE_DARK
 
 const PAUSE_REASONS = [
   'Waiting for laundry',

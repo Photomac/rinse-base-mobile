@@ -3,9 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIn
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
-
-const TEAL = '#00C9A7'
-const NAVY = '#0A1628'
+import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 
 function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -19,9 +17,6 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [monthStats, setMonthStats] = useState({ completed: 0, hours: 0, earnings: 0 })
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [sosLoading, setSosLoading] = useState(false)
-  const [sosHolding, setSosHolding] = useState(false)
-  const [sosProgress, setSosProgress] = useState(0)
   const sosTimer = useRef<any>(null)
   const sosInterval = useRef<any>(null)
 
@@ -60,7 +55,6 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     setActiveJob(myToday.find((j: any) => j.status === 'in_progress') || null)
     setNextJob(myToday.find((j: any) => j.status === 'scheduled' || j.status === 'en_route') || null)
 
-    // Calculate month stats
     const hours = myMonth.reduce((s: number, j: any) => {
       if (!j.scheduled_end) return s
       return s + (new Date(j.scheduled_end).getTime() - new Date(j.scheduled_start).getTime()) / 3600000
@@ -76,38 +70,6 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
   useEffect(() => { load() }, [load])
 
-  function startSosHold() {
-    setSosHolding(true)
-    setSosProgress(0)
-    let progress = 0
-    sosInterval.current = setInterval(() => {
-      progress += 100 / 30
-      setSosProgress(Math.min(progress, 100))
-    }, 100)
-    sosTimer.current = setTimeout(async () => {
-      clearInterval(sosInterval.current)
-      setSosHolding(false)
-      setSosProgress(0)
-      setSosLoading(true)
-      const { error } = await supabase.from('sos_alerts').insert({
-        tenant_id: user.tenant_id,
-        user_id: user.id,
-        triggered_at: new Date().toISOString(),
-        status: 'active',
-      })
-      setSosLoading(false)
-      if (error) Alert.alert('Error', 'Could not send SOS. Call your manager directly.')
-      else Alert.alert('SOS Sent', 'Your owner and manager have been notified. Help is on the way.')
-    }, 3000)
-  }
-
-  function cancelSosHold() {
-    clearTimeout(sosTimer.current)
-    clearInterval(sosInterval.current)
-    setSosHolding(false)
-    setSosProgress(0)
-  }
-
   const now = new Date()
   const hour = now.getHours()
   const greeting = hour < 12 ? t('good_morning') : hour < 17 ? t('good_afternoon') : t('good_evening')
@@ -117,7 +79,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView
         contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={TEAL} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={GOLD} />}
       >
         {/* Header */}
         <View style={styles.header}>
@@ -126,17 +88,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               <Text style={styles.greeting}>{greeting}, {user.full_name?.split(' ')[0]} 👋</Text>
               <Text style={styles.date}>{now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
             </View>
-            <TouchableOpacity
-              style={styles.sosBtn}
-              onPress={onSOS}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity style={styles.sosBtn} onPress={onSOS} activeOpacity={0.8}>
               <Text style={styles.sosBtnText}>🆘</Text>
               <Text style={styles.sosHoldLabel}>SOS</Text>
             </TouchableOpacity>
           </View>
 
-          {/* Today's stats bar */}
+          {/* Stats bar */}
           <View style={styles.statsBar}>
             <View style={styles.stat}>
               <Text style={styles.statValue}>{todayJobs.length}</Text>
@@ -161,7 +119,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         </View>
 
         {loading ? (
-          <ActivityIndicator color={TEAL} style={{ marginTop: 40 }} />
+          <ActivityIndicator color={GOLD} style={{ marginTop: 40 }} />
         ) : (
           <>
             {/* Active job banner */}
@@ -277,21 +235,20 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
   scroll: { paddingBottom: 40 },
-  header: { backgroundColor: NAVY, padding: 20, paddingBottom: 0 },
+  header: { backgroundColor: SLATE_DARK, padding: 20, paddingBottom: 0 },
   headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   greeting: { color: '#fff', fontSize: 22, fontWeight: '800' },
-  date: { color: 'rgba(255,255,255,0.5)', fontSize: 12, marginTop: 2 },
+  date: { color: 'rgba(255,255,255,0.45)', fontSize: 12, marginTop: 2 },
   sosBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center', shadowColor: '#EF4444', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8 },
   sosBtnText: { fontSize: 20 },
   sosHoldLabel: { fontSize: 7, color: 'rgba(255,255,255,0.8)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.3 },
-  sosProgressBar: { position: 'absolute', bottom: 0, left: 0, height: 3, backgroundColor: '#fff', borderRadius: 2 },
-  statsBar: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 14, padding: 14, marginBottom: 20 },
+  statsBar: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: 14, padding: 14, marginBottom: 20 },
   stat: { flex: 1, alignItems: 'center' },
   statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.1)' },
   statValue: { color: '#fff', fontSize: 20, fontWeight: '800' },
-  statLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 10, fontWeight: '600', textTransform: 'uppercase', marginTop: 2 },
+  statLabel: { color: 'rgba(255,255,255,0.45)', fontSize: 10, fontWeight: '600', textTransform: 'uppercase', marginTop: 2 },
   activeBanner: { margin: 16, backgroundColor: '#FEF3C7', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#FCD34D' },
   activePulse: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#F59E0B', marginRight: 12 },
   activeInfo: { flex: 1 },
@@ -299,36 +256,36 @@ const styles = StyleSheet.create({
   activeClient: { fontSize: 16, fontWeight: '800', color: '#111827', marginBottom: 2 },
   activeTime: { fontSize: 12, color: '#6B7280' },
   activeArrow: { fontSize: 18, color: '#F59E0B', fontWeight: '700' },
-  nextJobCard: { margin: 16, marginTop: 0, backgroundColor: '#fff', borderRadius: 14, padding: 16, borderWidth: 1, borderColor: '#E5E7EB', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
+  nextJobCard: { margin: 16, marginTop: 0, backgroundColor: '#fff', borderRadius: 14, padding: 16, borderWidth: 1, borderColor: '#E2E8F0', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
   nextJobHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  nextJobLabel: { fontSize: 11, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.5 },
-  nextJobTime: { fontSize: 13, fontWeight: '700', color: TEAL },
-  nextJobClient: { fontSize: 18, fontWeight: '800', color: '#111827', marginBottom: 4 },
-  nextJobAddress: { fontSize: 12, color: '#6B7280', marginBottom: 4 },
-  nextJobLockbox: { fontSize: 12, color: '#374151', fontWeight: '600' },
+  nextJobLabel: { fontSize: 11, fontWeight: '700', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5 },
+  nextJobTime: { fontSize: 13, fontWeight: '700', color: GOLD },
+  nextJobClient: { fontSize: 18, fontWeight: '800', color: '#0F172A', marginBottom: 4 },
+  nextJobAddress: { fontSize: 12, color: '#64748B', marginBottom: 4 },
+  nextJobLockbox: { fontSize: 12, color: '#334155', fontWeight: '600' },
   quickActions: { flexDirection: 'row', paddingHorizontal: 16, gap: 10, marginBottom: 16 },
-  quickBtn: { flex: 1, backgroundColor: '#fff', borderRadius: 12, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: '#F3F4F6', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4 },
+  quickBtn: { flex: 1, backgroundColor: '#fff', borderRadius: 12, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4 },
   quickBtnIcon: { fontSize: 22, marginBottom: 4 },
-  quickBtnLabel: { fontSize: 10, fontWeight: '700', color: '#374151', textAlign: 'center' },
+  quickBtnLabel: { fontSize: 10, fontWeight: '700', color: '#334155', textAlign: 'center' },
   section: { paddingHorizontal: 16 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  sectionTitle: { fontSize: 16, fontWeight: '800', color: '#111827' },
-  seeAll: { fontSize: 12, color: TEAL, fontWeight: '600' },
-  emptyCard: { backgroundColor: '#fff', borderRadius: 12, padding: 20, alignItems: 'center', borderWidth: 1, borderColor: '#F3F4F6' },
-  emptyText: { fontSize: 13, color: '#9CA3AF' },
-  jobRow: { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#F3F4F6' },
+  sectionTitle: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
+  seeAll: { fontSize: 12, color: GOLD, fontWeight: '600' },
+  emptyCard: { backgroundColor: '#fff', borderRadius: 12, padding: 20, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
+  emptyText: { fontSize: 13, color: '#94A3B8' },
+  jobRow: { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
   jobDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
   jobInfo: { flex: 1 },
-  jobClient: { fontSize: 14, fontWeight: '700', color: '#111827' },
-  jobTime: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
-  jobArrow: { fontSize: 16, color: '#D1D5DB' },
-  moreBtn: { backgroundColor: '#F9FAFB', borderRadius: 10, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: '#E5E7EB' },
-  moreBtnText: { fontSize: 12, color: '#6B7280', fontWeight: '600' },
-  earningsCard: { margin: 16, backgroundColor: NAVY, borderRadius: 16, padding: 20 },
-  earningsLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600', marginBottom: 6 },
-  earningsValue: { color: TEAL, fontSize: 36, fontWeight: '900', marginBottom: 14 },
+  jobClient: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
+  jobTime: { fontSize: 11, color: '#94A3B8', marginTop: 2 },
+  jobArrow: { fontSize: 16, color: '#CBD5E1' },
+  moreBtn: { backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
+  moreBtnText: { fontSize: 12, color: '#64748B', fontWeight: '600' },
+  earningsCard: { margin: 16, backgroundColor: SLATE_DARK, borderRadius: 16, padding: 20 },
+  earningsLabel: { color: 'rgba(255,255,255,0.55)', fontSize: 12, fontWeight: '600', marginBottom: 6 },
+  earningsValue: { color: GOLD, fontSize: 36, fontWeight: '900', marginBottom: 14 },
   earningsStats: { flexDirection: 'row', gap: 16 },
-  earningStat: { backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 10, padding: 10, flex: 1, alignItems: 'center' },
+  earningStat: { backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: 10, padding: 10, flex: 1, alignItems: 'center' },
   earningStatValue: { color: '#fff', fontSize: 20, fontWeight: '800' },
-  earningStatLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 10, fontWeight: '600', textTransform: 'uppercase', marginTop: 2 },
+  earningStatLabel: { color: 'rgba(255,255,255,0.45)', fontSize: 10, fontWeight: '600', textTransform: 'uppercase', marginTop: 2 },
 })
