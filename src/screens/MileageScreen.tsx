@@ -1,20 +1,30 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, RefreshControl, ActivityIndicator } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const RATE = 0.67
 const PURPOSES_EN = ['Job travel', 'Supply run', 'Equipment pickup', 'Client meeting', 'Training', 'Other']
-const PURPOSES_KEYS: Record<string, any> = {
-  'Job travel': 'job_travel', 'Supply run': 'supply_run_miles',
-  'Equipment pickup': 'equipment_pickup', 'Client meeting': 'client_meeting',
-  'Training': 'training', 'Other': 'other'
-}
 
 function fmtDate(iso: string) { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }
 function fmt$(n: number) { return '$' + n.toFixed(2) }
+function fmtDuration(ms: number) {
+  const mins = Math.floor(ms / 60000)
+  if (mins < 60) return `${mins}m`
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`
+}
+
+// Haversine distance in miles
+function haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 3958.8
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLon = (lon2 - lon1) * Math.PI / 180
+  const a = Math.sin(dLat/2) ** 2 + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLon/2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+}
 
 export function MileageScreen({ user }: { user: any }) {
   const { t } = useLang()
@@ -23,10 +33,23 @@ export function MileageScreen({ user }: { user: any }) {
   const [refreshing, setRefreshing] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: t('job_travel'), notes: '' })
+  const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'Job travel', notes: '' })
+
+  // GPS tracking state
+  const [tracking, setTracking] = useState(false)
+  const [trackingStart, setTrackingStart] = useState<Date | null>(null)
+  const [trackingMiles, setTrackingMiles] = useState(0)
+  const [trackingPurpose, setTrackingPurpose] = useState('Job travel')
+  const [elapsed, setElapsed] = useState(0)
+  const locationSub = useRef<any>(null)
+  const lastCoord = useRef<{ lat: number; lng: number } | null>(null)
+  const timerRef = useRef<any>(null)
+  const milesRef = useRef(0)
 
   async function load() {
-    const { data } = await supabase.from('mileage_logs').select('*').eq('tenant_id', user.tenant_id).eq('user_id', user.id).order('started_at', { ascending: false }).limit(50)
+    const { data } = await supabase.from('mileage_logs').select('*')
+      .eq('tenant_id', user.tenant_id).eq('user_id', user.id)
+      .order('started_at', { ascending: false }).limit(50)
     setTrips(data ?? [])
     setLoading(false)
     setRefreshing(false)
@@ -34,20 +57,101 @@ export function MileageScreen({ user }: { user: any }) {
 
   useEffect(() => { load() }, [])
 
+  // Elapsed timer
+  useEffect(() => {
+    if (tracking && trackingStart) {
+      timerRef.current = setInterval(() => {
+        setElapsed(Date.now() - trackingStart.getTime())
+      }, 1000)
+    } else {
+      clearInterval(timerRef.current)
+    }
+    return () => clearInterval(timerRef.current)
+  }, [tracking, trackingStart])
+
+  async function startTracking() {
+    const { status } = await Location.requestForegroundPermissionsAsync()
+    if (status !== 'granted') {
+      Alert.alert('Location needed', 'Enable location permissions to auto-track mileage.')
+      return
+    }
+    milesRef.current = 0
+    lastCoord.current = null
+    setTrackingMiles(0)
+    setTrackingStart(new Date())
+    setTracking(true)
+
+    locationSub.current = await Location.watchPositionAsync(
+      { accuracy: Location.Accuracy.High, distanceInterval: 10, timeInterval: 5000 },
+      (loc) => {
+        const { latitude, longitude } = loc.coords
+        if (lastCoord.current) {
+          const d = haversine(lastCoord.current.lat, lastCoord.current.lng, latitude, longitude)
+          if (d > 0.01) { // ignore < 50ft noise
+            milesRef.current += d
+            setTrackingMiles(Math.round(milesRef.current * 100) / 100)
+          }
+        }
+        lastCoord.current = { lat: latitude, lng: longitude }
+      }
+    )
+  }
+
+  async function stopTracking() {
+    if (locationSub.current) {
+      locationSub.current.remove()
+      locationSub.current = null
+    }
+    setTracking(false)
+    const miles = Math.round(milesRef.current * 100) / 100
+
+    if (miles < 0.1) {
+      Alert.alert('Trip too short', 'Less than 0.1 miles recorded. Trip not saved.')
+      setTrackingMiles(0)
+      return
+    }
+
+    Alert.alert(
+      `Save trip — ${miles} miles`,
+      `Estimated reimbursement: ${fmt$(miles * RATE)}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Save trip',
+          onPress: async () => {
+            setSaving(true)
+            await supabase.from('mileage_logs').insert({
+              tenant_id: user.tenant_id, user_id: user.id,
+              started_at: trackingStart?.toISOString() || new Date().toISOString(),
+              origin_label: 'GPS tracked', dest_label: 'GPS tracked',
+              distance_miles: miles,
+              reimbursement_amt: Math.round(miles * RATE * 100) / 100,
+              purpose: trackingPurpose, notes: `Auto-tracked via GPS`, flagged: false,
+            })
+            setSaving(false)
+            setTrackingMiles(0)
+            load()
+          }
+        }
+      ]
+    )
+  }
+
   async function handleSubmit() {
     if (!form.from || !form.to) { Alert.alert('Error', 'Enter origin and destination'); return }
     const miles = parseFloat(form.miles)
     if (!miles || miles <= 0) { Alert.alert('Error', 'Enter valid miles'); return }
     setSaving(true)
-    const { error } = await supabase.from('mileage_logs').insert({
+    await supabase.from('mileage_logs').insert({
       tenant_id: user.tenant_id, user_id: user.id,
       started_at: new Date(form.date + 'T08:00:00').toISOString(),
       origin_label: form.from.trim(), dest_label: form.to.trim(),
       distance_miles: miles, reimbursement_amt: Math.round(miles * RATE * 100) / 100,
       purpose: form.purpose, notes: form.notes.trim() || null, flagged: false,
     })
-    if (error) { Alert.alert('Error', error.message) }
-    else { setForm({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: t('job_travel'), notes: '' }); setShowForm(false); load() }
+    setForm({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'Job travel', notes: '' })
+    setShowForm(false)
+    load()
     setSaving(false)
   }
 
@@ -59,21 +163,76 @@ export function MileageScreen({ user }: { user: any }) {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>↗ My mileage</Text>
+        <Text style={styles.headerTitle}>↗ Mileage</Text>
         <TouchableOpacity style={styles.addBtn} onPress={() => setShowForm(v => !v)}>
-          <Text style={styles.addBtnText}>{showForm ? '✕ Cancel' : t('log_trip')}</Text>
+          <Text style={styles.addBtnText}>{showForm ? '✕' : '+ Manual'}</Text>
         </TouchableOpacity>
       </View>
-      <ScrollView contentContainerStyle={styles.scroll} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={GOLD} />}>
+
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={GOLD} />}
+      >
+        {/* KPIs */}
         <View style={styles.kpiRow}>
           <View style={styles.kpi}><Text style={styles.kpiValue}>{totalMiles.toFixed(1)}</Text><Text style={styles.kpiLabel}>Total miles</Text></View>
           <View style={[styles.kpi, styles.kpiMiddle]}><Text style={[styles.kpiValue, { color: '#F59E0B' }]}>{fmt$(pendingAmt)}</Text><Text style={styles.kpiLabel}>Pending</Text></View>
           <View style={styles.kpi}><Text style={[styles.kpiValue, { color: '#10B981' }]}>{fmt$(approvedAmt)}</Text><Text style={styles.kpiLabel}>Approved</Text></View>
         </View>
-        <View style={styles.rateBar}><Text style={styles.rateText}>Rate: <Text style={{ fontWeight: '700', color: '#0F172A' }}>${RATE.toFixed(3)}/mile</Text> · IRS 2026</Text></View>
+
+        {/* GPS Tracker */}
+        <View style={[styles.gpsCard, tracking && styles.gpsCardActive]}>
+          <View style={styles.gpsHeader}>
+            <Text style={styles.gpsTitle}>{tracking ? '📍 Tracking...' : '🚗 Auto-track trip'}</Text>
+            {tracking && (
+              <View style={styles.gpsPulse} />
+            )}
+          </View>
+
+          {tracking ? (
+            <>
+              <View style={styles.gpsStats}>
+                <View style={styles.gpsStat}>
+                  <Text style={styles.gpsStatValue}>{trackingMiles.toFixed(2)}</Text>
+                  <Text style={styles.gpsStatLabel}>Miles</Text>
+                </View>
+                <View style={styles.gpsStatDivider} />
+                <View style={styles.gpsStat}>
+                  <Text style={styles.gpsStatValue}>{fmtDuration(elapsed)}</Text>
+                  <Text style={styles.gpsStatLabel}>Time</Text>
+                </View>
+                <View style={styles.gpsStatDivider} />
+                <View style={styles.gpsStat}>
+                  <Text style={[styles.gpsStatValue, { color: '#10B981' }]}>{fmt$(trackingMiles * RATE)}</Text>
+                  <Text style={styles.gpsStatLabel}>Est. reimb.</Text>
+                </View>
+              </View>
+              <TouchableOpacity style={styles.stopBtn} onPress={stopTracking}>
+                <Text style={styles.stopBtnText}>⏹ Stop & save</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={styles.gpsSubtitle}>GPS automatically measures distance. Start when you leave, stop when you arrive.</Text>
+              {/* Purpose selector */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 10 }}>
+                {PURPOSES_EN.map(p => (
+                  <TouchableOpacity key={p} style={[styles.chip, trackingPurpose === p && styles.chipActive]} onPress={() => setTrackingPurpose(p)}>
+                    <Text style={[styles.chipText, trackingPurpose === p && styles.chipTextActive]}>{p}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <TouchableOpacity style={styles.startBtn} onPress={startTracking}>
+                <Text style={styles.startBtnText}>▶ Start tracking</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        {/* Manual form */}
         {showForm && (
           <View style={styles.card}>
-            <Text style={styles.formTitle}>🚗 Log a trip</Text>
+            <Text style={styles.formTitle}>📝 Log manually</Text>
             <Text style={styles.fieldLabel}>Date</Text>
             <TextInput style={styles.input} value={form.date} onChangeText={v => f('date', v)} placeholderTextColor="#94A3B8" />
             <Text style={styles.fieldLabel}>From *</Text>
@@ -81,40 +240,52 @@ export function MileageScreen({ user }: { user: any }) {
             <Text style={styles.fieldLabel}>To *</Text>
             <TextInput style={styles.input} value={form.to} onChangeText={v => f('to', v)} placeholder="Destination" placeholderTextColor="#94A3B8" />
             <Text style={styles.fieldLabel}>Miles *</Text>
-            <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder={t('miles_placeholder')} keyboardType="decimal-pad" placeholderTextColor="#94A3B8" />
+            <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder="0.0" keyboardType="decimal-pad" placeholderTextColor="#94A3B8" />
             {form.miles && parseFloat(form.miles) > 0 && (
-              <View style={styles.estimateBadge}><Text style={styles.estimateText}>💰 Estimated: {fmt$(parseFloat(form.miles) * RATE)}</Text></View>
+              <View style={styles.estimateBadge}><Text style={styles.estimateText}>💰 {fmt$(parseFloat(form.miles) * RATE)}</Text></View>
             )}
-            <Text style={styles.fieldLabel}>Purpose</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 6 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 8 }}>
               {PURPOSES_EN.map(p => (
                 <TouchableOpacity key={p} style={[styles.chip, form.purpose === p && styles.chipActive]} onPress={() => f('purpose', p)}>
-                  <Text style={[styles.chipText, form.purpose === p && styles.chipTextActive]}>{t(PURPOSES_KEYS[p])}</Text>
+                  <Text style={[styles.chipText, form.purpose === p && styles.chipTextActive]}>{p}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
             <TouchableOpacity style={[styles.submitBtn, saving && { opacity: 0.6 }]} onPress={handleSubmit} disabled={saving}>
-              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitBtnText}>Submit for approval{form.miles && parseFloat(form.miles) > 0 ? ` — ${fmt$(parseFloat(form.miles) * RATE)}` : ''}</Text>}
+              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitBtnText}>Save trip</Text>}
             </TouchableOpacity>
           </View>
         )}
+
+        {/* Trip history */}
         {loading ? <ActivityIndicator color={GOLD} style={{ marginTop: 40 }} /> : trips.length === 0 ? (
-          <View style={styles.empty}><Text style={styles.emptyIcon}>🚗</Text><Text style={styles.emptyTitle}>No trips yet</Text><Text style={styles.emptyText}>Log your mileage to get reimbursed</Text></View>
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>🚗</Text>
+            <Text style={styles.emptyTitle}>No trips yet</Text>
+            <Text style={styles.emptyText}>Start auto-tracking or log manually</Text>
+          </View>
         ) : trips.map(trip => {
           const isApproved = !!trip.approved_at
           const isFlagged = !!trip.flagged
+          const isGPS = trip.notes?.includes('GPS')
           return (
             <View key={trip.id} style={styles.tripRow}>
               <View style={[styles.dot, { backgroundColor: isApproved ? '#10B981' : isFlagged ? '#EF4444' : '#F59E0B' }]} />
               <View style={styles.tripInfo}>
-                <Text style={styles.tripRoute} numberOfLines={1}>{trip.origin_label} → {trip.dest_label}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.tripRoute} numberOfLines={1}>
+                    {isGPS ? '📍 GPS tracked' : `${trip.origin_label} → ${trip.dest_label}`}
+                  </Text>
+                </View>
                 <Text style={styles.tripMeta}>{fmtDate(trip.started_at)} · {trip.purpose}</Text>
               </View>
               <View style={styles.tripRight}>
                 <Text style={styles.tripMiles}>{Number(trip.distance_miles).toFixed(1)} mi</Text>
                 <Text style={[styles.tripAmt, isApproved && { color: '#10B981' }]}>{fmt$(Number(trip.reimbursement_amt))}</Text>
                 <View style={[styles.tripStatus, { backgroundColor: isApproved ? '#DCFCE7' : isFlagged ? '#FEE2E2' : '#FEF9C3' }]}>
-                  <Text style={[styles.tripStatusText, { color: isApproved ? '#15803D' : isFlagged ? '#DC2626' : '#854D0E' }]}>{isApproved ? '✓ Approved' : isFlagged ? '⚑ Flagged' : '• Pending'}</Text>
+                  <Text style={[styles.tripStatusText, { color: isApproved ? '#15803D' : isFlagged ? '#DC2626' : '#854D0E' }]}>
+                    {isApproved ? '✓ Approved' : isFlagged ? '⚑ Flagged' : '• Pending'}
+                  </Text>
                 </View>
               </View>
             </View>
@@ -129,17 +300,32 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
   header: { backgroundColor: SLATE_DARK, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 20 },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: '800' },
-  addBtn: { backgroundColor: GOLD, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
+  addBtn: { backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   addBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   scroll: { padding: 16, paddingBottom: 40 },
-  kpiRow: { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 16, marginBottom: 12, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
+  kpiRow: { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 16, marginBottom: 12, overflow: 'hidden', borderWidth: 1, borderColor: '#E2E8F0' },
   kpi: { flex: 1, alignItems: 'center', padding: 16 },
   kpiMiddle: { borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#E2E8F0' },
   kpiValue: { fontSize: 22, fontWeight: '900', color: GOLD, marginBottom: 2 },
   kpiLabel: { fontSize: 10, color: '#94A3B8', fontWeight: '600', textTransform: 'uppercase' },
-  rateBar: { backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#E2E8F0' },
-  rateText: { fontSize: 12, color: '#64748B', textAlign: 'center' },
-  card: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
+  // GPS card
+  gpsCard: { backgroundColor: '#fff', borderRadius: 16, padding: 18, marginBottom: 12, borderWidth: 1.5, borderColor: '#E2E8F0' },
+  gpsCardActive: { borderColor: GOLD, backgroundColor: '#FFFBF0' },
+  gpsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  gpsTitle: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
+  gpsPulse: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#10B981' },
+  gpsSubtitle: { fontSize: 12, color: '#64748B', lineHeight: 18, marginBottom: 4 },
+  gpsStats: { flexDirection: 'row', backgroundColor: '#F8FAFC', borderRadius: 12, padding: 14, marginBottom: 14 },
+  gpsStat: { flex: 1, alignItems: 'center' },
+  gpsStatDivider: { width: 1, backgroundColor: '#E2E8F0' },
+  gpsStatValue: { fontSize: 20, fontWeight: '900', color: GOLD },
+  gpsStatLabel: { fontSize: 10, color: '#94A3B8', fontWeight: '600', textTransform: 'uppercase', marginTop: 2 },
+  startBtn: { backgroundColor: GOLD, borderRadius: 12, padding: 14, alignItems: 'center' },
+  startBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  stopBtn: { backgroundColor: '#EF4444', borderRadius: 12, padding: 14, alignItems: 'center' },
+  stopBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  // Manual form
+  card: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#E2E8F0' },
   formTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A', marginBottom: 14 },
   fieldLabel: { fontSize: 10, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 5, marginTop: 10 },
   input: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, padding: 12, fontSize: 14, color: '#0F172A' },
@@ -149,8 +335,9 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: GOLD, borderColor: GOLD },
   chipText: { fontSize: 12, color: '#64748B', fontWeight: '600' },
   chipTextActive: { color: '#fff' },
-  submitBtn: { backgroundColor: GOLD, borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 16 },
+  submitBtn: { backgroundColor: GOLD, borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 12 },
   submitBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  // Trip list
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyIcon: { fontSize: 40, marginBottom: 12, opacity: 0.3 },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', marginBottom: 4 },

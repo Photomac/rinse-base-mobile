@@ -162,10 +162,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                 <Text style={styles.quickBtnIcon}>📅</Text>
                 <Text style={styles.quickBtnLabel}>Schedule</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.quickBtn} onPress={() => onNavigate('jobs')}>
-                <Text style={styles.quickBtnIcon}>☀</Text>
-                <Text style={styles.quickBtnLabel}>Today's jobs</Text>
-              </TouchableOpacity>
+
               <TouchableOpacity style={styles.quickBtn} onPress={() => onNavigate('mileage')}>
                 <Text style={styles.quickBtnIcon}>↗</Text>
                 <Text style={styles.quickBtnLabel}>Log miles</Text>
@@ -180,15 +177,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Today's jobs</Text>
-                <TouchableOpacity onPress={() => onNavigate('jobs')}>
-                  <Text style={styles.seeAll}>See all →</Text>
-                </TouchableOpacity>
+  
               </View>
               {todayJobs.length === 0 ? (
                 <View style={styles.emptyCard}>
                   <Text style={styles.emptyText}>No jobs scheduled today 🌟</Text>
                 </View>
-              ) : todayJobs.slice(0, 3).map((job: any) => {
+              ) : todayJobs.map((job: any) => {
                 const addr = job.client_addresses
                 const isDone = job.status === 'completed'
                 const isActive = job.status === 'in_progress'
@@ -203,11 +198,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   </TouchableOpacity>
                 )
               })}
-              {todayJobs.length > 3 && (
-                <TouchableOpacity style={styles.moreBtn} onPress={() => onNavigate('jobs')}>
-                  <Text style={styles.moreBtnText}>+{todayJobs.length - 3} more jobs</Text>
-                </TouchableOpacity>
-              )}
+
             </View>
 
             {/* Monthly earnings */}

@@ -6,7 +6,6 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { supabase } from './src/lib/supabase'
 import { LoginScreen } from './src/screens/LoginScreen'
 import { DashboardScreen } from './src/screens/DashboardScreen'
-import { TodayScreen } from './src/screens/TodayScreen'
 import { ScheduleScreen } from './src/screens/ScheduleScreen'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { ProfileScreen } from './src/screens/ProfileScreen'
@@ -14,6 +13,7 @@ import { JobDetailScreen } from './src/screens/JobDetailScreen'
 import { SOSScreen } from './src/screens/SOSScreen'
 import { ChatListScreen, ChatScreen } from './src/screens/ChatScreens'
 import { registerPushToken } from './src/lib/notifications'
+import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
 
 const GOLD = '#D4A843'
@@ -45,11 +45,52 @@ export default function App() {
   }, [])
 
   async function loadUser(authId: string) {
-    const { data } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
+    const { data } = await supabase.from('users').select('*').or(`auth_user_id.eq.\${authId},id.eq.\${authId}`).maybeSingle()
     setUser(data)
     setLoading(false)
     if (data) registerPushToken(data).catch(console.warn)
   }
+
+  // Real-time job change listener
+  useEffect(() => {
+    if (!user) return
+    const channel = supabase
+      .channel('job-changes')
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'jobs',
+        filter: `tenant_id=eq.\${user.tenant_id}`,
+      }, (payload: any) => {
+        const job = payload.new
+        const old = payload.old
+        // Notify crew if their job was rescheduled
+        if (job.scheduled_start !== old.scheduled_start) {
+          const newTime = new Date(job.scheduled_start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: '📅 Job rescheduled',
+              body: `Your job has been moved to \${newTime}`,
+              sound: true,
+            },
+            trigger: null,
+          }).catch(console.warn)
+        }
+        // Notify if job was assigned to this user
+        if (job.status === 'scheduled' && old.status !== 'scheduled') {
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: '✅ New job assigned',
+              body: `You have a new job scheduled`,
+              sound: true,
+            },
+            trigger: null,
+          }).catch(console.warn)
+        }
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [user])
 
   function handleNavigate(screen: string) {
     const tabMap: Record<string, string> = {
@@ -119,7 +160,7 @@ export default function App() {
         <Tab.Navigator
           screenOptions={{
             headerShown: false,
-            tabBarStyle: { backgroundColor: SLATE_DARK, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: 16, height: 80 },
+            tabBarStyle: { backgroundColor: SLATE_DARK, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: 20, paddingTop: 8, height: 88 },
             tabBarActiveTintColor: GOLD,
             tabBarInactiveTintColor: 'rgba(255,255,255,0.35)',
             tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: 2 },
@@ -135,12 +176,6 @@ export default function App() {
             }} onSOS={() => setShowSOS(true)} />}
           </Tab.Screen>
 
-          <Tab.Screen
-            name="Today"
-            options={{ tabBarLabel: "Today", tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>☀</Text> }}
-          >
-            {() => <TodayScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
-          </Tab.Screen>
 
           <Tab.Screen
             name="Schedule"

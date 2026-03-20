@@ -206,6 +206,26 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   async function completeJob() {
+    // Enforce at least 1 after photo
+    const { data: afterPhotos } = await supabase
+      .from('job_photos')
+      .select('id')
+      .eq('job_id', job.id)
+      .in('photo_type', ['after', 'general'])
+      .limit(1)
+    
+    if (!afterPhotos || afterPhotos.length === 0) {
+      Alert.alert(
+        '📸 Photo required',
+        'Please add at least one after photo before completing this job.',
+        [
+          { text: 'Add photo', onPress: () => { setActivePhotoItem(null); setShowPhotos(true) } },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      )
+      return
+    }
+
     setSaving(true)
     // Clock out active entry
     if (activeEntry) {
