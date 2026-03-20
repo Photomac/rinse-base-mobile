@@ -11,6 +11,10 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
   const [crew, setCrew] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'channels'|'dms'>('channels')
+  const [showNewGroup, setShowNewGroup] = useState(false)
+  const [groupName, setGroupName] = useState('')
+  const [selectedMembers, setSelectedMembers] = useState<string[]>([])
+  const [creatingGroup, setCreatingGroup] = useState(false)
 
   useEffect(() => { load() }, [])
 
@@ -29,6 +33,26 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
     setChannels(chanRes.data ?? [])
     setCrew(crewRes.data ?? [])
     setLoading(false)
+  }
+
+  async function createGroup() {
+    if (!groupName.trim() || selectedMembers.length < 2) return
+    setCreatingGroup(true)
+    const allMembers = [user.id, ...selectedMembers]
+    const { data } = await supabase.from('message_channels').insert({
+      tenant_id: user.tenant_id,
+      channel_type: 'group',
+      name: groupName.trim(),
+      participant_ids: allMembers,
+    }).select().single()
+    if (data) {
+      setShowNewGroup(false)
+      setGroupName('')
+      setSelectedMembers([])
+      onOpenChannel({ ...data, displayName: groupName.trim() })
+    }
+    setCreatingGroup(false)
+    load()
   }
 
   async function openDM(otherUser: any) {
@@ -51,10 +75,11 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
 
   const teamChannels = channels.filter(c => c.channel_type === 'team')
   const dmChannels = channels.filter(c =>
-    c.channel_type === 'dm' && c.participant_ids?.includes(user.id)
+    (c.channel_type === 'dm' || c.channel_type === 'group') && c.participant_ids?.includes(user.id)
   )
 
   function getDMName(channel: any) {
+    if (channel.channel_type === 'group') return channel.name || 'Group'
     const otherId = channel.participant_ids?.find((id: string) => id !== user.id)
     const other = crew.find(c => c.id === otherId)
     return other?.full_name || 'Unknown'
@@ -64,7 +89,54 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>💬 Messages</Text>
+        <TouchableOpacity onPress={() => setShowNewGroup(true)} style={styles.newGroupBtn}>
+          <Text style={styles.newGroupBtnText}>+ Group</Text>
+        </TouchableOpacity>
       </View>
+
+      {showNewGroup && (
+        <View style={styles.groupModal}>
+          <View style={styles.groupModalCard}>
+            <Text style={styles.groupModalTitle}>New group chat</Text>
+            <TextInput
+              style={styles.groupNameInput}
+              placeholder="Group name..."
+              placeholderTextColor="#94A3B8"
+              value={groupName}
+              onChangeText={setGroupName}
+            />
+            <Text style={styles.groupMemberLabel}>Select members (min 2)</Text>
+            <ScrollView style={{ maxHeight: 200 }}>
+              {crew.map(c => {
+                const selected = selectedMembers.includes(c.id)
+                return (
+                  <TouchableOpacity key={c.id}
+                    style={[styles.memberRow, selected && styles.memberRowSelected]}
+                    onPress={() => setSelectedMembers(prev =>
+                      selected ? prev.filter(id => id !== c.id) : [...prev, c.id]
+                    )}>
+                    <View style={[styles.memberCheck, selected && styles.memberCheckSelected]}>
+                      {selected && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>✓</Text>}
+                    </View>
+                    <Text style={styles.memberName}>{c.full_name}</Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </ScrollView>
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+              <TouchableOpacity style={styles.groupCancelBtn} onPress={() => { setShowNewGroup(false); setGroupName(''); setSelectedMembers([]) }}>
+                <Text style={styles.groupCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.groupCreateBtn, (creatingGroup || !groupName.trim() || selectedMembers.length < 2) && { opacity: 0.5 }]}
+                onPress={createGroup}
+                disabled={creatingGroup || !groupName.trim() || selectedMembers.length < 2}>
+                <Text style={styles.groupCreateText}>{creatingGroup ? 'Creating...' : 'Create group'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
 
       <View style={styles.tabRow}>
         {(['channels', 'dms'] as const).map(t => (
@@ -298,6 +370,22 @@ const styles = StyleSheet.create({
   tabBtnText: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600' },
   tabBtnTextActive: { color: '#fff' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  newGroupBtn: { backgroundColor: GOLD, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  newGroupBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  groupModal: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 100, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  groupModalCard: { backgroundColor: '#fff', borderRadius: 16, padding: 20, width: '100%' },
+  groupModalTitle: { fontSize: 16, fontWeight: '800', color: '#0F172A', marginBottom: 12 },
+  groupNameInput: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, padding: 12, fontSize: 14, color: '#0F172A', marginBottom: 12 },
+  groupMemberLabel: { fontSize: 11, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 },
+  memberRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 10, marginBottom: 4 },
+  memberRowSelected: { backgroundColor: GOLD + '15' },
+  memberCheck: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#E2E8F0', alignItems: 'center', justifyContent: 'center' },
+  memberCheckSelected: { backgroundColor: GOLD, borderColor: GOLD },
+  memberName: { fontSize: 14, fontWeight: '600', color: '#0F172A' },
+  groupCancelBtn: { flex: 1, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#E2E8F0', alignItems: 'center' },
+  groupCancelText: { fontSize: 13, fontWeight: '600', color: '#64748B' },
+  groupCreateBtn: { flex: 2, padding: 12, borderRadius: 10, backgroundColor: GOLD, alignItems: 'center' },
+  groupCreateText: { fontSize: 13, fontWeight: '700', color: '#fff' },
   channelRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
   channelIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: SLATE_DARK, alignItems: 'center', justifyContent: 'center' },
   channelIconText: { color: GOLD, fontSize: 18, fontWeight: '700' },
