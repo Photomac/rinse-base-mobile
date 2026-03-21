@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native'
-import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { NavigationContainer } from '@react-navigation/native'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { supabase } from './src/lib/supabase'
@@ -157,6 +157,8 @@ export default function App() {
     )
   }
 
+  const insets = useSafeAreaInsets()
+
   return (
     <LangProvider>
     <SafeAreaProvider>
@@ -164,7 +166,7 @@ export default function App() {
         <Tab.Navigator
           screenOptions={{
             headerShown: false,
-            tabBarStyle: { backgroundColor: SLATE_DARK, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: 20, paddingTop: 8, height: 88 },
+            tabBarStyle: { backgroundColor: SLATE_DARK, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: insets.bottom + 8, paddingTop: 10, height: 60 + insets.bottom },
             tabBarActiveTintColor: GOLD,
             tabBarInactiveTintColor: 'rgba(255,255,255,0.35)',
             tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: 2 },
