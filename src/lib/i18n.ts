@@ -11,7 +11,7 @@ export const translations = {
     sign_in: 'Sign in', email: 'Email', password: 'Password',
     email_placeholder: 'you@email.com', password_placeholder: 'Your password',
     login_failed: 'Login failed', contact_manager: 'Contact your manager if you need help logging in',
-    tagline: 'Professional cleaning management',
+    tagline: 'STR Cleaning Software',
     // Dashboard
     good_morning: 'Good morning', good_afternoon: 'Good afternoon', good_evening: 'Good evening',
     today: 'Today', done_label: 'Done', remaining: 'Remaining', this_month: 'This month',

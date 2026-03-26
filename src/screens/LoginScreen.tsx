@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, StatusBar } from 'react-native'
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, StatusBar, Image } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
@@ -20,9 +20,9 @@ export function LoginScreen() {
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <StatusBar barStyle="light-content" />
       <View style={styles.logoSection}>
-        <View style={styles.logoMark}><Text style={styles.logoText}>RB</Text></View>
+        <Image source={require('../../assets/icon.png')} style={styles.logoMark} />
         <Text style={styles.appName}>Rinsebase</Text>
-        <Text style={styles.tagline}>Professional cleaning management</Text>
+        <Text style={styles.tagline}>STR Cleaning Software</Text>
       </View>
       <View style={styles.form}>
         <Text style={styles.label}>Email</Text>
@@ -41,8 +41,8 @@ export function LoginScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: SLATE_DARK, paddingHorizontal: 24, justifyContent: 'center' },
   logoSection: { alignItems: 'center', marginBottom: 48 },
-  logoMark: { width: 72, height: 72, borderRadius: 20, backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center', marginBottom: 16, shadowColor: GOLD, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.5, shadowRadius: 20 },
-  logoText: { color: '#fff', fontSize: 28, fontWeight: '800' },
+  logoMark: { width: 88, height: 88, borderRadius: 22, marginBottom: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.4, shadowRadius: 20 },
+
   appName: { color: '#fff', fontSize: 28, fontWeight: '800', marginBottom: 6 },
   tagline: { color: 'rgba(255,255,255,0.4)', fontSize: 13 },
   form: { backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 20, padding: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },

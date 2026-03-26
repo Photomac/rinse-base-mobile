@@ -132,7 +132,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
         job_id: job.id,
         user_id: user.id,
         photo_url: urlData.publicUrl,
-        photo_type: selectedType,
+        photo_type: 'damage' ? 'issue' : selectedType,
         caption: caption.trim() || null,
         visible_to_client: visibleToClient,
       })
@@ -141,7 +141,27 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
 
       setCaption('')
       loadPhotos()
-      Alert.alert('✅ Uploaded', 'Photo saved successfully!')
+      
+      if (selectedType === 'damage') {
+        Alert.alert(
+          '⚠️ Damage photo saved',
+          'Would you like to flag this for a damage report to be sent to the property owner?',
+          [
+            { text: 'Not now', style: 'cancel' },
+            {
+              text: 'Flag for report',
+              onPress: async () => {
+                await supabase.from('job_photos').update({ 
+                  flagged_for_report: true 
+                }).eq('job_id', job.id).eq('photo_type', 'issue').is('flagged_for_report', null)
+                Alert.alert('✓ Flagged', 'Damage report will be sent to the property owner.')
+              }
+            }
+          ]
+        )
+      } else {
+        Alert.alert('✅ Uploaded', 'Photo saved successfully!')
+      }
     } catch (e: any) {
       Alert.alert('Upload failed', e.message || 'Could not upload photo')
     }
@@ -162,7 +182,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
 
   const beforePhotos  = photos.filter(p => p.photo_type === 'before')
   const afterPhotos   = photos.filter(p => p.photo_type === 'after')
-  const damagePhotos  = photos.filter(p => p.photo_type === 'damage')
+  const damagePhotos  = photos.filter(p => p.photo_type === (p => p.photo_type === 'issue' || p.photo_type === 'damage')
   const generalPhotos = photos.filter(p => p.photo_type === 'general')
 
   return (
