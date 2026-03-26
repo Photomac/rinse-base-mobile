@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Rinsebase",
-    "slug": "rinse-base-mobile",
+    "name": "Rinsebase Crew",
+    "slug": "rinsebase-crew",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
