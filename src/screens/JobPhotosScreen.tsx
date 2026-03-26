@@ -163,7 +163,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
 
   const beforePhotos  = photos.filter(p => p.photo_type === 'before')
   const afterPhotos   = photos.filter(p => p.photo_type === 'after')
-  const damagePhotos  = photos.filter(p => p.photo_type === (p => p.photo_type === 'issue' || p.photo_type === 'damage')
+  const damagePhotos  = photos.filter(p => p.photo_type === 'issue' || p.photo_type === 'damage')
   const generalPhotos = photos.filter(p => p.photo_type === 'general')
 
   return (
