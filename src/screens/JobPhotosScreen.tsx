@@ -46,25 +46,6 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
     setLoading(false)
   }
 
-  async function pickAndUpload() {
-    // Request permissions
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please allow access to your photos to upload images.')
-      return
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-      allowsMultipleSelection: false,
-    })
-
-    if (result.canceled) return
-
-    const asset = result.assets[0]
-    await uploadPhoto(asset.uri)
-  }
 
   async function takePhoto() {
     const { status } = await ImagePicker.requestCameraPermissionsAsync()
@@ -235,9 +216,6 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
         <View style={styles.uploadRow}>
           <TouchableOpacity style={styles.cameraBtn} onPress={takePhoto} disabled={uploading}>
             <Text style={styles.cameraBtnText}>📷 Take Photo</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.galleryBtn} onPress={pickAndUpload} disabled={uploading}>
-            <Text style={styles.galleryBtnText}>🖼 From Gallery</Text>
           </TouchableOpacity>
         </View>
 

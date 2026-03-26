@@ -46,6 +46,27 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
 
   useEffect(() => { load() }, [load])
 
+  async function checkPhotosAndComplete(job: any) {
+    const { data: photos } = await supabase
+      .from('job_photos')
+      .select('id, photo_type')
+      .eq('job_id', job.id)
+      .in('photo_type', ['after', 'completed'])
+    
+    if (!photos || photos.length === 0) {
+      Alert.alert(
+        '📷 Photo Required',
+        'Please take at least one after photo before marking this job complete.',
+        [{ text: 'OK', style: 'default' }]
+      )
+      return
+    }
+    Alert.alert('Complete?', t('complete_confirm'), [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Complete', onPress: () => updateStatus(job, 'completed') }
+    ])
+  }
+
   async function updateStatus(job: any, newStatus: string) {
     setUpdatingId(job.id)
     await supabase.from('jobs').update({ status: newStatus }).eq('id', job.id)
@@ -127,7 +148,7 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
                       </TouchableOpacity>
                     )}
                     {job.status === 'in_progress' && (
-                      <TouchableOpacity style={[styles.actionBtnGreen, isUpdating && { opacity: 0.6 }]} onPress={() => Alert.alert('Complete?', t('complete_confirm'), [{ text: 'Cancel', style: 'cancel' }, { text: 'Complete', onPress: () => updateStatus(job, 'completed') }])} disabled={isUpdating}>
+                      <TouchableOpacity style={[styles.actionBtnGreen, isUpdating && { opacity: 0.6 }]} onPress={() => checkPhotosAndComplete(job)} disabled={isUpdating}>
                         <Text style={styles.actionBtnPrimaryText}>{t('complete')}</Text>
                       </TouchableOpacity>
                     )}
