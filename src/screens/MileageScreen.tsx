@@ -117,7 +117,7 @@ export function MileageScreen({ user }: { user: any }) {
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Save trip',
+          text: t('submit_approval'),
           onPress: async () => {
             setSaving(true)
             await supabase.from('mileage_logs').insert({
@@ -236,9 +236,9 @@ export function MileageScreen({ user }: { user: any }) {
             <Text style={styles.fieldLabel}>Date</Text>
             <TextInput style={styles.input} value={form.date} onChangeText={v => f('date', v)} placeholderTextColor="#94A3B8" />
             <Text style={styles.fieldLabel}>From *</Text>
-            <TextInput style={styles.input} value={form.from} onChangeText={v => f('from', v)} placeholder="Starting location" placeholderTextColor="#94A3B8" />
+            <TextInput style={styles.input} value={form.from} onChangeText={v => f('from', v)} placeholder={t('from_label')} placeholderTextColor="#94A3B8" />
             <Text style={styles.fieldLabel}>To *</Text>
-            <TextInput style={styles.input} value={form.to} onChangeText={v => f('to', v)} placeholder="Destination" placeholderTextColor="#94A3B8" />
+            <TextInput style={styles.input} value={form.to} onChangeText={v => f('to', v)} placeholder={t('to_label')} placeholderTextColor="#94A3B8" />
             <Text style={styles.fieldLabel}>Miles *</Text>
             <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder="0.0" keyboardType="decimal-pad" placeholderTextColor="#94A3B8" />
             {form.miles && parseFloat(form.miles) > 0 && (

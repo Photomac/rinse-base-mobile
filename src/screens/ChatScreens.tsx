@@ -79,7 +79,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
   )
 
   function getDMName(channel: any) {
-    if (channel.channel_type === 'group') return channel.name || 'Group'
+    if (channel.channel_type === 'group') return channel.name || 'Grupo'
     const otherId = channel.participant_ids?.find((id: string) => id !== user.id)
     const other = crew.find(c => c.id === otherId)
     return other?.full_name || 'Unknown'
@@ -131,7 +131,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
                 style={[styles.groupCreateBtn, (creatingGroup || !groupName.trim() || selectedMembers.length < 2) && { opacity: 0.5 }]}
                 onPress={createGroup}
                 disabled={creatingGroup || !groupName.trim() || selectedMembers.length < 2}>
-                <Text style={styles.groupCreateText}>{creatingGroup ? 'Creating...' : 'Create group'}</Text>
+                <Text style={styles.groupCreateText}>{creatingGroup ? 'Creando...' : 'Crear grupo'}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -281,7 +281,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{channel.channel_type === 'team' ? '# ' : ''}{channel.displayName || channel.name}</Text>
-          <Text style={styles.headerSub}>{channel.channel_type === 'team' ? 'Team channel' : 'Direct message'}</Text>
+          <Text style={styles.headerSub}>{channel.channel_type === 'team' ? 'Canal del equipo' : 'Mensaje directo'}</Text>
         </View>
       </View>
 
