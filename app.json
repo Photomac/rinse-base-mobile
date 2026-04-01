@@ -15,7 +15,11 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.rinsebase.app",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Rinsebase uses your camera to take before and after photos of cleaning jobs.",
+        "NSPhotoLibraryUsageDescription": "Rinsebase accesses your photo library to upload cleaning job photos.",
+        "NSPhotoLibraryAddUsageDescription": "Rinsebase saves cleaning job photos to your photo library.",
+        "NSMicrophoneUsageDescription": "Rinsebase uses the microphone for SOS emergency audio alerts."
       }
     },
     "android": {
@@ -31,7 +35,10 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION"
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE"
       ]
     },
     "web": {
