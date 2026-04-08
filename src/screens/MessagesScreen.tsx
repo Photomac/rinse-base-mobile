@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native'
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
@@ -39,12 +39,14 @@ export function MessagesScreen({ job, user, onBack }: Props) {
   }, [])
 
   async function loadMessages() {
-    const { data } = await supabase
-      .from('job_messages')
-      .select('*')
-      .eq('job_id', job.id)
-      .order('created_at')
-    setMessages(data ?? [])
+    try {
+      const { data } = await supabase
+        .from('job_messages')
+        .select('*')
+        .eq('job_id', job.id)
+        .order('created_at')
+      setMessages(data ?? [])
+    } catch (err) { console.warn('Failed to load messages:', err) }
     setLoading(false)
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100)
   }
@@ -52,13 +54,15 @@ export function MessagesScreen({ job, user, onBack }: Props) {
   async function send() {
     if (!text.trim()) return
     setSending(true)
-    await supabase.from('job_messages').insert({
+    const msg = text.trim()
+    const { error } = await supabase.from('job_messages').insert({
       tenant_id: user.tenant_id,
       job_id: job.id,
       sender_type: 'crew',
       sender_name: senderName,
-      message: text.trim(),
+      message: msg,
     })
+    if (error) { Alert.alert('Error', 'Message failed to send. Try again.'); setSending(false); return }
     setText('')
     await loadMessages()
     setSending(false)

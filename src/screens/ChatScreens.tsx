@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Image } from 'react-native'
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
@@ -7,6 +7,7 @@ import { SLATE_DARK, GOLD, ROLE_COLORS } from '../lib/theme'
 
 // ── Channel List Screen ───────────────────────────────────────────
 export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; onOpenChannel: (channel: any) => void; onNewDM: () => void }) {
+  const { t, lang } = useLang()
   const [channels, setChannels] = useState<any[]>([])
   const [crew, setCrew] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -20,18 +21,20 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
 
   async function load() {
     setLoading(true)
-    const [chanRes, crewRes] = await Promise.all([
-      supabase.from('message_channels').select('*')
-        .eq('tenant_id', user.tenant_id)
-        .order('last_message_at', { ascending: false, nullsFirst: false }),
-      supabase.from('users').select('id, full_name, role, avatar_url')
-        .eq('tenant_id', user.tenant_id)
-        .eq('is_active', true)
-        .neq('id', user.id)
-        .order('full_name'),
-    ])
-    setChannels(chanRes.data ?? [])
-    setCrew(crewRes.data ?? [])
+    try {
+      const [chanRes, crewRes] = await Promise.all([
+        supabase.from('message_channels').select('*')
+          .eq('tenant_id', user.tenant_id)
+          .order('last_message_at', { ascending: false, nullsFirst: false }),
+        supabase.from('users').select('id, full_name, role, avatar_url')
+          .eq('tenant_id', user.tenant_id)
+          .eq('is_active', true)
+          .neq('id', user.id)
+          .order('full_name'),
+      ])
+      setChannels(chanRes.data ?? [])
+      setCrew(crewRes.data ?? [])
+    } catch (err) { console.warn('Chat load failed:', err) }
     setLoading(false)
   }
 
@@ -39,12 +42,13 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
     if (!groupName.trim() || selectedMembers.length < 2) return
     setCreatingGroup(true)
     const allMembers = [user.id, ...selectedMembers]
-    const { data } = await supabase.from('message_channels').insert({
+    const { data, error } = await supabase.from('message_channels').insert({
       tenant_id: user.tenant_id,
       channel_type: 'group',
       name: groupName.trim(),
       participant_ids: allMembers,
     }).select().single()
+    if (error) { Alert.alert('Error', 'Failed to create group. Try again.'); setCreatingGroup(false); return }
     if (data) {
       setShowNewGroup(false)
       setGroupName('')
@@ -63,12 +67,13 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
     )
     if (existing) { onOpenChannel({ ...existing, displayName: otherUser.full_name }); return }
 
-    const { data } = await supabase.from('message_channels').insert({
+    const { data, error } = await supabase.from('message_channels').insert({
       tenant_id: user.tenant_id,
       channel_type: 'dm',
       name: null,
       participant_ids: [user.id, otherUser.id],
     }).select().single()
+    if (error) { Alert.alert('Error', 'Failed to start conversation.'); return }
     if (data) onOpenChannel({ ...data, displayName: otherUser.full_name })
     load()
   }
@@ -79,33 +84,33 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
   )
 
   function getDMName(channel: any) {
-    if (channel.channel_type === 'group') return channel.name || 'Grupo'
+    if (channel.channel_type === 'group') return channel.name || t('group')
     const otherId = channel.participant_ids?.find((id: string) => id !== user.id)
     const other = crew.find(c => c.id === otherId)
-    return other?.full_name || 'Unknown'
+    return other?.full_name || t('unknown')
   }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>💬 Messages</Text>
+        <Text style={styles.headerTitle}>💬 {t('direct_message')}</Text>
         <TouchableOpacity onPress={() => setShowNewGroup(true)} style={styles.newGroupBtn}>
-          <Text style={styles.newGroupBtnText}>+ Group</Text>
+          <Text style={styles.newGroupBtnText}>+ {t('group')}</Text>
         </TouchableOpacity>
       </View>
 
       {showNewGroup && (
         <View style={styles.groupModal}>
           <View style={styles.groupModalCard}>
-            <Text style={styles.groupModalTitle}>New group chat</Text>
+            <Text style={styles.groupModalTitle}>{t('new_group_chat')}</Text>
             <TextInput
               style={styles.groupNameInput}
-              placeholder="Group name..."
+              placeholder={t('group_name_placeholder')}
               placeholderTextColor="#94A3B8"
               value={groupName}
               onChangeText={setGroupName}
             />
-            <Text style={styles.groupMemberLabel}>Select members (min 2)</Text>
+            <Text style={styles.groupMemberLabel}>{t('select_members')}</Text>
             <ScrollView style={{ maxHeight: 200 }}>
               {crew.map(c => {
                 const selected = selectedMembers.includes(c.id)
@@ -125,13 +130,13 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
             </ScrollView>
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
               <TouchableOpacity style={styles.groupCancelBtn} onPress={() => { setShowNewGroup(false); setGroupName(''); setSelectedMembers([]) }}>
-                <Text style={styles.groupCancelText}>Cancel</Text>
+                <Text style={styles.groupCancelText}>{t('cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.groupCreateBtn, (creatingGroup || !groupName.trim() || selectedMembers.length < 2) && { opacity: 0.5 }]}
                 onPress={createGroup}
                 disabled={creatingGroup || !groupName.trim() || selectedMembers.length < 2}>
-                <Text style={styles.groupCreateText}>{creatingGroup ? 'Creando...' : 'Crear grupo'}</Text>
+                <Text style={styles.groupCreateText}>{creatingGroup ? t('creating') : t('create_group')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -139,10 +144,10 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
       )}
 
       <View style={styles.tabRow}>
-        {(['channels', 'dms'] as const).map(t => (
-          <TouchableOpacity key={t} style={[styles.tabBtn, tab === t && styles.tabBtnActive]} onPress={() => setTab(t)}>
-            <Text style={[styles.tabBtnText, tab === t && styles.tabBtnTextActive]}>
-              {t === 'channels' ? '# Channels' : '💬 Direct messages'}
+        {(['channels', 'dms'] as const).map(tabKey => (
+          <TouchableOpacity key={tabKey} style={[styles.tabBtn, tab === tabKey && styles.tabBtnActive]} onPress={() => setTab(tabKey)}>
+            <Text style={[styles.tabBtnText, tab === tabKey && styles.tabBtnTextActive]}>
+              {tabKey === 'channels' ? '# ' + t('team_channel') : '💬 ' + t('direct_message')}
             </Text>
           </TouchableOpacity>
         ))}
@@ -167,7 +172,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
               <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
             </TouchableOpacity>
           )}
-          ListEmptyComponent={<Text style={styles.emptyText}>No channels yet</Text>}
+          ListEmptyComponent={<Text style={styles.emptyText}>{t('no_channels')}</Text>}
         />
       ) : (
         <FlatList
@@ -195,7 +200,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
               </TouchableOpacity>
             )
           }}
-          ListEmptyComponent={<Text style={styles.emptyText}>No other crew members</Text>}
+          ListEmptyComponent={<Text style={styles.emptyText}>{t('no_crew')}</Text>}
         />
       )}
     </SafeAreaView>
@@ -204,6 +209,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
 
 // ── Chat Screen ───────────────────────────────────────────────────
 export function ChatScreen({ channel, user, onBack }: { channel: any; user: any; onBack: () => void }) {
+  const { t, lang } = useLang()
   const [messages, setMessages] = useState<any[]>([])
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -225,7 +231,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
     const msgs = (data ?? []).map((m: any) => ({
       ...m,
       avatar_url: m.avatar_url || m.users?.avatar_url || null,
-      sender_name: m.sender_name || m.users?.full_name || 'Unknown',
+      sender_name: m.sender_name || m.users?.full_name || t('unknown'),
     }))
     setMessages(msgs)
     setLoading(false)
@@ -237,21 +243,24 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
     setSending(true)
     const msg = text.trim()
     setText('')
-    const { data: freshUser } = await supabase.from('users').select('avatar_url').eq('id', user.id).maybeSingle()
-    await supabase.from('chat_messages').insert({
-      tenant_id: user.tenant_id,
-      channel_id: channel.id,
-      sender_id: user.id,
-      sender_name: user.full_name,
-      sender_role: user.role,
-      avatar_url: freshUser?.avatar_url || user.avatar_url || null,
-      body: msg,
-    })
-    await supabase.from('message_channels').update({
-      last_message: msg,
-      last_message_at: new Date().toISOString(),
-    }).eq('id', channel.id)
-    await loadMessages()
+    try {
+      const { data: freshUser } = await supabase.from('users').select('avatar_url').eq('id', user.id).maybeSingle()
+      const { error } = await supabase.from('chat_messages').insert({
+        tenant_id: user.tenant_id,
+        channel_id: channel.id,
+        sender_id: user.id,
+        sender_name: user.full_name,
+        sender_role: user.role,
+        avatar_url: freshUser?.avatar_url || user.avatar_url || null,
+        body: msg,
+      })
+      if (error) { setText(msg); Alert.alert('Error', 'Message failed to send. Try again.'); setSending(false); return }
+      await supabase.from('message_channels').update({
+        last_message: msg,
+        last_message_at: new Date().toISOString(),
+      }).eq('id', channel.id)
+      await loadMessages()
+    } catch (err) { setText(msg); Alert.alert('Error', 'Message failed to send.') }
     setSending(false)
   }
 
@@ -259,9 +268,9 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
   function fmtDate(iso: string) {
     const d = new Date(iso)
     const today = new Date()
-    if (d.toDateString() === today.toDateString()) return 'Today'
+    if (d.toDateString() === today.toDateString()) return t('today')
     const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1)
-    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+    if (d.toDateString() === yesterday.toDateString()) return t('yesterday')
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
@@ -281,7 +290,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>{channel.channel_type === 'team' ? '# ' : ''}{channel.displayName || channel.name}</Text>
-          <Text style={styles.headerSub}>{channel.channel_type === 'team' ? 'Canal del equipo' : 'Mensaje directo'}</Text>
+          <Text style={styles.headerSub}>{channel.channel_type === 'team' ? t('team_channel') : t('direct_message')}</Text>
         </View>
       </View>
 
@@ -327,8 +336,8 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
             ListEmptyComponent={
               <View style={styles.emptyState}>
                 <Text style={styles.emptyIcon}>💬</Text>
-                <Text style={styles.emptyTitle}>No messages yet</Text>
-                <Text style={styles.emptyText}>Start the conversation!</Text>
+                <Text style={styles.emptyTitle}>{t('no_messages')}</Text>
+                <Text style={styles.emptyText}>{t('start_conversation')}</Text>
               </View>
             }
           />
@@ -339,7 +348,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
             style={styles.input}
             value={text}
             onChangeText={setText}
-            placeholder="Message..."
+            placeholder={t('message_placeholder')}
             placeholderTextColor="#94A3B8"
             multiline
             maxLength={500}
@@ -392,7 +401,6 @@ const styles = StyleSheet.create({
   channelName: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
   channelRole: { fontSize: 11, color: '#94A3B8', textTransform: 'capitalize' },
   channelPreview: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
-  // ── Avatar styles (fixed: avatarPhoto was missing before) ──
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   avatarPhoto: { width: 40, height: 40, borderRadius: 20, flexShrink: 0 },
   avatarText: { color: '#fff', fontSize: 15, fontWeight: '700' },

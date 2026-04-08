@@ -4,10 +4,12 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
-const RATE = 0.67
-const PURPOSES_EN = ['Job travel', 'Supply run', 'Equipment pickup', 'Client meeting', 'Training', 'Other']
+const IRS_RATE = 0.70 // 2025 IRS standard mileage rate fallback
+const PURPOSES_KEYS = ['job_travel', 'supply_run_miles', 'equipment_pickup', 'client_meeting', 'training', 'other'] as const
+type PurposeKey = typeof PURPOSES_KEYS[number]
 
 function fmtDate(iso: string) { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }
 function fmt$(n: number) { return '$' + n.toFixed(2) }
@@ -27,30 +29,39 @@ function haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
 }
 
 export function MileageScreen({ user }: { user: any }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [trips, setTrips] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'Job travel', notes: '' })
+  const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'job_travel' as PurposeKey, notes: '' })
 
   // GPS tracking state
   const [tracking, setTracking] = useState(false)
   const [trackingStart, setTrackingStart] = useState<Date | null>(null)
   const [trackingMiles, setTrackingMiles] = useState(0)
-  const [trackingPurpose, setTrackingPurpose] = useState('Job travel')
+  const [trackingPurpose, setTrackingPurpose] = useState<PurposeKey>('job_travel')
   const [elapsed, setElapsed] = useState(0)
   const locationSub = useRef<any>(null)
   const lastCoord = useRef<{ lat: number; lng: number } | null>(null)
   const timerRef = useRef<any>(null)
   const milesRef = useRef(0)
+  const [mileageRate, setMileageRate] = useState(IRS_RATE)
 
   async function load() {
-    const { data } = await supabase.from('mileage_logs').select('*')
-      .eq('tenant_id', user.tenant_id).eq('user_id', user.id)
-      .order('started_at', { ascending: false }).limit(50)
-    setTrips(data ?? [])
+    try {
+      const [tripsRes, tenantRes] = await Promise.all([
+        supabase.from('mileage_logs').select('*')
+          .eq('tenant_id', user.tenant_id).eq('user_id', user.id)
+          .order('started_at', { ascending: false }).limit(50),
+        supabase.from('tenants').select('mileage_rate').eq('id', user.tenant_id).single()
+      ])
+      setTrips(tripsRes.data ?? [])
+      if (tenantRes.data?.mileage_rate != null) setMileageRate(tenantRes.data.mileage_rate)
+    } catch (err) {
+      console.warn('Failed to load mileage data:', err)
+    }
     setLoading(false)
     setRefreshing(false)
   }
@@ -72,7 +83,7 @@ export function MileageScreen({ user }: { user: any }) {
   async function startTracking() {
     const { status } = await Location.requestForegroundPermissionsAsync()
     if (status !== 'granted') {
-      Alert.alert('Location needed', 'Enable location permissions to auto-track mileage.')
+      Alert.alert(t('location_needed'), t('location_permission_msg'))
       return
     }
     milesRef.current = 0
@@ -106,29 +117,30 @@ export function MileageScreen({ user }: { user: any }) {
     const miles = Math.round(milesRef.current * 100) / 100
 
     if (miles < 0.1) {
-      Alert.alert('Trip too short', 'Less than 0.1 miles recorded. Trip not saved.')
+      Alert.alert(t('trip_too_short'), t('trip_too_short_msg'))
       setTrackingMiles(0)
       return
     }
 
     Alert.alert(
-      `Save trip — ${miles} miles`,
-      `Estimated reimbursement: ${fmt$(miles * RATE)}`,
+      ti(t('save_trip_title'), { miles: String(miles) }),
+      ti(t('estimated_reimbursement'), { amt: fmt$(miles * mileageRate) }),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('cancel'), style: 'cancel' },
         {
           text: t('submit_approval'),
           onPress: async () => {
             setSaving(true)
-            await supabase.from('mileage_logs').insert({
+            const { error } = await supabase.from('mileage_logs').insert({
               tenant_id: user.tenant_id, user_id: user.id,
               started_at: trackingStart?.toISOString() || new Date().toISOString(),
               origin_label: 'GPS tracked', dest_label: 'GPS tracked',
               distance_miles: miles,
-              reimbursement_amt: Math.round(miles * RATE * 100) / 100,
-              purpose: trackingPurpose, notes: `Auto-tracked via GPS`, flagged: false,
+              reimbursement_amt: Math.round(miles * mileageRate * 100) / 100,
+              purpose: trackingPurpose, notes: t('auto_tracked_gps'), flagged: false,
             })
             setSaving(false)
+            if (error) { Alert.alert(t('error'), 'Failed to save trip. Please try again.'); return }
             setTrackingMiles(0)
             load()
           }
@@ -138,21 +150,22 @@ export function MileageScreen({ user }: { user: any }) {
   }
 
   async function handleSubmit() {
-    if (!form.from || !form.to) { Alert.alert('Error', 'Enter origin and destination'); return }
+    if (!form.from || !form.to) { Alert.alert(t('error'), t('enter_origin_dest')); return }
     const miles = parseFloat(form.miles)
-    if (!miles || miles <= 0) { Alert.alert('Error', 'Enter valid miles'); return }
+    if (!miles || miles <= 0) { Alert.alert(t('error'), t('enter_valid_miles')); return }
     setSaving(true)
-    await supabase.from('mileage_logs').insert({
+    const { error } = await supabase.from('mileage_logs').insert({
       tenant_id: user.tenant_id, user_id: user.id,
       started_at: new Date(form.date + 'T08:00:00').toISOString(),
       origin_label: form.from.trim(), dest_label: form.to.trim(),
-      distance_miles: miles, reimbursement_amt: Math.round(miles * RATE * 100) / 100,
+      distance_miles: miles, reimbursement_amt: Math.round(miles * mileageRate * 100) / 100,
       purpose: form.purpose, notes: form.notes.trim() || null, flagged: false,
     })
-    setForm({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'Job travel', notes: '' })
+    setSaving(false)
+    if (error) { Alert.alert(t('error'), 'Failed to save mileage. Please try again.'); return }
+    setForm({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'job_travel', notes: '' })
     setShowForm(false)
     load()
-    setSaving(false)
   }
 
   const totalMiles = trips.reduce((s, t) => s + Number(t.distance_miles || 0), 0)
@@ -163,9 +176,9 @@ export function MileageScreen({ user }: { user: any }) {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>↗ Mileage</Text>
+        <Text style={styles.headerTitle}>↗ {t('my_mileage')}</Text>
         <TouchableOpacity style={styles.addBtn} onPress={() => setShowForm(v => !v)}>
-          <Text style={styles.addBtnText}>{showForm ? '✕' : '+ Manual'}</Text>
+          <Text style={styles.addBtnText}>{showForm ? '✕' : '+ ' + t('log_trip')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -175,18 +188,16 @@ export function MileageScreen({ user }: { user: any }) {
       >
         {/* KPIs */}
         <View style={styles.kpiRow}>
-          <View style={styles.kpi}><Text style={styles.kpiValue}>{totalMiles.toFixed(1)}</Text><Text style={styles.kpiLabel}>Total miles</Text></View>
-          <View style={[styles.kpi, styles.kpiMiddle]}><Text style={[styles.kpiValue, { color: '#F59E0B' }]}>{fmt$(pendingAmt)}</Text><Text style={styles.kpiLabel}>Pending</Text></View>
-          <View style={styles.kpi}><Text style={[styles.kpiValue, { color: '#10B981' }]}>{fmt$(approvedAmt)}</Text><Text style={styles.kpiLabel}>Approved</Text></View>
+          <View style={styles.kpi}><Text style={styles.kpiValue}>{totalMiles.toFixed(1)}</Text><Text style={styles.kpiLabel}>{t('total_miles')}</Text></View>
+          <View style={[styles.kpi, styles.kpiMiddle]}><Text style={[styles.kpiValue, { color: '#F59E0B' }]}>{fmt$(pendingAmt)}</Text><Text style={styles.kpiLabel}>{t('pending')}</Text></View>
+          <View style={styles.kpi}><Text style={[styles.kpiValue, { color: '#10B981' }]}>{fmt$(approvedAmt)}</Text><Text style={styles.kpiLabel}>{t('approved')}</Text></View>
         </View>
 
         {/* GPS Tracker */}
         <View style={[styles.gpsCard, tracking && styles.gpsCardActive]}>
           <View style={styles.gpsHeader}>
-            <Text style={styles.gpsTitle}>{tracking ? '📍 Tracking...' : '🚗 Auto-track trip'}</Text>
-            {tracking && (
-              <View style={styles.gpsPulse} />
-            )}
+            <Text style={styles.gpsTitle}>{tracking ? '📍 ' + t('loading').replace('...', '...') : '🚗 ' + t('log_trip')}</Text>
+            {tracking && <View style={styles.gpsPulse} />}
           </View>
 
           {tracking ? (
@@ -194,7 +205,7 @@ export function MileageScreen({ user }: { user: any }) {
               <View style={styles.gpsStats}>
                 <View style={styles.gpsStat}>
                   <Text style={styles.gpsStatValue}>{trackingMiles.toFixed(2)}</Text>
-                  <Text style={styles.gpsStatLabel}>Miles</Text>
+                  <Text style={styles.gpsStatLabel}>{t('miles')}</Text>
                 </View>
                 <View style={styles.gpsStatDivider} />
                 <View style={styles.gpsStat}>
@@ -204,26 +215,25 @@ export function MileageScreen({ user }: { user: any }) {
                 <View style={styles.gpsStatDivider} />
                 <View style={styles.gpsStat}>
                   <Text style={[styles.gpsStatValue, { color: '#10B981' }]}>{fmt$(trackingMiles * RATE)}</Text>
-                  <Text style={styles.gpsStatLabel}>Est. reimb.</Text>
+                  <Text style={styles.gpsStatLabel}>{t('estimated')}</Text>
                 </View>
               </View>
               <TouchableOpacity style={styles.stopBtn} onPress={stopTracking}>
-                <Text style={styles.stopBtnText}>⏹ Stop & save</Text>
+                <Text style={styles.stopBtnText}>{t('stop_and_save')}</Text>
               </TouchableOpacity>
             </>
           ) : (
             <>
-              <Text style={styles.gpsSubtitle}>GPS automatically measures distance. Start when you leave, stop when you arrive.</Text>
-              {/* Purpose selector */}
+              <Text style={styles.gpsSubtitle}>{t('gps_subtitle')}</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 10 }}>
-                {PURPOSES_EN.map(p => (
-                  <TouchableOpacity key={p} style={[styles.chip, trackingPurpose === p && styles.chipActive]} onPress={() => setTrackingPurpose(p)}>
-                    <Text style={[styles.chipText, trackingPurpose === p && styles.chipTextActive]}>{p}</Text>
+                {PURPOSES_KEYS.map(key => (
+                  <TouchableOpacity key={key} style={[styles.chip, trackingPurpose === key && styles.chipActive]} onPress={() => setTrackingPurpose(key)}>
+                    <Text style={[styles.chipText, trackingPurpose === key && styles.chipTextActive]}>{t(key)}</Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
               <TouchableOpacity style={styles.startBtn} onPress={startTracking}>
-                <Text style={styles.startBtnText}>▶ Start tracking</Text>
+                <Text style={styles.startBtnText}>{t('start_tracking')}</Text>
               </TouchableOpacity>
             </>
           )}
@@ -232,27 +242,27 @@ export function MileageScreen({ user }: { user: any }) {
         {/* Manual form */}
         {showForm && (
           <View style={styles.card}>
-            <Text style={styles.formTitle}>📝 Log manually</Text>
-            <Text style={styles.fieldLabel}>Date</Text>
+            <Text style={styles.formTitle}>{t('log_manually')}</Text>
+            <Text style={styles.fieldLabel}>{t('date')}</Text>
             <TextInput style={styles.input} value={form.date} onChangeText={v => f('date', v)} placeholderTextColor="#94A3B8" />
-            <Text style={styles.fieldLabel}>From *</Text>
+            <Text style={styles.fieldLabel}>{t('from_label')} *</Text>
             <TextInput style={styles.input} value={form.from} onChangeText={v => f('from', v)} placeholder={t('from_label')} placeholderTextColor="#94A3B8" />
-            <Text style={styles.fieldLabel}>To *</Text>
+            <Text style={styles.fieldLabel}>{t('to_label')} *</Text>
             <TextInput style={styles.input} value={form.to} onChangeText={v => f('to', v)} placeholder={t('to_label')} placeholderTextColor="#94A3B8" />
-            <Text style={styles.fieldLabel}>Miles *</Text>
+            <Text style={styles.fieldLabel}>{t('miles')} *</Text>
             <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder="0.0" keyboardType="decimal-pad" placeholderTextColor="#94A3B8" />
             {form.miles && parseFloat(form.miles) > 0 && (
               <View style={styles.estimateBadge}><Text style={styles.estimateText}>💰 {fmt$(parseFloat(form.miles) * RATE)}</Text></View>
             )}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 8 }}>
-              {PURPOSES_EN.map(p => (
-                <TouchableOpacity key={p} style={[styles.chip, form.purpose === p && styles.chipActive]} onPress={() => f('purpose', p)}>
-                  <Text style={[styles.chipText, form.purpose === p && styles.chipTextActive]}>{p}</Text>
+              {PURPOSES_KEYS.map(key => (
+                <TouchableOpacity key={key} style={[styles.chip, form.purpose === key && styles.chipActive]} onPress={() => f('purpose', key)}>
+                  <Text style={[styles.chipText, form.purpose === key && styles.chipTextActive]}>{t(key)}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
             <TouchableOpacity style={[styles.submitBtn, saving && { opacity: 0.6 }]} onPress={handleSubmit} disabled={saving}>
-              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitBtnText}>Save trip</Text>}
+              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitBtnText}>{t('save_trip')}</Text>}
             </TouchableOpacity>
           </View>
         )}
@@ -261,8 +271,8 @@ export function MileageScreen({ user }: { user: any }) {
         {loading ? <ActivityIndicator color={GOLD} style={{ marginTop: 40 }} /> : trips.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyIcon}>🚗</Text>
-            <Text style={styles.emptyTitle}>No trips yet</Text>
-            <Text style={styles.emptyText}>Start auto-tracking or log manually</Text>
+            <Text style={styles.emptyTitle}>{t('no_trips')}</Text>
+            <Text style={styles.emptyText}>{t('no_trips_sub')}</Text>
           </View>
         ) : trips.map(trip => {
           const isApproved = !!trip.approved_at
@@ -274,17 +284,17 @@ export function MileageScreen({ user }: { user: any }) {
               <View style={styles.tripInfo}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <Text style={styles.tripRoute} numberOfLines={1}>
-                    {isGPS ? '📍 GPS tracked' : `${trip.origin_label} → ${trip.dest_label}`}
+                    {isGPS ? '📍 ' + t('auto_tracked_gps') : `${trip.origin_label} → ${trip.dest_label}`}
                   </Text>
                 </View>
-                <Text style={styles.tripMeta}>{fmtDate(trip.started_at)} · {trip.purpose}</Text>
+                <Text style={styles.tripMeta}>{fmtDate(trip.started_at)} · {t(trip.purpose as PurposeKey) || trip.purpose}</Text>
               </View>
               <View style={styles.tripRight}>
                 <Text style={styles.tripMiles}>{Number(trip.distance_miles).toFixed(1)} mi</Text>
                 <Text style={[styles.tripAmt, isApproved && { color: '#10B981' }]}>{fmt$(Number(trip.reimbursement_amt))}</Text>
                 <View style={[styles.tripStatus, { backgroundColor: isApproved ? '#DCFCE7' : isFlagged ? '#FEE2E2' : '#FEF9C3' }]}>
                   <Text style={[styles.tripStatusText, { color: isApproved ? '#15803D' : isFlagged ? '#DC2626' : '#854D0E' }]}>
-                    {isApproved ? '✓ Approved' : isFlagged ? '⚑ Flagged' : '• Pending'}
+                    {isApproved ? '✓ ' + t('approved') : isFlagged ? '⚑ ' + t('flagged') : '• ' + t('pending')}
                   </Text>
                 </View>
               </View>
@@ -308,7 +318,6 @@ const styles = StyleSheet.create({
   kpiMiddle: { borderLeftWidth: 1, borderRightWidth: 1, borderColor: '#E2E8F0' },
   kpiValue: { fontSize: 22, fontWeight: '900', color: GOLD, marginBottom: 2 },
   kpiLabel: { fontSize: 10, color: '#94A3B8', fontWeight: '600', textTransform: 'uppercase' },
-  // GPS card
   gpsCard: { backgroundColor: '#fff', borderRadius: 16, padding: 18, marginBottom: 12, borderWidth: 1.5, borderColor: '#E2E8F0' },
   gpsCardActive: { borderColor: GOLD, backgroundColor: '#FFFBF0' },
   gpsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
@@ -324,7 +333,6 @@ const styles = StyleSheet.create({
   startBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
   stopBtn: { backgroundColor: '#EF4444', borderRadius: 12, padding: 14, alignItems: 'center' },
   stopBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
-  // Manual form
   card: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#E2E8F0' },
   formTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A', marginBottom: 14 },
   fieldLabel: { fontSize: 10, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 5, marginTop: 10 },
@@ -337,7 +345,6 @@ const styles = StyleSheet.create({
   chipTextActive: { color: '#fff' },
   submitBtn: { backgroundColor: GOLD, borderRadius: 12, padding: 14, alignItems: 'center', marginTop: 12 },
   submitBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  // Trip list
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyIcon: { fontSize: 40, marginBottom: 12, opacity: 0.3 },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', marginBottom: 4 },
