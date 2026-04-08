@@ -109,20 +109,30 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   async function loadChecklist() {
-    const street = job.client_addresses?.street
-    if (!street) return
+    const addrId = job.client_addresses?.id || job.address_id
+    if (!addrId) {
+      // Fallback: lookup by street
+      const street = job.client_addresses?.street
+      if (!street) return
+      setLoadingChecklist(true)
+      const { data: addrData } = await supabase
+        .from('client_addresses').select('id')
+        .eq('street', street).eq('tenant_id', user.tenant_id).maybeSingle()
+      if (!addrData?.id) { setLoadingChecklist(false); return }
+      return loadChecklistForAddress(addrData.id)
+    }
     setLoadingChecklist(true)
-    const { data: addrData } = await supabase
-      .from('client_addresses').select('id')
-      .eq('street', street).eq('tenant_id', user.tenant_id).maybeSingle()
-    if (!addrData?.id) { setLoadingChecklist(false); return }
+    return loadChecklistForAddress(addrId)
+  }
+
+  async function loadChecklistForAddress(addressId: string) {
     const { data } = await supabase
       .from('address_checklist_templates')
-      .select('id, room, title, sort_order')
-      .eq('address_id', addrData.id)
+      .select('id, room, title, sort_order, requires_photo')
+      .eq('address_id', addressId)
       .order('room').order('sort_order')
     if (data && data.length > 0) {
-      const items = data.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title }))
+      const items = data.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title, requires_photo: item.requires_photo || false }))
       setChecklist(items)
       const { data: savedItems } = await supabase
         .from('job_checklist_items').select('task, room').eq('job_id', job.id)
@@ -408,13 +418,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                   <View style={[styles.checkbox, checked[item.id] && styles.checkboxDone]}>
                     {checked[item.id] && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
                   </View>
-                  <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.label}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.label}</Text>
+                    {item.requires_photo && !itemPhotos[item.id] && (
+                      <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>Photo required</Text>
+                    )}
+                  </View>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.itemPhotoBtn, itemPhotos[item.id] > 0 && styles.itemPhotoBtnDone]}
+                  style={[styles.itemPhotoBtn, itemPhotos[item.id] > 0 && styles.itemPhotoBtnDone, item.requires_photo && !itemPhotos[item.id] && { borderColor: TEAL, borderWidth: 1.5 }]}
                   onPress={() => { setActivePhotoItem(item); setShowPhotos(true) }}
                 >
-                  <Text style={styles.itemPhotoBtnText}>{itemPhotos[item.id] > 0 ? `📷 ${itemPhotos[item.id]}` : '📷'}</Text>
+                  <Text style={styles.itemPhotoBtnText}>{itemPhotos[item.id] > 0 ? `📷 ${itemPhotos[item.id]}` : item.requires_photo ? '📷!' : '📷'}</Text>
                 </TouchableOpacity>
               </View>
             ))}
