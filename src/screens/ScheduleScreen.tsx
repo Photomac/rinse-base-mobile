@@ -37,7 +37,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const end = new Date(now); end.setMonth(now.getMonth() + 2); end.setHours(23,59,59,999)
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
     const { data } = await supabase.from('jobs')
-      .select('id, status, scheduled_start, scheduled_end, is_turnover, clients!jobs_client_id_fkey(full_name), client_addresses!jobs_address_id_fkey(street, city, nickname), job_assignments(user_id)')
+      .select('id, status, scheduled_start, scheduled_end, is_turnover, clients!jobs_client_id_fkey(full_name), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id)')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', start.toISOString())
       .lte('scheduled_start', end.toISOString())

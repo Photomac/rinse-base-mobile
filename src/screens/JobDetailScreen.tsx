@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, Linking, ActivityIndicator, Modal } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, Linking, ActivityIndicator, Modal, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { MessagesScreen } from './MessagesScreen'
@@ -258,6 +259,33 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
+        {/* Property photo */}
+        {addr?.photo_url ? (
+          <Image source={{ uri: addr.photo_url }} style={{ width: '100%', height: 180, borderRadius: 12, marginBottom: 12 }} resizeMode="cover" />
+        ) : addr?.id && (
+          <TouchableOpacity
+            style={{ width: '100%', height: 100, borderRadius: 12, marginBottom: 12, borderWidth: 1.5, borderStyle: 'dashed', borderColor: TEAL + '60', backgroundColor: TEAL + '08', alignItems: 'center', justifyContent: 'center' }}
+            onPress={async () => {
+              const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.8 })
+              if (result.canceled || !result.assets?.[0]) return
+              try {
+                const asset = result.assets[0]
+                const ext = asset.uri.split('.').pop() || 'jpg'
+                const path = `${user.tenant_id}/properties/${addr.id}_${Date.now()}.${ext}`
+                const response = await fetch(asset.uri)
+                const blob = await response.blob()
+                const { error: upErr } = await supabase.storage.from('job-photos').upload(path, blob, { contentType: `image/${ext}`, upsert: true })
+                if (upErr) { Alert.alert('Upload failed', upErr.message); return }
+                const { data: urlData } = supabase.storage.from('job-photos').getPublicUrl(path)
+                await supabase.from('client_addresses').update({ photo_url: urlData.publicUrl }).eq('id', addr.id)
+                Alert.alert('Photo saved', 'Property photo has been added.')
+              } catch (err: any) { Alert.alert('Error', err.message || 'Failed to upload') }
+            }}>
+            <Text style={{ fontSize: 24, color: TEAL, marginBottom: 4 }}>📷</Text>
+            <Text style={{ fontSize: 12, color: TEAL, fontWeight: '600' }}>Take property photo</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Job info card */}
         <View style={styles.card}>
           <Text style={styles.clientName}>{addr?.nickname || client?.full_name}{job.is_turnover ? '  🏠 Turnover' : ''}</Text>

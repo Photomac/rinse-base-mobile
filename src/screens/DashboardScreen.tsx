@@ -10,7 +10,7 @@ function fmtTime(iso: string) {
 }
 
 export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void; onSOS: () => void }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [todayJobs, setTodayJobs] = useState<any[]>([])
   const [activeJob, setActiveJob] = useState<any>(null)
   const [nextJob, setNextJob] = useState<any>(null)
@@ -30,7 +30,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     const [todayRes, monthRes] = await Promise.all([
       supabase.from('jobs')
-        .select('id, status, scheduled_start, scheduled_end, is_turnover, clients!jobs_client_id_fkey(full_name, phone), client_addresses!jobs_address_id_fkey(street, city, nickname, lockbox_code, lat, lng), job_assignments(user_id)')
+        .select('id, status, scheduled_start, scheduled_end, is_turnover, clients!jobs_client_id_fkey(full_name, phone), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
         .eq('tenant_id', user.tenant_id)
         .gte('scheduled_start', todayStart.toISOString())
         .lte('scheduled_start', todayEnd.toISOString())
@@ -86,7 +86,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           <View style={styles.headerTop}>
             <View>
               <Text style={styles.greeting}>{greeting}, {user.full_name?.split(' ')[0]} 👋</Text>
-              <Text style={styles.date}>{now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
+              <Text style={styles.date}>{now.toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
             </View>
             <TouchableOpacity style={styles.sosBtn} onPress={onSOS} activeOpacity={0.8}>
               <Text style={styles.sosBtnText}>🆘</Text>
@@ -98,22 +98,22 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           <View style={styles.statsBar}>
             <View style={styles.stat}>
               <Text style={styles.statValue}>{todayJobs.length}</Text>
-              <Text style={styles.statLabel}>Today</Text>
+              <Text style={styles.statLabel}>{t('today')}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Text style={styles.statValue}>{completedToday}</Text>
-              <Text style={styles.statLabel}>Done</Text>
+              <Text style={styles.statLabel}>{t('done_label')}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Text style={styles.statValue}>{todayJobs.length - completedToday}</Text>
-              <Text style={styles.statLabel}>Remaining</Text>
+              <Text style={styles.statLabel}>{t('remaining')}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Text style={styles.statValue}>{monthStats.completed}</Text>
-              <Text style={styles.statLabel}>This month</Text>
+              <Text style={styles.statLabel}>{t('this_month')}</Text>
             </View>
           </View>
         </View>
@@ -127,7 +127,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               <TouchableOpacity style={styles.activeBanner} onPress={() => onJobPress(activeJob)}>
                 <View style={styles.activePulse} />
                 <View style={styles.activeInfo}>
-                  <Text style={styles.activeLabel}>🔶 Active job in progress</Text>
+                  <Text style={styles.activeLabel}>🔶 {t('active_job')}</Text>
                   <Text style={styles.activeClient}>
                     {(activeJob.client_addresses as any)?.nickname || (activeJob.clients as any)?.full_name}
                   </Text>
@@ -141,7 +141,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             {nextJob && !activeJob && (
               <TouchableOpacity style={styles.nextJobCard} onPress={() => onJobPress(nextJob)}>
                 <View style={styles.nextJobHeader}>
-                  <Text style={styles.nextJobLabel}>⏰ Next job</Text>
+                  <Text style={styles.nextJobLabel}>⏰ {t('next_job')}</Text>
                   <Text style={styles.nextJobTime}>{fmtTime(nextJob.scheduled_start)}</Text>
                 </View>
                 <Text style={styles.nextJobClient}>
@@ -160,28 +160,26 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             <View style={styles.quickActions}>
               <TouchableOpacity style={styles.quickBtn} onPress={() => onNavigate('schedule')}>
                 <Text style={styles.quickBtnIcon}>📅</Text>
-                <Text style={styles.quickBtnLabel}>Schedule</Text>
+                <Text style={styles.quickBtnLabel}>{t('schedule')}</Text>
               </TouchableOpacity>
-
               <TouchableOpacity style={styles.quickBtn} onPress={() => onNavigate('mileage')}>
                 <Text style={styles.quickBtnIcon}>↗</Text>
-                <Text style={styles.quickBtnLabel}>Log miles</Text>
+                <Text style={styles.quickBtnLabel}>{t('log_miles')}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.quickBtn} onPress={() => onNavigate('profile')}>
                 <Text style={styles.quickBtnIcon}>◉</Text>
-                <Text style={styles.quickBtnLabel}>Profile</Text>
+                <Text style={styles.quickBtnLabel}>{t('profile')}</Text>
               </TouchableOpacity>
             </View>
 
             {/* Today's job list preview */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Today's jobs</Text>
-  
+                <Text style={styles.sectionTitle}>{t('todays_jobs')}</Text>
               </View>
               {todayJobs.length === 0 ? (
                 <View style={styles.emptyCard}>
-                  <Text style={styles.emptyText}>No jobs scheduled today 🌟</Text>
+                  <Text style={styles.emptyText}>{t('no_jobs_today')} 🌟</Text>
                 </View>
               ) : todayJobs.map((job: any) => {
                 const addr = job.client_addresses
@@ -192,28 +190,27 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     <View style={[styles.jobDot, { backgroundColor: isDone ? '#10B981' : isActive ? '#F59E0B' : '#3B82F6' }]} />
                     <View style={styles.jobInfo}>
                       <Text style={styles.jobClient}>{addr?.nickname || (job.clients as any)?.full_name}</Text>
-                      <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}{job.is_turnover ? ' · 🏠 Turnover' : ''}</Text>
+                      <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}{job.is_turnover ? ' · 🏠 ' + t('turnover') : ''}</Text>
                     </View>
                     <Text style={styles.jobArrow}>→</Text>
                   </TouchableOpacity>
                 )
               })}
-
             </View>
 
             {/* Monthly earnings */}
             {user.role !== 'owner' && (
               <View style={styles.earningsCard}>
-                <Text style={styles.earningsLabel}>💰 My earnings this month</Text>
+                <Text style={styles.earningsLabel}>💰 {t('my_earnings')}</Text>
                 <Text style={styles.earningsValue}>${monthStats.earnings.toLocaleString('en-US', { minimumFractionDigits: 2 })}</Text>
                 <View style={styles.earningsStats}>
                   <View style={styles.earningStat}>
                     <Text style={styles.earningStatValue}>{monthStats.completed}</Text>
-                    <Text style={styles.earningStatLabel}>Jobs done</Text>
+                    <Text style={styles.earningStatLabel}>{t('done_label')}</Text>
                   </View>
                   <View style={styles.earningStat}>
                     <Text style={styles.earningStatValue}>{monthStats.hours}h</Text>
-                    <Text style={styles.earningStatLabel}>Hours</Text>
+                    <Text style={styles.earningStatLabel}>{t('total_time')}</Text>
                   </View>
                 </View>
               </View>
