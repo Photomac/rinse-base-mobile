@@ -70,17 +70,23 @@ export async function startLocationTracking(user: any) {
   const todayStart = new Date(now); todayStart.setHours(0,0,0,0)
   const todayEnd = new Date(now); todayEnd.setHours(23,59,59,999)
 
+  const { data: assignments } = await supabase
+    .from('job_assignments')
+    .select('job_id')
+    .eq('user_id', user.id)
+
+  const myJobIds = (assignments ?? []).map((a: any) => a.job_id)
+  if (myJobIds.length === 0) return // No assignments, don't track
+
   const { data: jobs } = await supabase
     .from('jobs')
     .select('id, status')
-    .eq('tenant_id', user.tenant_id)
+    .in('id', myJobIds)
     .gte('scheduled_start', todayStart.toISOString())
     .lte('scheduled_start', todayEnd.toISOString())
     .neq('status', 'cancelled')
 
-  const myJobs = (jobs ?? []).filter((j: any) =>
-    j.job_assignments?.some?.((a: any) => a.user_id === user.id) || true
-  )
+  const myJobs = jobs ?? []
 
   if (myJobs.length === 0) return // No jobs today, don't track
 
@@ -114,19 +120,28 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
   const user = currentUser
 
   try {
-    // Find active job
+    // Find this crew member's active job
     const now = new Date()
     const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
     const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
 
-    const { data: activeJob } = await supabase
-      .from('jobs')
-      .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, nickname, street)')
-      .eq('tenant_id', user.tenant_id)
-      .eq('status', 'in_progress')
-      .gte('scheduled_start', todayStart.toISOString())
-      .lte('scheduled_start', todayEnd.toISOString())
-      .maybeSingle()
+    // Get this user's assigned jobs that are in_progress
+    const { data: myAssignments } = await supabase
+      .from('job_assignments').select('job_id').eq('user_id', user.id)
+    const myJobIds = (myAssignments ?? []).map((a: any) => a.job_id)
+
+    let activeJob: any = null
+    if (myJobIds.length > 0) {
+      const { data } = await supabase
+        .from('jobs')
+        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, nickname, street)')
+        .in('id', myJobIds)
+        .eq('status', 'in_progress')
+        .gte('scheduled_start', todayStart.toISOString())
+        .lte('scheduled_start', todayEnd.toISOString())
+        .maybeSingle()
+      activeJob = data
+    }
 
     // Update crew location
     await supabase.from('crew_locations').upsert({
@@ -171,19 +186,27 @@ async function pingLocation(user: any) {
       accuracy: Location.Accuracy.Balanced,
     })
 
-    // Find active job with address coordinates
+    // Find this crew member's active job with address coordinates
     const now = new Date()
     const todayStart = new Date(now); todayStart.setHours(0,0,0,0)
     const todayEnd = new Date(now); todayEnd.setHours(23,59,59,999)
 
-    const { data: activeJob } = await supabase
-      .from('jobs')
-      .select('id, status, job_assignments(user_id), client_addresses!jobs_address_id_fkey(lat, lng, nickname, street)')
-      .eq('tenant_id', user.tenant_id)
-      .eq('status', 'in_progress')
-      .gte('scheduled_start', todayStart.toISOString())
-      .lte('scheduled_start', todayEnd.toISOString())
-      .maybeSingle()
+    const { data: myAssignments } = await supabase
+      .from('job_assignments').select('job_id').eq('user_id', user.id)
+    const myJobIds = (myAssignments ?? []).map((a: any) => a.job_id)
+
+    let activeJob: any = null
+    if (myJobIds.length > 0) {
+      const { data } = await supabase
+        .from('jobs')
+        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, nickname, street)')
+        .in('id', myJobIds)
+        .eq('status', 'in_progress')
+        .gte('scheduled_start', todayStart.toISOString())
+        .lte('scheduled_start', todayEnd.toISOString())
+        .maybeSingle()
+      activeJob = data
+    }
 
     const jobId = activeJob?.id || null
     const status = activeJob ? 'active' : 'idle'

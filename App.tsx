@@ -21,7 +21,10 @@ const GOLD = '#D4A843'
 const SLATE_DARK = '#0F172A'
 const Tab = createBottomTabNavigator()
 
-export default function App() {
+// ── Inner app — hooks called unconditionally here ─────────────────
+function AppInner() {
+  const insets = useSafeAreaInsets() // ✅ always called, no early returns above it
+
   const [session, setSession] = useState<any>(null)
   const [user, setUser] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -68,26 +71,16 @@ export default function App() {
       }, (payload: any) => {
         const job = payload.new
         const old = payload.old
-        // Notify crew if their job was rescheduled
         if (job.scheduled_start !== old.scheduled_start) {
           const newTime = new Date(job.scheduled_start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
           Notifications.scheduleNotificationAsync({
-            content: {
-              title: '📅 Job rescheduled',
-              body: `Your job has been moved to ${newTime}`,
-              sound: true,
-            },
+            content: { title: '📅 Job rescheduled', body: `Your job has been moved to ${newTime}`, sound: true },
             trigger: null,
           }).catch(console.warn)
         }
-        // Notify if job was assigned to this user
         if (job.status === 'scheduled' && old.status !== 'scheduled') {
           Notifications.scheduleNotificationAsync({
-            content: {
-              title: '✅ New job assigned',
-              body: `You have a new job scheduled`,
-              sound: true,
-            },
+            content: { title: '✅ New job assigned', body: `You have a new job scheduled`, sound: true },
             trigger: null,
           }).catch(console.warn)
         }
@@ -95,19 +88,6 @@ export default function App() {
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [user])
-
-  function handleNavigate(screen: string) {
-    const tabMap: Record<string, string> = {
-      dashboard: 'Dashboard',
-      jobs: 'Today',
-      schedule: 'Schedule',
-      mileage: 'Mileage',
-      profile: 'Profile',
-    }
-    if (tabMap[screen] && navigationRef.current) {
-      navigationRef.current.navigate(tabMap[screen])
-    }
-  }
 
   if (loading) {
     return (
@@ -119,100 +99,102 @@ export default function App() {
   }
 
   if (!session || !user) {
-    return <LangProvider><SafeAreaProvider><LoginScreen /></SafeAreaProvider></LangProvider>
+    return <LoginScreen />
   }
 
   if (activeChannel) {
-    return (
-      <LangProvider>
-      <SafeAreaProvider>
-        <ChatScreen channel={activeChannel} user={user} onBack={() => setActiveChannel(null)} />
-      </SafeAreaProvider>
-      </LangProvider>
-    )
+    return <ChatScreen channel={activeChannel} user={user} onBack={() => setActiveChannel(null)} />
   }
 
   if (showSOS) {
-    return (
-      <LangProvider><SafeAreaProvider>
-        <SOSScreen
-          user={user}
-          onCancel={() => setShowSOS(false)}
-          onSent={() => {}}
-        />
-      </SafeAreaProvider></LangProvider>
-    )
+    return <SOSScreen user={user} onCancel={() => setShowSOS(false)} onSent={() => {}} />
   }
 
   if (selectedJob) {
     return (
-      <LangProvider><SafeAreaProvider>
-        <JobDetailScreen
-          job={selectedJob}
-          user={user}
-          onBack={() => setSelectedJob(null)}
-          onStatusChange={(job: any, status: string) => setSelectedJob((prev: any) => prev ? { ...prev, status } : null)}
-        />
-      </SafeAreaProvider></LangProvider>
+      <JobDetailScreen
+        job={selectedJob}
+        user={user}
+        onBack={() => setSelectedJob(null)}
+        onStatusChange={(job: any, status: string) => setSelectedJob((prev: any) => prev ? { ...prev, status } : null)}
+      />
     )
   }
 
-  const insets = useSafeAreaInsets()
+  return (
+    <NavigationContainer>
+      <Tab.Navigator
+        screenOptions={{
+          headerShown: false,
+          tabBarStyle: {
+            backgroundColor: SLATE_DARK,
+            borderTopColor: 'rgba(255,255,255,0.08)',
+            paddingBottom: insets.bottom + 8,
+            paddingTop: 10,
+            height: 60 + insets.bottom,
+          },
+          tabBarActiveTintColor: GOLD,
+          tabBarInactiveTintColor: 'rgba(255,255,255,0.35)',
+          tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: 2 },
+        }}
+      >
+        <Tab.Screen
+          name="Dashboard"
+          options={{ tabBarLabel: 'Home', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⊞</Text> }}
+        >
+          {({ navigation }: any) => (
+            <DashboardScreen
+              key={user?.id}
+              user={user}
+              onJobPress={setSelectedJob}
+              onNavigate={(screen: string) => {
+                const tabMap: Record<string, string> = { dashboard: 'Dashboard', jobs: 'Schedule', schedule: 'Schedule', mileage: 'Mileage', profile: 'Profile' }
+                if (tabMap[screen]) navigation.navigate(tabMap[screen])
+              }}
+              onSOS={() => setShowSOS(true)}
+            />
+          )}
+        </Tab.Screen>
 
+        <Tab.Screen
+          name="Schedule"
+          options={{ tabBarLabel: 'Schedule', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>📅</Text> }}
+        >
+          {() => <ScheduleScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
+        </Tab.Screen>
+
+        <Tab.Screen
+          name="Mileage"
+          options={{ tabBarLabel: 'Mileage', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>↗</Text> }}
+        >
+          {() => <MileageScreen key={user?.id} user={user} />}
+        </Tab.Screen>
+
+        <Tab.Screen
+          name="Chat"
+          options={{ tabBarLabel: 'Chat', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>💬</Text> }}
+        >
+          {() => <ChatListScreen user={user} onOpenChannel={setActiveChannel} onNewDM={() => {}} />}
+        </Tab.Screen>
+
+        <Tab.Screen
+          name="Profile"
+          options={{ tabBarLabel: 'Profile', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>◉</Text> }}
+        >
+          {() => <ProfileScreen key={user?.id} user={user} />}
+        </Tab.Screen>
+      </Tab.Navigator>
+    </NavigationContainer>
+  )
+}
+
+// ── Root — providers wrap everything once ─────────────────────────
+export default function App() {
   return (
     <LangProvider>
-    <SafeAreaProvider>
-      <NavigationContainer>
-        <Tab.Navigator
-          screenOptions={{
-            headerShown: false,
-            tabBarStyle: { backgroundColor: SLATE_DARK, borderTopColor: 'rgba(255,255,255,0.08)', paddingBottom: insets.bottom + 8, paddingTop: 10, height: 60 + insets.bottom },
-            tabBarActiveTintColor: GOLD,
-            tabBarInactiveTintColor: 'rgba(255,255,255,0.35)',
-            tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: 2 },
-          }}
-        >
-          <Tab.Screen
-            name="Dashboard"
-            options={{ tabBarLabel: 'Home', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⊞</Text> }}
-          >
-            {({ navigation }: any) => <DashboardScreen key={user?.id} user={user} onJobPress={setSelectedJob} onNavigate={(screen: string) => {
-              const tabMap: Record<string, string> = { dashboard: 'Dashboard', jobs: 'Today', schedule: 'Schedule', mileage: 'Mileage', profile: 'Profile' }
-              if (tabMap[screen]) navigation.navigate(tabMap[screen])
-            }} onSOS={() => setShowSOS(true)} />}
-          </Tab.Screen>
-
-
-          <Tab.Screen
-            name="Schedule"
-            options={{ tabBarLabel: 'Schedule', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>📅</Text> }}
-          >
-            {() => <ScheduleScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
-          </Tab.Screen>
-
-          <Tab.Screen
-            name="Mileage"
-            options={{ tabBarLabel: 'Mileage', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>↗</Text> }}
-          >
-            {() => <MileageScreen key={user?.id} user={user} />}
-          </Tab.Screen>
-
-          <Tab.Screen
-            name="Chat"
-            options={{ tabBarLabel: 'Chat', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>💬</Text> }}
-          >
-            {() => <ChatListScreen user={user} onOpenChannel={setActiveChannel} onNewDM={() => {}} />}
-          </Tab.Screen>
-
-          <Tab.Screen
-            name="Profile"
-            options={{ tabBarLabel: 'Profile', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>◉</Text> }}
-          >
-            {() => <ProfileScreen key={user?.id} user={user} />}
-          </Tab.Screen>
-        </Tab.Navigator>
-      </NavigationContainer>
-    </SafeAreaProvider>
+      <SafeAreaProvider>
+        <AppInner />
+      </SafeAreaProvider>
     </LangProvider>
   )
 }

@@ -113,7 +113,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
         job_id: job.id,
         user_id: user.id,
         photo_url: urlData.publicUrl,
-        photo_type: 'damage' ? 'issue' : selectedType,
+        photo_type: selectedType === 'damage' ? 'issue' : selectedType,
         caption: caption.trim() || null,
         visible_to_client: visibleToClient,
       })

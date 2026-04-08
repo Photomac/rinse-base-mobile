@@ -2,17 +2,19 @@ import React, { useState } from 'react'
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, StatusBar, Image } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { SLATE_DARK, GOLD } from '../lib/theme'
+import { useLang } from '../contexts/LangContext'
 
 export function LoginScreen() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const { t } = useLang()
 
   async function handleLogin() {
-    if (!email || !password) { Alert.alert('Error', 'Please enter your email and password'); return }
+    if (!email || !password) { Alert.alert('Error', t('email_placeholder')); return }
     setLoading(true)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) Alert.alert('Login failed', error.message)
+    if (error) Alert.alert(t('login_failed'), error.message)
     setLoading(false)
   }
 
@@ -25,14 +27,14 @@ export function LoginScreen() {
         <Text style={styles.tagline}>STR Cleaning Software</Text>
       </View>
       <View style={styles.form}>
-        <Text style={styles.label}>Email</Text>
-        <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder="you@email.com" placeholderTextColor="rgba(255,255,255,0.3)" autoCapitalize="none" keyboardType="email-address" />
-        <Text style={styles.label}>Password</Text>
-        <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Your password" placeholderTextColor="rgba(255,255,255,0.3)" secureTextEntry />
+        <Text style={styles.label}>{t('email')}</Text>
+        <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder={t('email_placeholder')} placeholderTextColor="rgba(255,255,255,0.3)" autoCapitalize="none" keyboardType="email-address" />
+        <Text style={styles.label}>{t('password')}</Text>
+        <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder={t('password_placeholder')} placeholderTextColor="rgba(255,255,255,0.3)" secureTextEntry />
         <TouchableOpacity style={[styles.button, loading && { opacity: 0.6 }]} onPress={handleLogin} disabled={loading}>
-          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Sign in →</Text>}
+          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t('sign_in')} →</Text>}
         </TouchableOpacity>
-        <Text style={styles.helpText}>Contact your manager if you need help logging in</Text>
+        <Text style={styles.helpText}>{t('contact_manager')}</Text>
       </View>
     </KeyboardAvoidingView>
   )

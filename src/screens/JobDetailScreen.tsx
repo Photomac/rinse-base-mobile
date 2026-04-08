@@ -237,7 +237,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         duration_minutes: Math.round(mins),
       }).eq('id', activeEntry.id)
     }
-    await supabase.from('jobs').update({ status: 'completed' }).eq('id', job.id)
+    await supabase.from('jobs').update({ status: 'completed', internal_notes: notes.trim() || null }).eq('id', job.id)
     onStatusChange(job, 'completed')
     onBack()
     setSaving(false)
