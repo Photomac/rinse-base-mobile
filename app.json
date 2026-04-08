@@ -19,7 +19,10 @@
         "NSCameraUsageDescription": "Rinsebase uses your camera to take before and after photos of cleaning jobs.",
         "NSPhotoLibraryUsageDescription": "Rinsebase accesses your photo library to upload cleaning job photos.",
         "NSPhotoLibraryAddUsageDescription": "Rinsebase saves cleaning job photos to your photo library.",
-        "NSMicrophoneUsageDescription": "Rinsebase uses the microphone for SOS emergency audio alerts."
+        "NSMicrophoneUsageDescription": "Rinsebase uses the microphone for SOS emergency audio alerts.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property and to send clock-out reminders when you leave a job site.",
+        "NSLocationWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property.",
+        "UIBackgroundModes": ["location", "fetch"]
       }
     },
     "android": {
@@ -50,8 +53,10 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Rinsebase uses your location for SOS emergency alerts.",
-          "locationWhenInUsePermission": "Rinsebase uses your location for SOS emergency alerts."
+          "locationAlwaysAndWhenInUsePermission": "Rinsebase uses your location to verify you're at the correct property and to remind you to clock out when you leave a job site.",
+          "locationWhenInUsePermission": "Rinsebase uses your location to verify you're at the correct cleaning property.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isIosBackgroundLocationEnabled": true
         }
       ]
     ],
