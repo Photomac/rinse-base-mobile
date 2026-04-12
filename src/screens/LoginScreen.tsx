@@ -11,7 +11,7 @@ export function LoginScreen() {
   const { t } = useLang()
 
   async function handleLogin() {
-    if (!email || !password) { Alert.alert('Error', t('email_placeholder')); return }
+    if (!email || !password) { Alert.alert(t('login_failed'), !email ? 'Please enter your email address' : 'Please enter your password'); return }
     setLoading(true)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) Alert.alert(t('login_failed'), error.message)
