@@ -22,7 +22,12 @@
         "NSMicrophoneUsageDescription": "Rinsebase uses the microphone for SOS emergency audio alerts.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property and to send clock-out reminders when you leave a job site.",
         "NSLocationWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property.",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch",
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -41,7 +46,18 @@
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_EXTERNAL_STORAGE"
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "web": {
@@ -65,6 +81,12 @@
         "projectId": "4768586a-ae45-4b35-984c-a1803f1b2985"
       }
     },
-    "owner": "photomacs-organization"
+    "owner": "photomacs-organization",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/4768586a-ae45-4b35-984c-a1803f1b2985"
+    }
   }
 }
