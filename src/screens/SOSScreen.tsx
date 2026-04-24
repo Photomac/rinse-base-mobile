@@ -112,17 +112,24 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     // Set phase first so UI updates immediately
     setPhase('sent')
     setHoldProgress(0)
-    // Then do async work
-    // Send push to all owners/managers
+    // Send push to all owners/managers (fire-and-forget on the
+    // wrapper, which is a real Promise, so .catch is safe here)
     sendSOSNotification(user.tenant_id, user.full_name, locationLabel).catch(console.warn)
-    supabase.from('sos_alerts').insert({
-      tenant_id: user.tenant_id,
-      user_id: user.id,
-      triggered_at: new Date().toISOString(),
-      lat: location?.latitude || null,
-      lng: location?.longitude || null,
-      status: 'active',
-    }).then(() => { onSent() }).catch((e: any) => console.warn('SOS insert error:', e))
+    // Supabase query builders return a PromiseLike — await in try/catch
+    // rather than chain .then/.catch, which crashes at runtime.
+    try {
+      await supabase.from('sos_alerts').insert({
+        tenant_id: user.tenant_id,
+        user_id: user.id,
+        triggered_at: new Date().toISOString(),
+        lat: location?.latitude || null,
+        lng: location?.longitude || null,
+        status: 'active',
+      })
+      onSent()
+    } catch (e: any) {
+      console.warn('SOS insert error:', e)
+    }
   }
 
   async function markOK() {

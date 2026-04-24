@@ -214,7 +214,7 @@ export function MileageScreen({ user }: { user: any }) {
                 </View>
                 <View style={styles.gpsStatDivider} />
                 <View style={styles.gpsStat}>
-                  <Text style={[styles.gpsStatValue, { color: '#10B981' }]}>{fmt$(trackingMiles * RATE)}</Text>
+                  <Text style={[styles.gpsStatValue, { color: '#10B981' }]}>{fmt$(trackingMiles * mileageRate)}</Text>
                   <Text style={styles.gpsStatLabel}>{t('estimated')}</Text>
                 </View>
               </View>
@@ -252,7 +252,7 @@ export function MileageScreen({ user }: { user: any }) {
             <Text style={styles.fieldLabel}>{t('miles')} *</Text>
             <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder="0.0" keyboardType="decimal-pad" placeholderTextColor="#94A3B8" />
             {form.miles && parseFloat(form.miles) > 0 && (
-              <View style={styles.estimateBadge}><Text style={styles.estimateText}>💰 {fmt$(parseFloat(form.miles) * RATE)}</Text></View>
+              <View style={styles.estimateBadge}><Text style={styles.estimateText}>💰 {fmt$(parseFloat(form.miles) * mileageRate)}</Text></View>
             )}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 8 }}>
               {PURPOSES_KEYS.map(key => (

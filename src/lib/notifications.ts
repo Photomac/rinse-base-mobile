@@ -3,10 +3,13 @@ import * as Notifications from 'expo-notifications'
 import * as Device from 'expo-device'
 import { supabase } from './supabase'
 
-// Configure how notifications appear when app is open
+// Configure how notifications appear when app is open.
+// iOS 17+ / expo-notifications >= 0.32 replaced shouldShowAlert with
+// shouldShowBanner + shouldShowList.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
   }),
@@ -14,10 +17,7 @@ Notifications.setNotificationHandler({
 
 export async function registerPushToken(user: any) {
   // Push notifications only work on real devices
-  if (!Device.isDevice) {
-    console.log('Push notifications require a real device')
-    return null
-  }
+  if (!Device.isDevice) return null
 
   // Request permissions
   const { status: existingStatus } = await Notifications.getPermissionsAsync()
@@ -26,14 +26,12 @@ export async function registerPushToken(user: any) {
     const { status } = await Notifications.requestPermissionsAsync()
     finalStatus = status
   }
-  if (finalStatus !== 'granted') {
-    console.log('Push notification permission denied')
-    return null
-  }
+  if (finalStatus !== 'granted') return null
 
-  // Get Expo push token
+  // Get Expo push token (projectId pulled from app.json so it stays
+  // in lockstep with the EAS Update URL)
   const tokenData = await Notifications.getExpoPushTokenAsync({
-    projectId: '4768586a-ae45-4b35-984c-a1803f1b2985', // Update with your EAS project ID
+    projectId: '4768586a-ae45-4b35-984c-a1803f1b2985',
   })
   const token = tokenData.data
 
@@ -45,7 +43,6 @@ export async function registerPushToken(user: any) {
     platform: Platform.OS,
   }, { onConflict: 'user_id,token' })
 
-  console.log('Push token registered:', token)
   return token
 }
 
