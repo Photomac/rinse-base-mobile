@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
 import { JobPhotosScreen } from './JobPhotosScreen'
+import { JobInventoryScreen } from './JobInventoryScreen'
 import { MessagesScreen } from './MessagesScreen'
 import { useLang } from '../contexts/LangContext'
 
@@ -43,6 +44,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [showPhotos, setShowPhotos] = useState(false)
+  const [showInventory, setShowInventory] = useState(false)
   const [showMessages, setShowMessages] = useState(false)
   const [checklist, setChecklist] = useState(DEFAULT_CHECKLIST as any[])
   const [loadingChecklist, setLoadingChecklist] = useState(false)
@@ -258,6 +260,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const progressPct = Math.round((completedCount / checklist.length) * 100)
 
   if (showMessages) return <MessagesScreen job={job} user={user} onBack={() => setShowMessages(false)} />
+  if (showInventory) return <JobInventoryScreen job={job} user={user} onBack={() => setShowInventory(false)} />
   if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} onBack={() => { setShowPhotos(false); loadChecklist() }} />
 
   return (
@@ -325,6 +328,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           )}
           <TouchableOpacity style={styles.photosBtn} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
             <Text style={styles.photosBtnText}>📸 Job Photos</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.suppliesBtn} onPress={() => setShowInventory(true)}>
+            <Text style={styles.suppliesBtnText}>📦 Supplies</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.messagesBtn} onPress={() => setShowMessages(true)}>
             <Text style={styles.messagesBtnText}>💬 Messages</Text>
@@ -503,6 +509,8 @@ const styles = StyleSheet.create({
   messagesBtnText: { color: '#065F46', fontSize: 13, fontWeight: '700' },
   photosBtn: { marginTop: 8, backgroundColor: '#F5F3FF', borderWidth: 1, borderColor: '#DDD6FE', borderRadius: 10, padding: 12, alignItems: 'center' },
   photosBtnText: { color: '#7C3AED', fontSize: 13, fontWeight: '700' },
+  suppliesBtn: { marginTop: 8, backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FCD34D', borderRadius: 10, padding: 12, alignItems: 'center' },
+  suppliesBtnText: { color: '#92400E', fontSize: 13, fontWeight: '700' },
   sectionTitle: { fontSize: 14, fontWeight: '700', color: '#111827' },
   timeEntry: { backgroundColor: '#F9FAFB', borderRadius: 8, padding: 10, marginBottom: 6, borderWidth: 1, borderColor: '#E5E7EB' },
   timeEntryText: { fontSize: 12, color: '#374151', fontWeight: '600' },
