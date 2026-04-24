@@ -7,6 +7,7 @@ export const translations = {
     // Common
     back: 'Back', save: 'Save', cancel: 'Cancel', loading: 'Loading...', error: 'Error',
     done: 'Done', yes: 'Yes', no: 'No', optional: 'optional',
+    creating: 'Creating...', unknown: 'Unknown', group: 'Group',
     // Auth
     sign_in: 'Sign in', email: 'Email', password: 'Password',
     email_placeholder: 'you@email.com', password_placeholder: 'Your password',
@@ -14,7 +15,7 @@ export const translations = {
     tagline: 'STR Cleaning Software',
     // Dashboard
     good_morning: 'Good morning', good_afternoon: 'Good afternoon', good_evening: 'Good evening',
-    today: 'Today', done_label: 'Done', remaining: 'Remaining', this_month: 'This month',
+    today: 'Today', yesterday: 'Yesterday', done_label: 'Done', remaining: 'Remaining', this_month: 'This month',
     active_job: 'Active job in progress', next_job: 'Next job',
     todays_jobs: "Today's jobs", see_all: 'See all', no_jobs_today: 'No jobs scheduled today',
     my_earnings: 'My earnings this month', schedule: 'Schedule', log_miles: 'Log miles', profile: 'Profile',
@@ -69,6 +70,31 @@ export const translations = {
     job_travel: 'Job travel', supply_run_miles: 'Supply run', equipment_pickup: 'Equipment pickup',
     client_meeting: 'Client meeting', training: 'Training', flagged: 'Flagged',
     enter_valid_miles: 'Enter valid miles', enter_origin_dest: 'Enter origin and destination',
+    // Mileage — GPS tracking
+    location_needed: 'Location needed',
+    location_permission_msg: 'Enable location permissions to auto-track mileage.',
+    trip_too_short: 'Trip too short',
+    trip_too_short_msg: 'Less than 0.1 miles recorded. Trip not saved.',
+    save_trip: 'Save trip',
+    save_trip_title: 'Save trip — {{miles}} miles',
+    estimated_reimbursement: 'Estimated reimbursement: {{amt}}',
+    log_manually: '📝 Log manually',
+    gps_subtitle: 'GPS automatically measures distance. Start when you leave, stop when you arrive.',
+    auto_tracked_gps: 'Auto-tracked via GPS',
+    stop_and_save: '⏹ Stop & save',
+    start_tracking: '▶ Start tracking',
+    // Chat
+    no_channels: 'No channels yet',
+    no_crew: 'No other crew members',
+    no_messages: 'No messages yet',
+    start_conversation: 'Start the conversation!',
+    message_placeholder: 'Message...',
+    new_group_chat: 'New group chat',
+    group_name_placeholder: 'Group name...',
+    select_members: 'Select members (min 2)',
+    create_group: 'Create group',
+    team_channel: 'Team channel',
+    direct_message: 'Direct message',
     // Profile
     profile_title: 'Profile', contact_info: 'Contact info', pay_structure: 'Pay structure',
     pay_type: 'Pay type', hourly: 'Hourly', per_job: 'Per job',
@@ -79,6 +105,7 @@ export const translations = {
     // Common
     back: 'Atrás', save: 'Guardar', cancel: 'Cancelar', loading: 'Cargando...', error: 'Error',
     done: 'Listo', yes: 'Sí', no: 'No', optional: 'opcional',
+    creating: 'Creando...', unknown: 'Desconocido', group: 'Grupo',
     // Auth
     sign_in: 'Iniciar sesión', email: 'Correo', password: 'Contraseña',
     email_placeholder: 'tu@correo.com', password_placeholder: 'Tu contraseña',
@@ -86,7 +113,7 @@ export const translations = {
     tagline: 'Gestión profesional de limpieza',
     // Dashboard
     good_morning: 'Buenos días', good_afternoon: 'Buenas tardes', good_evening: 'Buenas noches',
-    today: 'Hoy', done_label: 'Hechos', remaining: 'Pendientes', this_month: 'Este mes',
+    today: 'Hoy', yesterday: 'Ayer', done_label: 'Hechos', remaining: 'Pendientes', this_month: 'Este mes',
     active_job: 'Trabajo en progreso', next_job: 'Próximo trabajo',
     todays_jobs: 'Trabajos de hoy', see_all: 'Ver todos', no_jobs_today: 'Sin trabajos hoy',
     my_earnings: 'Mis ganancias este mes', schedule: 'Horario', log_miles: 'Registrar millas', profile: 'Perfil',
@@ -141,6 +168,31 @@ export const translations = {
     job_travel: 'Viaje al trabajo', supply_run_miles: 'Buscar materiales', equipment_pickup: 'Recoger equipo',
     client_meeting: 'Reunión con cliente', training: 'Entrenamiento', flagged: 'Marcado',
     enter_valid_miles: 'Ingresa millas válidas', enter_origin_dest: 'Ingresa origen y destino',
+    // Mileage — GPS tracking
+    location_needed: 'Ubicación necesaria',
+    location_permission_msg: 'Activa los permisos de ubicación para registrar millas automáticamente.',
+    trip_too_short: 'Viaje muy corto',
+    trip_too_short_msg: 'Menos de 0.1 millas registradas. Viaje no guardado.',
+    save_trip: 'Guardar viaje',
+    save_trip_title: 'Guardar viaje — {{miles}} millas',
+    estimated_reimbursement: 'Reembolso estimado: {{amt}}',
+    log_manually: '📝 Registrar manualmente',
+    gps_subtitle: 'El GPS mide la distancia automáticamente. Inicia al salir, detén al llegar.',
+    auto_tracked_gps: 'Registrado automáticamente por GPS',
+    stop_and_save: '⏹ Detener y guardar',
+    start_tracking: '▶ Iniciar seguimiento',
+    // Chat
+    no_channels: 'Sin canales aún',
+    no_crew: 'Sin otros miembros del equipo',
+    no_messages: 'Sin mensajes aún',
+    start_conversation: '¡Inicia la conversación!',
+    message_placeholder: 'Mensaje...',
+    new_group_chat: 'Nuevo grupo de chat',
+    group_name_placeholder: 'Nombre del grupo...',
+    select_members: 'Selecciona miembros (mín. 2)',
+    create_group: 'Crear grupo',
+    team_channel: 'Canal del equipo',
+    direct_message: 'Mensaje directo',
     // Profile
     profile_title: 'Perfil', contact_info: 'Información de contacto', pay_structure: 'Estructura de pago',
     pay_type: 'Tipo de pago', hourly: 'Por hora', per_job: 'Por trabajo',
@@ -150,6 +202,11 @@ export const translations = {
 }
 
 export type TranslationKey = keyof typeof translations.en
+
+// Supports {{variable}} interpolation: ti(t(lang, 'save_trip_title'), { miles: '3.2' })
+export function ti(template: string, vars: Record<string, string>): string {
+  return Object.entries(vars).reduce((str, [k, v]) => str.replace(`{{${k}}}`, v), template)
+}
 
 export function t(lang: Language, key: TranslationKey): string {
   return translations[lang][key] || translations.en[key] || key

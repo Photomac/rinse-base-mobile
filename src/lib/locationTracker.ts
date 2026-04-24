@@ -245,15 +245,18 @@ async function pingLocation(user: any) {
             trigger: null, // immediate
           })
 
-          // Log the geofence departure
-          await supabase.from('notification_log').insert({
-            tenant_id: user.tenant_id,
-            job_id: activeJob.id,
-            user_id: user.id,
-            type: 'geofence_departure',
-            channel: 'push',
-            message: `Left ${propertyName} while clocked in (${Math.round(dist)}m away)`,
-          }).catch(() => {}) // non-blocking
+          // Log the geofence departure (non-blocking — if this fails,
+          // the push already fired, so we just swallow the error)
+          try {
+            await supabase.from('notification_log').insert({
+              tenant_id: user.tenant_id,
+              job_id: activeJob.id,
+              user_id: user.id,
+              type: 'geofence_departure',
+              channel: 'push',
+              message: `Left ${propertyName} while clocked in (${Math.round(dist)}m away)`,
+            })
+          } catch { /* non-blocking */ }
         }
       }
     }
