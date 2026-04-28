@@ -6,6 +6,7 @@ import * as Location from 'expo-location'
 import * as TaskManager from 'expo-task-manager'
 import * as Notifications from 'expo-notifications'
 import { supabase } from './supabase'
+import { ensureForegroundLocation, getBackgroundLocationStatus } from './permissions'
 
 const LOCATION_TASK = 'crew-location-task'
 const PING_INTERVAL = 5 * 60 * 1000 // 5 minutes
@@ -37,14 +38,16 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
 export async function startLocationTracking(user: any) {
   currentUser = user
 
-  // Request foreground + background permissions
-  const { status: fgStatus } = await Location.requestForegroundPermissionsAsync()
+  // Foreground only — silent ask, will use cached status if already answered.
+  // Background is requested separately via a user-initiated opt-in (see
+  // ensureBackgroundLocation in permissions.ts) so we don't prompt on every
+  // launch.
+  const fgStatus = await ensureForegroundLocation({ silent: true })
   if (fgStatus !== 'granted') return
 
-  const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync()
-  // Background is optional — foreground tracking still works without it
+  const bgStatus = await getBackgroundLocationStatus()
 
-  // Start background location task if permission granted
+  // Start background location task if user has previously opted into Always
   if (bgStatus === 'granted') {
     const isRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TASK)
     if (!isRegistered) {
@@ -62,8 +65,6 @@ export async function startLocationTracking(user: any) {
       })
     }
   }
-
-  const status = fgStatus
 
   // Check if user has any active jobs today
   const now = new Date()
