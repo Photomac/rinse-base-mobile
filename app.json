@@ -31,8 +31,12 @@
         "NSMicrophoneUsageDescription": "Rinsebase uses the microphone for SOS emergency audio alerts.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property and to send clock-out reminders when you leave a job site.",
         "NSLocationWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property.",
-        "UIBackgroundModes": ["location", "fetch"]
-      }
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
+      },
+      "buildNumber": "2"
     },
     "android": {
       "package": "com.rinsebase.app",
@@ -51,7 +55,8 @@
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_EXTERNAL_STORAGE"
-      ]
+      ],
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/favicon.png"
