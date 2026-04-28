@@ -19,18 +19,18 @@ export function LangProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Language>('en')
 
   useEffect(() => {
-    getLanguage().then(setLangState)
+    getLanguage().then(setLangState).catch(e => console.warn('Failed to load language:', e))
   }, [])
 
   function toggleLanguage() {
     const newLang = lang === 'en' ? 'es' : 'en'
     setLangState(newLang)
-    setLanguage(newLang)
+    setLanguage(newLang).catch(e => console.warn('Failed to save language:', e))
   }
 
   function setLang(l: Language) {
     setLangState(l)
-    setLanguage(l)
+    setLanguage(l).catch(e => console.warn('Failed to save language:', e))
   }
 
   return (

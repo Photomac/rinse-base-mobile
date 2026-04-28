@@ -47,9 +47,8 @@ export const translations = {
     sos_instruction2: 'If no response in 2 minutes, 911 will be called.',
     sos_warning: 'Only use in a genuine emergency',
     alert_sent: 'ALERT SENT', sos_sent_msg: 'Your owner and manager have been notified.',
-    sos_sent_msg2: 'Help is on the way.', your_gps: 'Your GPS coordinates',
-    call_911_in: '911 AUTO-CALL IN', im_ok: "I'm OK — Cancel SOS",
-    calling_911: 'Calling 911...', read_gps: 'Read your GPS coordinates to dispatcher',
+    sos_sent_msg2: 'Stay where you are if you can.', your_gps: 'Your GPS coordinates',
+    im_ok: "I'm OK — Cancel SOS",
     cancel_sos: "Tap I'm OK if this was a mistake",
     // Photos
     take_photo: 'Take Photo', from_gallery: 'From Gallery', add_caption: 'Add a caption (optional)',
@@ -142,12 +141,11 @@ export const translations = {
     // SOS
     emergency_sos: 'SOS de Emergencia', hold_3_seconds: 'Presiona y mantén 3 segundos',
     sos_instruction: 'Esto alertará a tu dueño y gerente inmediatamente.',
-    sos_instruction2: 'Sin respuesta en 2 minutos, se llamará al 911.',
+    sos_instruction2: 'Para una emergencia que pone en peligro la vida, llama al 911 directamente.',
     sos_warning: 'Solo usar en una emergencia real',
     alert_sent: 'ALERTA ENVIADA', sos_sent_msg: 'Tu dueño y gerente han sido notificados.',
-    sos_sent_msg2: 'La ayuda está en camino.', your_gps: 'Tus coordenadas GPS',
-    call_911_in: 'LLAMADA AL 911 EN', im_ok: 'Estoy bien — Cancelar SOS',
-    calling_911: 'Llamando al 911...', read_gps: 'Lee tus coordenadas GPS al despachador',
+    sos_sent_msg2: 'Quédate donde estás si puedes.', your_gps: 'Tus coordenadas GPS',
+    im_ok: 'Estoy bien — Cancelar SOS',
     cancel_sos: 'Toca Estoy bien si fue un error',
     // Photos
     take_photo: 'Tomar foto', from_gallery: 'De galería', add_caption: 'Agregar descripción (opcional)',

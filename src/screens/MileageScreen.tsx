@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
+import { ensureForegroundLocation } from '../lib/permissions'
 
 const IRS_RATE = 0.70 // 2025 IRS standard mileage rate fallback
 const PURPOSES_KEYS = ['job_travel', 'supply_run_miles', 'equipment_pickup', 'client_meeting', 'training', 'other'] as const
@@ -81,11 +82,10 @@ export function MileageScreen({ user }: { user: any }) {
   }, [tracking, trackingStart])
 
   async function startTracking() {
-    const { status } = await Location.requestForegroundPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert(t('location_needed'), t('location_permission_msg'))
-      return
-    }
+    // User explicitly tapped Start tracking, so it's the right moment to
+    // surface a Settings deep-link if the permission was previously denied.
+    const status = await ensureForegroundLocation()
+    if (status !== 'granted') return
     milesRef.current = 0
     lastCoord.current = null
     setTrackingMiles(0)

@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Pressable, Alert, Vibration, ActivityIndicator, Animated, Platform } from 'react-native'
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Pressable, Alert, Vibration, ActivityIndicator, Animated, Platform, Linking } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { sendSOSNotification } from '../lib/notifications'
+import { ensureForegroundLocation } from '../lib/permissions'
 
 const HOLD_DURATION = 3000
-const COUNTDOWN_SECONDS = 120
 
 interface Props {
   user: any
@@ -19,21 +19,21 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
   const { t } = useLang()
   const [phase, setPhase] = useState<'ready' | 'holding' | 'sent' | 'responded'>('ready')
   const [holdProgress, setHoldProgress] = useState(0)
-  const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS)
   const [location, setLocation] = useState<any>(null)
   const [locationLabel, setLocationLabel] = useState('Getting your location...')
   const [responding, setResponding] = useState(false)
 
   const holdTimer = useRef<any>(null)
   const holdInterval = useRef<any>(null)
-  const countdownInterval = useRef<any>(null)
   const pulseAnim = useRef(new Animated.Value(1)).current
 
-  // Get GPS on mount
+  // Get GPS on mount. Use the central permission helper so we don't
+  // re-fire the OS prompt every time SOS is opened — silent mode reads
+  // the cached status and only requests if undetermined.
   useEffect(() => {
     async function getLocation() {
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync()
+        const status = await ensureForegroundLocation({ silent: true })
         if (status !== 'granted') {
           setLocationLabel('Location unavailable — enable in Settings')
           return
@@ -60,22 +60,9 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     }
   }, [phase])
 
-  // Countdown after SOS sent
-  useEffect(() => {
-    if (phase === 'sent') {
-      countdownInterval.current = setInterval(() => {
-        setCountdown(prev => {
-          if (prev <= 1) {
-            clearInterval(countdownInterval.current)
-            // TODO: Trigger 911 call via RapidSOS/Twilio
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
-    }
-    return () => clearInterval(countdownInterval.current)
-  }, [phase])
+  // (Auto-911 countdown removed — the app does not auto-dial 911. Crews
+  // can tap the explicit "Call 911" button in the sent-state UI to dial
+  // out themselves. This is also App Store safe — no false promises.)
 
   function startHold() {
     try { Vibration.vibrate(50) } catch(e) {}
@@ -134,14 +121,36 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
 
   async function markOK() {
     setResponding(true)
-    await supabase.from('sos_alerts')
-      .update({ status: 'false_alarm', resolved_at: new Date().toISOString() })
-      .eq('user_id', user.id)
-      .eq('status', 'active')
-    clearInterval(countdownInterval.current)
+    try {
+      await supabase.from('sos_alerts')
+        .update({ status: 'false_alarm', resolved_at: new Date().toISOString() })
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+    } catch (e: any) {
+      console.warn('SOS markOK error:', e)
+      // Don't block the UI on a network failure — the local state still
+      // resets so the crew member isn't stuck on the alert screen.
+    }
     try { Vibration.cancel() } catch(e) {}
     setResponding(false)
     setPhase('responded')
+  }
+
+  function call911() {
+    Alert.alert(
+      'Call 911?',
+      'This will dial 911 from your phone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Call 911',
+          style: 'destructive',
+          onPress: () => Linking.openURL('tel:911').catch(() => {
+            Alert.alert('Could not start call', 'Open your phone app and dial 911 directly.')
+          }),
+        },
+      ],
+    )
   }
 
   return (
@@ -169,8 +178,8 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
         <View style={styles.content}>
           <Text style={styles.instructionTitle}>Hold button for 3 seconds</Text>
           <Text style={styles.instructionSub}>
-            This will alert your owner and manager immediately.{'\n'}
-            If no response in 2 minutes, 911 will be called.
+            This will alert your owner and manager immediately with your GPS location.{'\n'}
+            For a life-threatening emergency, dial 911 directly.
           </Text>
 
           {/* Big SOS hold button */}
@@ -197,6 +206,9 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
               onPressOut={cancelHold}
               onPress={() => {}}
               activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Emergency SOS button"
+              accessibilityHint="Press and hold for 3 seconds to alert your owner and manager"
             >
               <Text style={styles.sosEmoji}>🆘</Text>
               <Text style={styles.sosButtonText}>SOS</Text>
@@ -237,18 +249,14 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
             </View>
           )}
 
-          {/* Countdown */}
-          <View style={styles.countdownCard}>
-            <Text style={styles.countdownLabel}>
-              {countdown > 0 ? '911 auto-call in' : t('calling_911')}
-            </Text>
-            <Text style={[styles.countdownNum, countdown <= 30 && { color: '#EF4444' }]}>
-              {countdown > 0 ? `${Math.floor(countdown/60)}:${String(countdown%60).padStart(2,'0')}` : '📞'}
-            </Text>
-            <Text style={styles.countdownSub}>
-              {countdown > 0 ? 'Tap "I\'m OK" if this was a mistake' : t('read_gps')}
-            </Text>
-          </View>
+          {/* If this is a real life-threatening emergency, dial 911 directly. */}
+          <TouchableOpacity onPress={call911} style={styles.call911Btn}
+            accessibilityRole="button"
+            accessibilityLabel="Call 911"
+            accessibilityHint="Dials 911 from your phone for a life-threatening emergency">
+            <Text style={styles.call911BtnText}>📞 Call 911</Text>
+            <Text style={styles.call911Sub}>For a life-threatening emergency</Text>
+          </TouchableOpacity>
 
           {/* I'm OK button */}
           <TouchableOpacity
@@ -310,10 +318,9 @@ const styles = StyleSheet.create({
   coordsLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6 },
   coordsValue: { color: '#fff', fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'], marginBottom: 4 },
   coordsAddress: { color: 'rgba(255,255,255,0.6)', fontSize: 12 },
-  countdownCard: { backgroundColor: 'rgba(239,68,68,0.15)', borderRadius: 14, padding: 12, width: '100%', alignItems: 'center', marginBottom: 16, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' },
-  countdownLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 },
-  countdownNum: { color: '#FCA5A5', fontSize: 40, fontWeight: '900', fontVariant: ['tabular-nums'] },
-  countdownSub: { color: 'rgba(255,255,255,0.5)', fontSize: 11, textAlign: 'center', marginTop: 4 },
+  call911Btn: { backgroundColor: '#DC2626', borderRadius: 14, padding: 16, width: '100%', alignItems: 'center', marginBottom: 16, borderWidth: 1, borderColor: '#B91C1C' },
+  call911BtnText: { color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: 0.5 },
+  call911Sub: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 4, fontWeight: '600' },
   okBtn: { backgroundColor: '#10B981', borderRadius: 14, padding: 18, width: '100%', alignItems: 'center' },
   okBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   respondedOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', alignItems: 'center', justifyContent: 'center', padding: 32 },

@@ -2,6 +2,7 @@ import { Platform } from 'react-native'
 import * as Notifications from 'expo-notifications'
 import * as Device from 'expo-device'
 import { supabase } from './supabase'
+import { ensureNotifications } from './permissions'
 
 // Configure how notifications appear when app is open.
 // iOS 17+ / expo-notifications >= 0.32 replaced shouldShowAlert with
@@ -19,14 +20,11 @@ export async function registerPushToken(user: any) {
   // Push notifications only work on real devices
   if (!Device.isDevice) return null
 
-  // Request permissions
-  const { status: existingStatus } = await Notifications.getPermissionsAsync()
-  let finalStatus = existingStatus
-  if (existingStatus !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync()
-    finalStatus = status
-  }
-  if (finalStatus !== 'granted') return null
+  // Silent: never throw a Settings deep-link Alert at app launch — login is
+  // the wrong moment for that. The user can re-trigger from the SOS screen
+  // or a future Settings page if they want to enable.
+  const status = await ensureNotifications({ silent: true })
+  if (status !== 'granted') return null
 
   // Get Expo push token (projectId pulled from app.json so it stays
   // in lockstep with the EAS Update URL)
@@ -73,9 +71,19 @@ export async function sendSOSNotification(tenantId: string, crewName: string, lo
     channelId: 'sos-alerts',
   }))
 
-  await fetch('https://exp.host/--/api/v2/push/send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(messages),
-  })
+  // SOS push goes through Expo's push gateway. If this throws, we want
+  // the failure logged loud — the SMS fallback (cron-based, server-side)
+  // still goes out, but we should know push didn't reach.
+  try {
+    const res = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(messages),
+    })
+    if (!res.ok) {
+      console.warn('Expo push send failed:', res.status, await res.text())
+    }
+  } catch (e) {
+    console.warn('Expo push send threw:', e)
+  }
 }
