@@ -30,7 +30,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     const [todayRes, monthRes] = await Promise.all([
       supabase.from('jobs')
-        .select('id, status, scheduled_start, scheduled_end, is_turnover, clients!jobs_client_id_fkey(full_name, phone), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
+        .select('id, tenant_id, status, scheduled_start, scheduled_end, is_turnover, clients!jobs_client_id_fkey(full_name, phone), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
         .eq('tenant_id', user.tenant_id)
         .gte('scheduled_start', todayStart.toISOString())
         .lte('scheduled_start', todayEnd.toISOString())
