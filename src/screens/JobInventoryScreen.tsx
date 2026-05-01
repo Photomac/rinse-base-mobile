@@ -26,7 +26,11 @@ type LogState = Record<string, { qty_used: number; needs_restock: boolean; notes
 
 export function JobInventoryScreen({ job, user, onBack }: Props) {
   const addrId = (job.client_addresses as any)?.id || job.address_id
-  const tenantId = job.tenant_id
+  // Prefer the logged-in crew's tenant_id — the dashboard query doesn't
+  // select job.tenant_id, so reading from `user` is more reliable. A crew
+  // can only see jobs in their own tenant anyway, so the values are
+  // equivalent when both exist.
+  const tenantId = user?.tenant_id || job.tenant_id
 
   const [items, setItems] = useState<Item[]>([])
   const [log, setLog] = useState<LogState>({})
