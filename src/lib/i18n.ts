@@ -161,6 +161,20 @@ export const translations = {
     messages_empty_sub: 'Owner, crew and client can all message here',
     type_message_placeholder: 'Type a message...',
     message_send_failed: 'Message failed to send. Try again.',
+    // Login + chat alerts
+    enter_email: 'Please enter your email address',
+    enter_password: 'Please enter your password',
+    failed_create_group: 'Failed to create group. Try again.',
+    failed_start_conversation: 'Failed to start conversation.',
+    // Default checklist labels (fallback when address has no template)
+    chk_kitchen: 'Kitchen — counters, sink, stovetop, microwave',
+    chk_bathrooms: 'Bathrooms — toilet, sink, tub/shower, mirrors',
+    chk_floors_vacuum: 'Floors — vacuum/sweep all rooms',
+    chk_floors_mop: 'Floors — mop hard surfaces',
+    chk_dust: 'Dust — all surfaces, fans, baseboards',
+    chk_trash: 'Trash — empty all bins',
+    chk_beds: 'Beds — make or change linens',
+    chk_walkthrough: 'Final walkthrough — nothing missed',
   },
   es: {
     // Common
@@ -320,6 +334,20 @@ export const translations = {
     messages_empty_sub: 'Dueño, equipo y cliente pueden enviar mensajes aquí',
     type_message_placeholder: 'Escribe un mensaje...',
     message_send_failed: 'Error al enviar mensaje. Inténtalo de nuevo.',
+    // Login + chat alerts
+    enter_email: 'Por favor ingresa tu correo electrónico',
+    enter_password: 'Por favor ingresa tu contraseña',
+    failed_create_group: 'Error al crear grupo. Inténtalo de nuevo.',
+    failed_start_conversation: 'No se pudo iniciar la conversación.',
+    // Default checklist labels (fallback when address has no template)
+    chk_kitchen: 'Cocina — mostradores, lavabo, estufa, microondas',
+    chk_bathrooms: 'Baños — inodoro, lavabo, tina/regadera, espejos',
+    chk_floors_vacuum: 'Pisos — aspirar/barrer todas las habitaciones',
+    chk_floors_mop: 'Pisos — trapear superficies duras',
+    chk_dust: 'Polvo — todas las superficies, ventiladores, zócalos',
+    chk_trash: 'Basura — vaciar todos los botes',
+    chk_beds: 'Camas — tender o cambiar sábanas',
+    chk_walkthrough: 'Recorrido final — nada olvidado',
   }
 }
 

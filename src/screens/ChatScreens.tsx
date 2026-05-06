@@ -5,6 +5,11 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { SLATE_DARK, GOLD, ROLE_COLORS } from '../lib/theme'
 
+const ROLE_KEYS: Record<string, string> = {
+  owner: 'role_owner', manager: 'role_manager', dispatcher: 'role_dispatcher',
+  lead_cleaner: 'role_lead_cleaner', cleaner: 'role_cleaner', trainee: 'role_trainee',
+}
+
 // ── Channel List Screen ───────────────────────────────────────────
 export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; onOpenChannel: (channel: any) => void; onNewDM: () => void }) {
   const { t, lang } = useLang()
@@ -48,7 +53,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
       name: groupName.trim(),
       participant_ids: allMembers,
     }).select().single()
-    if (error) { Alert.alert('Error', 'Failed to create group. Try again.'); setCreatingGroup(false); return }
+    if (error) { Alert.alert(t('error'), t('failed_create_group')); setCreatingGroup(false); return }
     if (data) {
       setShowNewGroup(false)
       setGroupName('')
@@ -73,7 +78,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
       name: null,
       participant_ids: [user.id, otherUser.id],
     }).select().single()
-    if (error) { Alert.alert('Error', 'Failed to start conversation.'); return }
+    if (error) { Alert.alert(t('error'), t('failed_start_conversation')); return }
     if (data) onOpenChannel({ ...data, displayName: otherUser.full_name })
     load()
   }
@@ -193,7 +198,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
                 )}
                 <View style={{ flex: 1 }}>
                   <Text style={styles.channelName}>{item.full_name}</Text>
-                  <Text style={styles.channelRole}>{item.role?.replace('_', ' ')}</Text>
+                  <Text style={styles.channelRole}>{t((ROLE_KEYS[item.role] || 'role_cleaner') as any)}</Text>
                   {dmChannel?.last_message && <Text style={styles.channelPreview} numberOfLines={1}>{dmChannel.last_message}</Text>}
                 </View>
                 <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
@@ -254,24 +259,24 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
         avatar_url: freshUser?.avatar_url || user.avatar_url || null,
         body: msg,
       })
-      if (error) { setText(msg); Alert.alert('Error', 'Message failed to send. Try again.'); setSending(false); return }
+      if (error) { setText(msg); Alert.alert(t('error'), t('message_send_failed')); setSending(false); return }
       await supabase.from('message_channels').update({
         last_message: msg,
         last_message_at: new Date().toISOString(),
       }).eq('id', channel.id)
       await loadMessages()
-    } catch (err) { setText(msg); Alert.alert('Error', 'Message failed to send.') }
+    } catch (err) { setText(msg); Alert.alert(t('error'), t('message_send_failed')) }
     setSending(false)
   }
 
-  function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
+  function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString(lang === 'es' ? 'es-MX' : 'en-US', { hour: 'numeric', minute: '2-digit' }) }
   function fmtDate(iso: string) {
     const d = new Date(iso)
     const today = new Date()
     if (d.toDateString() === today.toDateString()) return t('today')
     const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1)
     if (d.toDateString() === yesterday.toDateString()) return t('yesterday')
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    return d.toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { month: 'short', day: 'numeric' })
   }
 
   const flatData: any[] = []
@@ -324,7 +329,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
                   <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleOther]}>
                     {!isMe && (
                       <Text style={[styles.senderName, { color }]}>
-                        {item.sender_name?.split(' ')[0]} <Text style={styles.senderRole}>{item.sender_role?.replace('_', ' ')}</Text>
+                        {item.sender_name?.split(' ')[0]} <Text style={styles.senderRole}>{t((ROLE_KEYS[item.sender_role] || 'role_cleaner') as any)}</Text>
                       </Text>
                     )}
                     <Text style={[styles.msgText, isMe && styles.msgTextMe]}>{item.body}</Text>

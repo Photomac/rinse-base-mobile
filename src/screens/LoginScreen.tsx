@@ -11,7 +11,7 @@ export function LoginScreen() {
   const { t } = useLang()
 
   async function handleLogin() {
-    if (!email || !password) { Alert.alert(t('login_failed'), !email ? 'Please enter your email address' : 'Please enter your password'); return }
+    if (!email || !password) { Alert.alert(t('login_failed'), !email ? t('enter_email') : t('enter_password')); return }
     setLoading(true)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) Alert.alert(t('login_failed'), error.message)
@@ -24,7 +24,7 @@ export function LoginScreen() {
       <View style={styles.logoSection}>
         <Image source={require('../../assets/icon.png')} style={styles.logoMark} />
         <Text style={styles.appName}>Rinsebase</Text>
-        <Text style={styles.tagline}>STR Cleaning Software</Text>
+        <Text style={styles.tagline}>{t('tagline')}</Text>
       </View>
       <View style={styles.form}>
         <Text style={styles.label}>{t('email')}</Text>

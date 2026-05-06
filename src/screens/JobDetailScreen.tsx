@@ -22,15 +22,15 @@ const PAUSE_REASONS = [
   { value: 'Other', key: 'other' as const },
 ]
 
-const DEFAULT_CHECKLIST = [
-  { id: '1', label: 'Kitchen — counters, sink, stovetop, microwave', room: 'Kitchen', title: 'General clean' },
-  { id: '2', label: 'Bathrooms — toilet, sink, tub/shower, mirrors', room: 'Bathroom', title: 'General clean' },
-  { id: '3', label: 'Floors — vacuum/sweep all rooms', room: 'Floors', title: 'Vacuum/sweep' },
-  { id: '4', label: 'Floors — mop hard surfaces', room: 'Floors', title: 'Mop' },
-  { id: '5', label: 'Dust — all surfaces, fans, baseboards', room: 'General', title: 'Dust' },
-  { id: '6', label: 'Trash — empty all bins', room: 'General', title: 'Trash' },
-  { id: '7', label: 'Beds — make or change linens', room: 'Bedroom', title: 'Linens' },
-  { id: '8', label: 'Final walkthrough — nothing missed', room: 'General', title: 'Walkthrough' },
+const DEFAULT_CHECKLIST: { id: string; labelKey: 'chk_kitchen' | 'chk_bathrooms' | 'chk_floors_vacuum' | 'chk_floors_mop' | 'chk_dust' | 'chk_trash' | 'chk_beds' | 'chk_walkthrough'; room: string; title: string }[] = [
+  { id: '1', labelKey: 'chk_kitchen',       room: 'Kitchen',  title: 'General clean' },
+  { id: '2', labelKey: 'chk_bathrooms',     room: 'Bathroom', title: 'General clean' },
+  { id: '3', labelKey: 'chk_floors_vacuum', room: 'Floors',   title: 'Vacuum/sweep' },
+  { id: '4', labelKey: 'chk_floors_mop',    room: 'Floors',   title: 'Mop' },
+  { id: '5', labelKey: 'chk_dust',          room: 'General',  title: 'Dust' },
+  { id: '6', labelKey: 'chk_trash',         room: 'General',  title: 'Trash' },
+  { id: '7', labelKey: 'chk_beds',          room: 'Bedroom',  title: 'Linens' },
+  { id: '8', labelKey: 'chk_walkthrough',   room: 'General',  title: 'Walkthrough' },
 ]
 
 function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
@@ -426,7 +426,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                     {checked[item.id] && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.label}</Text>
+                    <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.labelKey ? t(item.labelKey) : item.label}</Text>
                     {item.requires_photo && !itemPhotos[item.id] && (
                       <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>{t('photo_required_short')}</Text>
                     )}
