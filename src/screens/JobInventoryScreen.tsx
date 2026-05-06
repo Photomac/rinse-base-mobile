@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { useLang } from '../contexts/LangContext'
+import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const NAVY = SLATE_DARK
@@ -25,6 +27,7 @@ interface Item {
 type LogState = Record<string, { qty_used: number; needs_restock: boolean; notes: string }>
 
 export function JobInventoryScreen({ job, user, onBack }: Props) {
+  const { t } = useLang()
   const addrId = (job.client_addresses as any)?.id || job.address_id
   // Prefer the logged-in crew's tenant_id — the dashboard query doesn't
   // select job.tenant_id, so reading from `user` is more reliable. A crew
@@ -104,7 +107,7 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
       }))
     if (rows.length > 0) {
       const { error } = await supabase.from('job_inventory_log').insert(rows)
-      if (error) { setSaving(false); Alert.alert('Could not save', error.message); return }
+      if (error) { setSaving(false); Alert.alert(t('could_not_save'), error.message); return }
     }
     setSaving(false); setSaved(true)
     setTimeout(() => setSaved(false), 2200)
@@ -122,28 +125,26 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack}><Text style={styles.back}>‹ Back</Text></TouchableOpacity>
-        <Text style={styles.title}>Supplies</Text>
+        <TouchableOpacity onPress={onBack}><Text style={styles.back}>‹ {t('back')}</Text></TouchableOpacity>
+        <Text style={styles.title}>{t('supplies')}</Text>
         <TouchableOpacity onPress={save} disabled={saving} style={[styles.saveBtn, saving && { opacity: 0.5 }]}>
-          <Text style={styles.saveBtnText}>{saving ? 'Saving...' : saved ? 'Saved' : 'Save'}</Text>
+          <Text style={styles.saveBtnText}>{saving ? t('saving') : saved ? t('saved') : t('save')}</Text>
         </TouchableOpacity>
       </View>
 
       {loading ? (
-        <View style={styles.center}><ActivityIndicator color={GOLD} /><Text style={styles.empty}>Loading supplies...</Text></View>
+        <View style={styles.center}><ActivityIndicator color={GOLD} /><Text style={styles.empty}>{t('loading_supplies')}</Text></View>
       ) : items.length === 0 ? (
         <View style={styles.center}>
-          <Text style={styles.emptyBig}>No supplies list for this property yet.</Text>
-          <Text style={styles.empty}>Ask the owner or homeowner to set one up in the client portal.</Text>
+          <Text style={styles.emptyBig}>{t('no_supplies_yet')}</Text>
+          <Text style={styles.empty}>{t('ask_owner_setup')}</Text>
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-          <Text style={styles.helper}>
-            Mark anything running low so it shows up on the homeowner's portal. Add a qty used if you restocked from the van.
-          </Text>
+          <Text style={styles.helper}>{t('supplies_helper')}</Text>
           {lowCount > 0 && (
             <View style={styles.lowBanner}>
-              <Text style={styles.lowBannerText}>{lowCount} item{lowCount === 1 ? '' : 's'} flagged as low</Text>
+              <Text style={styles.lowBannerText}>{ti(t('flagged_low'), { n: String(lowCount) })}</Text>
             </View>
           )}
 
@@ -157,7 +158,7 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
                     <View style={{ flex: 1 }}>
                       <Text style={styles.itemName}>{item.item_name}</Text>
                       {item.par_level != null && (
-                        <Text style={styles.itemMeta}>Par: {item.par_level} {item.unit || ''}</Text>
+                        <Text style={styles.itemMeta}>{t('par')}: {item.par_level} {item.unit || ''}</Text>
                       )}
                     </View>
                     <View style={styles.qtyGroup}>
@@ -169,7 +170,7 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
                       onPress={() => toggleLow(item.id)}
                       style={[styles.lowToggle, row.needs_restock && styles.lowToggleOn]}>
                       <Text style={[styles.lowToggleText, row.needs_restock && { color: '#fff' }]}>
-                        {row.needs_restock ? 'Low' : 'Mark low'}
+                        {row.needs_restock ? t('low') : t('mark_low')}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -179,15 +180,13 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
           ))}
 
           <View style={{ marginTop: 8, paddingHorizontal: 4 }}>
-            <Text style={styles.helper}>
-              Add a note for the owner (optional) — e.g. "Almost out, only 1 roll left"
-            </Text>
+            <Text style={styles.helper}>{t('note_helper')}</Text>
             {items.filter(i => (log[i.id]?.needs_restock)).map(item => (
               <View key={`note-${item.id}`} style={styles.noteCard}>
                 <Text style={styles.noteLabel}>{item.item_name}</Text>
                 <TextInput
                   style={styles.noteInput}
-                  placeholder="Add a note..."
+                  placeholder={t('add_note_placeholder')}
                   placeholderTextColor="#94A3B8"
                   value={log[item.id]?.notes || ''}
                   onChangeText={v => setNotes(item.id, v)}

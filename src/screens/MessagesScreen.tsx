@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Keyboard
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const TEAL = GOLD
@@ -21,7 +22,7 @@ interface Props {
 }
 
 export function MessagesScreen({ job, user, onBack }: Props) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [messages, setMessages] = useState<any[]>([])
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
@@ -62,21 +63,21 @@ export function MessagesScreen({ job, user, onBack }: Props) {
       sender_name: senderName,
       message: msg,
     })
-    if (error) { Alert.alert('Error', 'Message failed to send. Try again.'); setSending(false); return }
+    if (error) { Alert.alert(t('error'), t('message_send_failed')); setSending(false); return }
     setText('')
     await loadMessages()
     setSending(false)
   }
 
   function fmtTime(iso: string) {
-    return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    return new Date(iso).toLocaleTimeString(lang === 'es' ? 'es-MX' : 'en-US', { hour: 'numeric', minute: '2-digit' })
   }
 
   function fmtDate(iso: string) {
     const d = new Date(iso)
     const today = new Date()
-    if (d.toDateString() === today.toDateString()) return 'Today'
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    if (d.toDateString() === today.toDateString()) return t('today')
+    return d.toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { month: 'short', day: 'numeric' })
   }
 
   // Group messages by date
@@ -105,7 +106,7 @@ export function MessagesScreen({ job, user, onBack }: Props) {
         </TouchableOpacity>
         <View style={styles.headerInfo}>
           <Text style={styles.headerTitle} numberOfLines={1}>💬 {addr?.nickname || (job.clients as any)?.full_name}</Text>
-          <Text style={styles.headerSub}>{messages.length} messages</Text>
+          <Text style={styles.headerSub}>{ti(t('n_messages'), { n: String(messages.length) })}</Text>
         </View>
         <View style={{ width: 60 }} />
       </View>
@@ -152,8 +153,8 @@ export function MessagesScreen({ job, user, onBack }: Props) {
             ListEmptyComponent={
               <View style={styles.emptyState}>
                 <Text style={styles.emptyIcon}>💬</Text>
-                <Text style={styles.emptyTitle}>No messages yet</Text>
-                <Text style={styles.emptyText}>Owner, crew and client can all message here</Text>
+                <Text style={styles.emptyTitle}>{t('no_messages')}</Text>
+                <Text style={styles.emptyText}>{t('messages_empty_sub')}</Text>
               </View>
             }
           />
@@ -165,7 +166,7 @@ export function MessagesScreen({ job, user, onBack }: Props) {
             style={styles.input}
             value={text}
             onChangeText={setText}
-            placeholder="Type a message..."
+            placeholder={t('type_message_placeholder')}
             placeholderTextColor="#9CA3AF"
             multiline
             maxLength={500}

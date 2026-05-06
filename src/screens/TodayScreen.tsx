@@ -5,12 +5,12 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
-const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
-  scheduled:   { color: '#3B82F6', bg: '#DBEAFE', label: 'Scheduled'   },
-  en_route:    { color: '#8B5CF6', bg: '#EDE9FE', label: 'En route'    },
-  in_progress: { color: '#F59E0B', bg: '#FEF3C7', label: 'In progress' },
-  completed:   { color: '#10B981', bg: '#D1FAE5', label: 'Completed'   },
-  cancelled:   { color: '#9CA3AF', bg: '#F3F4F6', label: 'Cancelled'   },
+const STATUS_CONFIG: Record<string, { color: string; bg: string; key: string }> = {
+  scheduled:   { color: '#3B82F6', bg: '#DBEAFE', key: 'status_scheduled'   },
+  en_route:    { color: '#8B5CF6', bg: '#EDE9FE', key: 'status_en_route'    },
+  in_progress: { color: '#F59E0B', bg: '#FEF3C7', key: 'status_in_progress' },
+  completed:   { color: '#10B981', bg: '#D1FAE5', key: 'status_completed'   },
+  cancelled:   { color: '#9CA3AF', bg: '#F3F4F6', key: 'status_cancelled'   },
 }
 
 function fmtTime(iso: string) {
@@ -18,7 +18,7 @@ function fmtTime(iso: string) {
 }
 
 export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [jobs, setJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -55,15 +55,15 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
     
     if (!photos || photos.length === 0) {
       Alert.alert(
-        '📷 Photo Required',
-        'Please take at least one after photo before marking this job complete.',
-        [{ text: 'OK', style: 'default' }]
+        `📷 ${t('photo_required_alert')}`,
+        t('please_take_after_photo'),
+        [{ text: t('ok_btn'), style: 'default' }]
       )
       return
     }
-    Alert.alert('Complete?', t('complete_confirm'), [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Complete', onPress: () => updateStatus(job, 'completed') }
+    Alert.alert(t('complete_question'), t('complete_confirm'), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('complete'), onPress: () => updateStatus(job, 'completed') }
     ])
   }
 
@@ -82,11 +82,11 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
       <View style={styles.header}>
         <View>
           <Text style={styles.greeting}>{greeting}, {user.full_name?.split(' ')[0]} 👋</Text>
-          <Text style={styles.date}>{now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
+          <Text style={styles.date}>{now.toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
         </View>
         <View style={styles.badge}>
           <Text style={styles.badgeText}>{jobs.length}</Text>
-          <Text style={styles.badgeLabel}>jobs</Text>
+          <Text style={styles.badgeLabel}>{t('jobs_short')}</Text>
         </View>
       </View>
       {loading ? (
@@ -96,8 +96,8 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
           {jobs.length === 0 ? (
             <View style={styles.empty}>
               <Text style={styles.emptyIcon}>🌟</Text>
-              <Text style={styles.emptyTitle}>No jobs today</Text>
-              <Text style={styles.emptyText}>Enjoy your day off!</Text>
+              <Text style={styles.emptyTitle}>{t('no_jobs')}</Text>
+              <Text style={styles.emptyText}>{t('enjoy_day')}</Text>
             </View>
           ) : jobs.map((job: any) => {
             const st = STATUS_CONFIG[job.status] || STATUS_CONFIG.scheduled
@@ -116,28 +116,28 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
                     <Text style={styles.timeEnd}> – {fmtTime(job.scheduled_end)}</Text>
                   </View>
                   <View style={[styles.statusBadge, { backgroundColor: st.bg }]}>
-                    <Text style={[styles.statusText, { color: st.color }]}>{st.label}</Text>
+                    <Text style={[styles.statusText, { color: st.color }]}>{t(st.key as any)}</Text>
                   </View>
                 </View>
-                <Text style={styles.clientName}>{addr?.nickname || client?.full_name || 'Job'}{job.is_turnover ? '  🏠 Turnover' : ''}</Text>
+                <Text style={styles.clientName}>{addr?.nickname || client?.full_name || t('job_detail')}{job.is_turnover ? `  🏠 ${t('turnover')}` : ''}</Text>
                 <Text style={styles.address}>📍 {addr?.street}, {addr?.city}</Text>
                 {job.supplies_needed?.length > 0 && (
                   <View style={styles.suppliesBadge}>
                     <Text style={styles.suppliesText}>📦 {Array.isArray(job.supplies_needed) ? job.supplies_needed.join(', ') : job.supplies_needed}</Text>
                   </View>
                 )}
-                {addr?.lockbox_code && <Text style={styles.lockbox}>🔐 Lockbox: {addr.lockbox_code}</Text>}
+                {addr?.lockbox_code && <Text style={styles.lockbox}>🔐 {t('lockbox')}: {addr.lockbox_code}</Text>}
                 {!isDone && (
                   <View style={styles.actions}>
                     <TouchableOpacity style={styles.actionBtn} onPress={() => {
                       const q = addr?.lat ? `${addr.lat},${addr.lng}` : `${addr?.street}, ${addr?.city}`
                       Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(q)}`)
                     }}>
-                      <Text style={styles.actionBtnText}>🗺 Directions</Text>
+                      <Text style={styles.actionBtnText}>🗺 {t('directions')}</Text>
                     </TouchableOpacity>
                     {client?.phone && (
                       <TouchableOpacity style={styles.actionBtn} onPress={() => Linking.openURL(`tel:${client.phone}`)}>
-                        <Text style={styles.actionBtnText}>📞 Call</Text>
+                        <Text style={styles.actionBtnText}>📞 {t('call')}</Text>
                       </TouchableOpacity>
                     )}
                     {job.status === 'scheduled' && (
@@ -157,7 +157,7 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
                     )}
                   </View>
                 )}
-                {isDone && <Text style={styles.doneText}>✓ Completed</Text>}
+                {isDone && <Text style={styles.doneText}>✓ {t('completed')}</Text>}
               </TouchableOpacity>
             )
           })}

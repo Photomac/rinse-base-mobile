@@ -130,6 +130,37 @@ export const translations = {
     permission_needed: 'Permission needed',
     role_owner: 'Owner', role_manager: 'Manager', role_dispatcher: 'Dispatcher',
     role_lead_cleaner: 'Lead Cleaner', role_cleaner: 'Cleaner', role_trainee: 'Trainee',
+    // Inventory / supplies
+    saving: 'Saving...', saved: 'Saved',
+    loading_supplies: 'Loading supplies...',
+    no_supplies_yet: 'No supplies list for this property yet.',
+    ask_owner_setup: 'Ask the owner or homeowner to set one up in the client portal.',
+    supplies_helper: 'Mark anything running low so it shows up on the homeowner\'s portal. Add a qty used if you restocked from the van.',
+    flagged_low: '{{n}} flagged as low',
+    low: 'Low', mark_low: 'Mark low', par: 'Par',
+    note_helper: 'Add a note for the owner (optional) — e.g. "Almost out, only 1 roll left"',
+    add_note_placeholder: 'Add a note...',
+    could_not_save: 'Could not save',
+    // Photos extra
+    please_allow_camera: 'Please allow camera access to take photos.',
+    damage_photo_saved: 'Damage photo saved',
+    damage_flag_msg: 'Would you like to flag this for a damage report to be sent to the property owner?',
+    not_now: 'Not now',
+    flag_for_report: 'Flag for report',
+    photo_flagged: 'Flagged',
+    damage_report_sent: 'Damage report will be sent to the property owner.',
+    uploaded_ok: 'Uploaded',
+    delete_btn: 'Delete',
+    could_not_upload: 'Could not upload photo',
+    client_badge: 'Client',
+    // Today
+    please_take_after_photo: 'Please take at least one after photo before marking this job complete.',
+    ok_btn: 'OK', complete_question: 'Complete?', jobs_short: 'jobs',
+    // Messages
+    n_messages: '{{n}} messages',
+    messages_empty_sub: 'Owner, crew and client can all message here',
+    type_message_placeholder: 'Type a message...',
+    message_send_failed: 'Message failed to send. Try again.',
   },
   es: {
     // Common
@@ -258,6 +289,37 @@ export const translations = {
     permission_needed: 'Permiso necesario',
     role_owner: 'Dueño', role_manager: 'Gerente', role_dispatcher: 'Despachador',
     role_lead_cleaner: 'Limpiador principal', role_cleaner: 'Limpiador', role_trainee: 'Aprendiz',
+    // Inventory / supplies
+    saving: 'Guardando...', saved: 'Guardado',
+    loading_supplies: 'Cargando materiales...',
+    no_supplies_yet: 'Aún no hay lista de materiales para esta propiedad.',
+    ask_owner_setup: 'Pide al dueño o propietario que la configure en el portal del cliente.',
+    supplies_helper: 'Marca lo que se esté acabando para que aparezca en el portal del propietario. Agrega cantidad usada si reabasteciste de la camioneta.',
+    flagged_low: '{{n}} marcado como bajo',
+    low: 'Bajo', mark_low: 'Marcar bajo', par: 'Par',
+    note_helper: 'Agrega una nota para el dueño (opcional) — ej. "Casi se acaba, solo 1 rollo"',
+    add_note_placeholder: 'Agrega una nota...',
+    could_not_save: 'No se pudo guardar',
+    // Photos extra
+    please_allow_camera: 'Por favor permite el acceso a la cámara para tomar fotos.',
+    damage_photo_saved: 'Foto de daño guardada',
+    damage_flag_msg: '¿Quieres marcar esto para enviar un reporte de daño al dueño de la propiedad?',
+    not_now: 'Ahora no',
+    flag_for_report: 'Marcar para reporte',
+    photo_flagged: 'Marcado',
+    damage_report_sent: 'Se enviará un reporte de daño al dueño de la propiedad.',
+    uploaded_ok: 'Subido',
+    delete_btn: 'Eliminar',
+    could_not_upload: 'No se pudo subir la foto',
+    client_badge: 'Cliente',
+    // Today
+    please_take_after_photo: 'Toma al menos una foto de "después" antes de marcar este trabajo como completado.',
+    ok_btn: 'OK', complete_question: '¿Completar?', jobs_short: 'trabajos',
+    // Messages
+    n_messages: '{{n}} mensajes',
+    messages_empty_sub: 'Dueño, equipo y cliente pueden enviar mensajes aquí',
+    type_message_placeholder: 'Escribe un mensaje...',
+    message_send_failed: 'Error al enviar mensaje. Inténtalo de nuevo.',
   }
 }
 

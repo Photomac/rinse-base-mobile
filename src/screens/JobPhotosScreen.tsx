@@ -3,16 +3,17 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Alert, Act
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
+import { useLang } from '../contexts/LangContext'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
-const PHOTO_TYPES = [
-  { id: 'before',  label: '📷 Before', color: '#3B82F6' },
-  { id: 'after',   label: '✅ After',  color: '#10B981' },
-  { id: 'damage',  label: '⚠ Damage', color: '#EF4444' },
-  { id: 'general', label: '📸 Other',  color: '#8B5CF6' },
+const PHOTO_TYPES: { id: string; emoji: string; key: 'before' | 'after' | 'damage' | 'other_photo'; color: string }[] = [
+  { id: 'before',  emoji: '📷', key: 'before',      color: '#3B82F6' },
+  { id: 'after',   emoji: '✅', key: 'after',       color: '#10B981' },
+  { id: 'damage',  emoji: '⚠',  key: 'damage',      color: '#EF4444' },
+  { id: 'general', emoji: '📸', key: 'other_photo', color: '#8B5CF6' },
 ]
 
 interface Props {
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
+  const { t } = useLang()
   const [photos, setPhotos] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
@@ -50,7 +52,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   async function takePhoto() {
     const { status } = await ImagePicker.requestCameraPermissionsAsync()
     if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please allow camera access to take photos.')
+      Alert.alert(t('permission_needed'), t('please_allow_camera'))
       return
     }
 
@@ -125,35 +127,35 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
       
       if (selectedType === 'damage') {
         Alert.alert(
-          '⚠️ Damage photo saved',
-          'Would you like to flag this for a damage report to be sent to the property owner?',
+          `⚠️ ${t('damage_photo_saved')}`,
+          t('damage_flag_msg'),
           [
-            { text: 'Not now', style: 'cancel' },
+            { text: t('not_now'), style: 'cancel' },
             {
-              text: 'Flag for report',
+              text: t('flag_for_report'),
               onPress: async () => {
-                await supabase.from('job_photos').update({ 
-                  flagged_for_report: true 
+                await supabase.from('job_photos').update({
+                  flagged_for_report: true
                 }).eq('job_id', job.id).eq('photo_type', 'issue').is('flagged_for_report', null)
-                Alert.alert('✓ Flagged', 'Damage report will be sent to the property owner.')
+                Alert.alert(`✓ ${t('photo_flagged')}`, t('damage_report_sent'))
               }
             }
           ]
         )
       } else {
-        Alert.alert('✅ Uploaded', 'Photo saved successfully!')
+        Alert.alert(`✅ ${t('uploaded_ok')}`, t('photo_saved'))
       }
     } catch (e: any) {
-      Alert.alert('Upload failed', e.message || 'Could not upload photo')
+      Alert.alert(t('upload_failed'), e.message || t('could_not_upload'))
     }
     setUploading(false)
   }
 
   async function deletePhoto(photo: any) {
-    Alert.alert('Delete photo?', 'This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(t('delete_photo'), t('delete_confirm'), [
+      { text: t('cancel'), style: 'cancel' },
       {
-        text: 'Delete', style: 'destructive', onPress: async () => {
+        text: t('delete_btn'), style: 'destructive', onPress: async () => {
           await supabase.from('job_photos').delete().eq('id', photo.id)
           loadPhotos()
         }
@@ -170,9 +172,9 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack} style={styles.backBtn}>
-          <Text style={styles.backText}>← Back</Text>
+          <Text style={styles.backText}>← {t('back')}</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>📸 Job Photos</Text>
+        <Text style={styles.headerTitle}>📸 {t('job_photos')}</Text>
         <View style={{ width: 60 }} />
       </View>
 
@@ -190,7 +192,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
               style={[styles.typeBtn, selectedType === pt.id && { backgroundColor: pt.color, borderColor: pt.color }]}
               onPress={() => setSelectedType(pt.id)}
             >
-              <Text style={[styles.typeBtnText, selectedType === pt.id && { color: '#fff' }]}>{pt.label}</Text>
+              <Text style={[styles.typeBtnText, selectedType === pt.id && { color: '#fff' }]}>{pt.emoji} {t(pt.key)}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -200,13 +202,13 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
           style={styles.captionInput}
           value={caption}
           onChangeText={setCaption}
-          placeholder="Add a caption (optional)"
+          placeholder={t('add_caption')}
           placeholderTextColor="#9CA3AF"
         />
 
         {/* Visible to client toggle */}
         <TouchableOpacity style={styles.toggleRow} onPress={() => setVisibleToClient(v => !v)}>
-          <Text style={styles.toggleLabel}>Visible to client</Text>
+          <Text style={styles.toggleLabel}>{t('visible_to_client')}</Text>
           <View style={[styles.toggle, visibleToClient && styles.toggleOn]}>
             <View style={[styles.toggleThumb, visibleToClient && styles.toggleThumbOn]} />
           </View>
@@ -215,14 +217,14 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
         {/* Upload buttons */}
         <View style={styles.uploadRow}>
           <TouchableOpacity style={styles.cameraBtn} onPress={takePhoto} disabled={uploading}>
-            <Text style={styles.cameraBtnText}>📷 Take Photo</Text>
+            <Text style={styles.cameraBtnText}>📷 {t('take_photo')}</Text>
           </TouchableOpacity>
         </View>
 
         {uploading && (
           <View style={styles.uploadingBar}>
             <ActivityIndicator color={TEAL} size="small" />
-            <Text style={styles.uploadingText}>Uploading photo...</Text>
+            <Text style={styles.uploadingText}>{t('uploading')}</Text>
           </View>
         )}
 
@@ -232,20 +234,20 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
         ) : photos.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyIcon}>📸</Text>
-            <Text style={styles.emptyTitle}>No photos yet</Text>
-            <Text style={styles.emptyText}>Take before & after photos for this job</Text>
+            <Text style={styles.emptyTitle}>{t('no_photos')}</Text>
+            <Text style={styles.emptyText}>{t('no_photos_sub')}</Text>
           </View>
         ) : (
           <>
-            {[
-              { label: '📷 Before', photos: beforePhotos, color: '#3B82F6' },
-              { label: '✅ After',  photos: afterPhotos,  color: '#10B981' },
-              { label: '⚠ Damage', photos: damagePhotos,  color: '#EF4444' },
-              { label: '📸 Other', photos: generalPhotos, color: '#8B5CF6' },
-            ].filter(s => s.photos.length > 0).map(section => (
-              <View key={section.label} style={styles.section}>
+            {([
+              { emoji: '📷', key: 'before' as const,      photos: beforePhotos,  color: '#3B82F6' },
+              { emoji: '✅', key: 'after' as const,       photos: afterPhotos,   color: '#10B981' },
+              { emoji: '⚠',  key: 'damage' as const,      photos: damagePhotos,  color: '#EF4444' },
+              { emoji: '📸', key: 'other_photo' as const, photos: generalPhotos, color: '#8B5CF6' },
+            ]).filter(s => s.photos.length > 0).map(section => (
+              <View key={section.key} style={styles.section}>
                 <Text style={[styles.sectionTitle, { color: section.color }]}>
-                  {section.label} ({section.photos.length})
+                  {section.emoji} {t(section.key)} ({section.photos.length})
                 </Text>
                 <View style={styles.photoGrid}>
                   {section.photos.map(photo => (
@@ -260,7 +262,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
                       )}
                       {photo.visible_to_client && (
                         <View style={styles.clientBadge}>
-                          <Text style={styles.clientBadgeText}>Client</Text>
+                          <Text style={styles.clientBadgeText}>{t('client_badge')}</Text>
                         </View>
                       )}
                     </TouchableOpacity>
@@ -271,7 +273,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
           </>
         )}
 
-        <Text style={styles.hint}>Long press a photo to delete it</Text>
+        <Text style={styles.hint}>{t('long_press_delete')}</Text>
       </ScrollView>
     </SafeAreaView>
   )
