@@ -7,28 +7,28 @@ import { Image } from 'react-native'
 import { useLang } from '../contexts/LangContext'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
-const ROLE_LABELS: Record<string, string> = {
-  owner: 'Owner', manager: 'Manager', dispatcher: 'Dispatcher',
-  lead_cleaner: 'Lead Cleaner', cleaner: 'Cleaner', trainee: 'Trainee',
+const ROLE_KEYS: Record<string, string> = {
+  owner: 'role_owner', manager: 'role_manager', dispatcher: 'role_dispatcher',
+  lead_cleaner: 'role_lead_cleaner', cleaner: 'role_cleaner', trainee: 'role_trainee',
 }
 
 export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpdate?: (url: string) => void }) {
-  const { lang, toggleLanguage } = useLang()
+  const { lang, toggleLanguage, t } = useLang()
   const initials = user.full_name?.split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase() || '?'
   const [avatarUrl, setAvatarUrl] = React.useState(user.avatar_url || null)
   const [uploading, setUploading] = React.useState(false)
 
   async function pickAvatar() {
-    Alert.alert('Profile Photo', 'Choose a photo source', [
-      { text: 'Camera', onPress: takePhoto },
-      { text: 'Photo Library', onPress: pickFromGallery },
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(t('profile_photo'), t('choose_photo_source'), [
+      { text: t('camera_btn'), onPress: takePhoto },
+      { text: t('photo_library'), onPress: pickFromGallery },
+      { text: t('cancel'), style: 'cancel' },
     ])
   }
 
   async function takePhoto() {
     const { status } = await ImagePicker.requestCameraPermissionsAsync()
-    if (status !== 'granted') { Alert.alert('Permission needed', 'Allow camera access'); return }
+    if (status !== 'granted') { Alert.alert(t('permission_needed'), t('allow_camera_access')); return }
     const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1,1], quality: 0.7 })
     if (result.canceled) return
     uploadAvatar(result.assets[0].uri)
@@ -36,7 +36,7 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
 
   async function pickFromGallery() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') { Alert.alert('Permission needed', 'Allow photo access'); return }
+    if (status !== 'granted') { Alert.alert(t('permission_needed'), t('allow_photo_access')); return }
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1,1], quality: 0.7 })
     if (result.canceled) return
     uploadAvatar(result.assets[0].uri)
@@ -68,7 +68,7 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}><Text style={styles.headerTitle}>◉ Profile</Text></View>
+      <View style={styles.header}><Text style={styles.headerTitle}>◉ {t('profile_title')}</Text></View>
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.avatarSection}>
           <TouchableOpacity onPress={pickAvatar} disabled={uploading}>
@@ -82,11 +82,11 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
             </View>
           </TouchableOpacity>
           <Text style={styles.name}>{user.full_name}</Text>
-          <View style={styles.roleBadge}><Text style={styles.roleText}>{ROLE_LABELS[user.role] || user.role}</Text></View>
+          <View style={styles.roleBadge}><Text style={styles.roleText}>{t((ROLE_KEYS[user.role] || 'role_cleaner') as any)}</Text></View>
         </View>
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Contact info</Text>
-          {[['Email', user.email], ['Phone', user.phone || 'Not set']].map(([l, v]) => (
+          <Text style={styles.sectionTitle}>{t('contact_info')}</Text>
+          {[[t('email'), user.email], [t('phone'), user.phone || t('not_set')]].map(([l, v]) => (
             <View key={l} style={styles.row}>
               <Text style={styles.rowLabel}>{l}</Text>
               <Text style={styles.rowValue}>{v}</Text>
@@ -94,19 +94,19 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
           ))}
         </View>
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Pay structure</Text>
+          <Text style={styles.sectionTitle}>{t('pay_structure')}</Text>
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>Pay type</Text>
-            <Text style={styles.rowValue}>{user.pay_type === 'hourly' ? 'Hourly' : user.pay_type === 'per_job' ? 'Per job' : 'Hourly + turnover'}</Text>
+            <Text style={styles.rowLabel}>{t('pay_type')}</Text>
+            <Text style={styles.rowValue}>{user.pay_type === 'hourly' ? t('hourly') : user.pay_type === 'per_job' ? t('per_job') : t('mixed_pay')}</Text>
           </View>
-          {user.hourly_rate && <View style={styles.row}><Text style={styles.rowLabel}>Hourly rate</Text><Text style={styles.rowValue}>${Number(user.hourly_rate).toFixed(2)}/hr</Text></View>}
-          {user.per_job_rate && <View style={styles.row}><Text style={styles.rowLabel}>Per job rate</Text><Text style={styles.rowValue}>${Number(user.per_job_rate).toFixed(2)}/job</Text></View>}
+          {user.hourly_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('hourly_rate')}</Text><Text style={styles.rowValue}>${Number(user.hourly_rate).toFixed(2)}/hr</Text></View>}
+          {user.per_job_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('per_job_rate')}</Text><Text style={styles.rowValue}>${Number(user.per_job_rate).toFixed(2)}/job</Text></View>}
         </View>
         <TouchableOpacity style={styles.langBtn} onPress={toggleLanguage}>
           <Text style={styles.langBtnText}>{lang === 'en' ? '🇲🇽 Cambiar a Español' : '🇺🇸 Switch to English'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.signOutBtn} onPress={() => Alert.alert('Sign out', 'Are you sure?', [{ text: 'Cancel', style: 'cancel' }, { text: 'Sign out', style: 'destructive', onPress: () => supabase.auth.signOut() }])}>
-          <Text style={styles.signOutText}>Sign out</Text>
+        <TouchableOpacity style={styles.signOutBtn} onPress={() => Alert.alert(t('sign_out'), t('sign_out_confirm'), [{ text: t('cancel'), style: 'cancel' }, { text: t('sign_out'), style: 'destructive', onPress: () => supabase.auth.signOut() }])}>
+          <Text style={styles.signOutText}>{t('sign_out')}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

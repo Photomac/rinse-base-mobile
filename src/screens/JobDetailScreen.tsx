@@ -7,18 +7,19 @@ import { JobPhotosScreen } from './JobPhotosScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
 import { MessagesScreen } from './MessagesScreen'
 import { useLang } from '../contexts/LangContext'
+import { ti } from '../lib/i18n'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
 const PAUSE_REASONS = [
-  'Waiting for laundry',
-  'Going to another job',
-  'Supply run',
-  'Waiting for access',
-  'Break',
-  'Other',
+  { value: 'Waiting for laundry', key: 'waiting_laundry' as const },
+  { value: 'Going to another job', key: 'going_another_job' as const },
+  { value: 'Supply run', key: 'supply_run' as const },
+  { value: 'Waiting for access', key: 'waiting_access' as const },
+  { value: 'Break', key: 'break_time' as const },
+  { value: 'Other', key: 'other' as const },
 ]
 
 const DEFAULT_CHECKLIST = [
@@ -189,7 +190,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   async function confirmPause() {
-    if (!pauseReason) { Alert.alert('Please select a reason'); return }
+    if (!pauseReason) { Alert.alert(t('select_reason')); return }
     setSaving(true)
     const now = new Date()
     const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
@@ -229,11 +230,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     
     if (!afterPhotos || afterPhotos.length === 0) {
       Alert.alert(
-        '📸 Photo required',
-        'Please add at least one after photo before completing this job.',
+        `📸 ${t('photo_required_alert')}`,
+        t('add_after_photo_msg'),
         [
-          { text: 'Add photo', onPress: () => { setActivePhotoItem(null); setShowPhotos(true) } },
-          { text: 'Cancel', style: 'cancel' }
+          { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(null); setShowPhotos(true) } },
+          { text: t('cancel'), style: 'cancel' }
         ]
       )
       return
@@ -266,8 +267,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn}><Text style={styles.backText}>← Back</Text></TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{addr?.nickname || client?.full_name || 'Job detail'}</Text>
+        <TouchableOpacity onPress={onBack} style={styles.backBtn}><Text style={styles.backText}>← {t('back')}</Text></TouchableOpacity>
+        <Text style={styles.headerTitle} numberOfLines={1}>{addr?.nickname || client?.full_name || t('job_detail')}</Text>
         <View style={{ width: 60 }} />
       </View>
 
@@ -288,14 +289,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 const response = await fetch(asset.uri)
                 const blob = await response.blob()
                 const { error: upErr } = await supabase.storage.from('job-photos').upload(path, blob, { contentType: `image/${ext}`, upsert: true })
-                if (upErr) { Alert.alert('Upload failed', upErr.message); return }
+                if (upErr) { Alert.alert(t('upload_failed'), upErr.message); return }
                 const { data: urlData } = supabase.storage.from('job-photos').getPublicUrl(path)
                 await supabase.from('client_addresses').update({ photo_url: urlData.publicUrl }).eq('id', addr.id)
-                Alert.alert('Photo saved', 'Property photo has been added.')
-              } catch (err: any) { Alert.alert('Error', err.message || 'Failed to upload') }
+                Alert.alert(t('photo_saved'), t('property_photo_saved'))
+              } catch (err: any) { Alert.alert(t('error'), err.message || t('upload_failed')) }
             }}>
             <Text style={{ fontSize: 24, color: TEAL, marginBottom: 4 }}>📷</Text>
-            <Text style={{ fontSize: 12, color: TEAL, fontWeight: '600' }}>Take property photo</Text>
+            <Text style={{ fontSize: 12, color: TEAL, fontWeight: '600' }}>{t('take_property_photo')}</Text>
           </TouchableOpacity>
         )}
 
@@ -312,35 +313,35 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {addr?.lockbox_code && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>🔐</Text>
-              <View><Text style={styles.infoLabel}>Lockbox code</Text><Text style={styles.infoValue}>{addr.lockbox_code}</Text></View>
+              <View><Text style={styles.infoLabel}>{t('lockbox_code')}</Text><Text style={styles.infoValue}>{addr.lockbox_code}</Text></View>
             </View>
           )}
           {addr?.arrival_instructions && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📋</Text>
-              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>Arrival instructions</Text><Text style={styles.infoValue}>{addr.arrival_instructions}</Text></View>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('arrival_instructions')}</Text><Text style={styles.infoValue}>{addr.arrival_instructions}</Text></View>
             </View>
           )}
           {client?.phone && (
             <TouchableOpacity style={styles.callBtn} onPress={() => Linking.openURL(`tel:${client.phone}`)}>
-              <Text style={styles.callBtnText}>📞 Call {client.full_name?.split(' ')[0]}</Text>
+              <Text style={styles.callBtnText}>📞 {t('call_client')} {client.full_name?.split(' ')[0]}</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity style={styles.photosBtn} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
-            <Text style={styles.photosBtnText}>📸 Job Photos</Text>
+            <Text style={styles.photosBtnText}>📸 {t('job_photos')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.suppliesBtn} onPress={() => setShowInventory(true)}>
-            <Text style={styles.suppliesBtnText}>📦 Supplies</Text>
+            <Text style={styles.suppliesBtnText}>📦 {t('supplies')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.messagesBtn} onPress={() => setShowMessages(true)}>
-            <Text style={styles.messagesBtnText}>💬 Messages</Text>
+            <Text style={styles.messagesBtnText}>💬 {t('messages')}</Text>
           </TouchableOpacity>
         </View>
 
         {/* Time tracker card */}
         <View style={[styles.card, isClockedIn && { borderColor: TEAL, borderWidth: 2 }]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={styles.sectionTitle}>⏱ Time tracker</Text>
+            <Text style={styles.sectionTitle}>⏱ {t('time_tracker')}</Text>
             {elapsedMinutes > 0 && (
               <Text style={{ fontSize: 18, fontWeight: '900', color: TEAL }}>{fmtDuration(elapsedMinutes)}</Text>
             )}
@@ -350,7 +351,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {timeEntries.filter(e => e.clocked_out_at).map((entry, i) => (
             <View key={entry.id} style={styles.timeEntry}>
               <Text style={styles.timeEntryText}>
-                Session {i + 1}: {fmtTime(entry.clocked_in_at)} – {fmtTime(entry.clocked_out_at)}
+                {t('session')} {i + 1}: {fmtTime(entry.clocked_in_at)} – {fmtTime(entry.clocked_out_at)}
               </Text>
               <Text style={styles.timeEntryDuration}>{fmtDuration(entry.duration_minutes || 0)}</Text>
               {entry.pause_reason && <Text style={styles.timeEntryReason}>⏸ {entry.pause_reason}</Text>}
@@ -361,14 +362,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {isClockedIn && (
             <View style={[styles.timeEntry, { backgroundColor: '#ECFDF5', borderColor: TEAL }]}>
               <Text style={[styles.timeEntryText, { color: '#065F46' }]}>
-                🟢 Active since {fmtTime(activeEntry.clocked_in_at)}
+                🟢 {t('active_since')} {fmtTime(activeEntry.clocked_in_at)}
               </Text>
             </View>
           )}
 
           {isPaused && (
             <View style={[styles.timeEntry, { backgroundColor: '#FEF9C3', borderColor: '#FCD34D' }]}>
-              <Text style={[styles.timeEntryText, { color: '#854D0E' }]}>⏸ Paused</Text>
+              <Text style={[styles.timeEntryText, { color: '#854D0E' }]}>⏸ {t('paused')}</Text>
             </View>
           )}
 
@@ -383,12 +384,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               {isClockedIn && (
                 <>
                   <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#F59E0B', flex: 1 }]} onPress={handlePause} disabled={saving}>
-                    <Text style={styles.clockBtnText}>⏸ Pause</Text>
+                    <Text style={styles.clockBtnText}>⏸ {t('pause')}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#10B981', flex: 1 }]} onPress={() => {
-                    Alert.alert('Complete job?', `Total time: ${fmtDuration(elapsedMinutes)}`, [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Complete', onPress: completeJob }
+                    Alert.alert(t('complete_job_confirm'), `${t('total_time')}: ${fmtDuration(elapsedMinutes)}`, [
+                      { text: t('cancel'), style: 'cancel' },
+                      { text: t('complete_job'), onPress: completeJob }
                     ])
                   }} disabled={saving}>
                     <Text style={styles.clockBtnText}>✓ Complete</Text>
@@ -408,7 +409,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         {isStarted && (
           <View style={styles.card}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <Text style={styles.sectionTitle}>Cleaning checklist</Text>
+              <Text style={styles.sectionTitle}>{t('cleaning_checklist')}</Text>
               <Text style={{ fontSize: 13, fontWeight: '700', color: TEAL }}>{completedCount}/{checklist.length}</Text>
             </View>
             <View style={styles.progressBg}><View style={[styles.progressFill, { width: `${progressPct}%` as any }]} /></View>
@@ -427,7 +428,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.label}</Text>
                     {item.requires_photo && !itemPhotos[item.id] && (
-                      <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>Photo required</Text>
+                      <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>{t('photo_required_short')}</Text>
                     )}
                   </View>
                 </TouchableOpacity>
@@ -445,15 +446,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         {/* Notes */}
         {isStarted && (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Notes (optional)</Text>
-            <TextInput style={styles.notesInput} value={notes} onChangeText={setNotes} placeholder="Any issues or observations..." placeholderTextColor="#9CA3AF" multiline numberOfLines={3} />
+            <Text style={styles.sectionTitle}>{t('notes_optional')}</Text>
+            <TextInput style={styles.notesInput} value={notes} onChangeText={setNotes} placeholder={t('notes_placeholder')} placeholderTextColor="#9CA3AF" multiline numberOfLines={3} />
           </View>
         )}
 
         {job.status === 'completed' && (
           <View style={styles.completedBanner}>
-            <Text style={{ color: '#065F46', fontSize: 16, fontWeight: '800' }}>✓ Job completed</Text>
-            {elapsedMinutes > 0 && <Text style={{ color: '#065F46', fontSize: 13, marginTop: 4 }}>Total time: {fmtDuration(elapsedMinutes)}</Text>}
+            <Text style={{ color: '#065F46', fontSize: 16, fontWeight: '800' }}>✓ {t('job_completed')}</Text>
+            {elapsedMinutes > 0 && <Text style={{ color: '#065F46', fontSize: 13, marginTop: 4 }}>{t('total_time')}: {fmtDuration(elapsedMinutes)}</Text>}
           </View>
         )}
       </ScrollView>
@@ -462,23 +463,23 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       <Modal visible={showPauseModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>⏸ Why are you leaving?</Text>
-            <Text style={styles.modalSub}>This helps calculate your hours accurately</Text>
-            {PAUSE_REASONS.map(reason => (
+            <Text style={styles.modalTitle}>⏸ {t('pause_title')}</Text>
+            <Text style={styles.modalSub}>{t('pause_subtitle')}</Text>
+            {PAUSE_REASONS.map(({ value, key }) => (
               <TouchableOpacity
-                key={reason}
-                style={[styles.reasonBtn, pauseReason === reason && styles.reasonBtnActive]}
-                onPress={() => setPauseReason(reason)}
+                key={value}
+                style={[styles.reasonBtn, pauseReason === value && styles.reasonBtnActive]}
+                onPress={() => setPauseReason(value)}
               >
-                <Text style={[styles.reasonBtnText, pauseReason === reason && { color: '#fff' }]}>{reason}</Text>
+                <Text style={[styles.reasonBtnText, pauseReason === value && { color: '#fff' }]}>{t(key)}</Text>
               </TouchableOpacity>
             ))}
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
               <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setShowPauseModal(false); setPauseReason('') }}>
-                <Text style={{ color: '#6B7280', fontWeight: '600' }}>Cancel</Text>
+                <Text style={{ color: '#6B7280', fontWeight: '600' }}>{t('cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.modalConfirmBtn, !pauseReason && { opacity: 0.4 }]} onPress={confirmPause} disabled={!pauseReason || saving}>
-                {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>Pause job</Text>}
+                {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>{t('pause_job')}</Text>}
               </TouchableOpacity>
             </View>
           </View>

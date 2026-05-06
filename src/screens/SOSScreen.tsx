@@ -20,7 +20,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
   const [phase, setPhase] = useState<'ready' | 'holding' | 'sent' | 'responded'>('ready')
   const [holdProgress, setHoldProgress] = useState(0)
   const [location, setLocation] = useState<any>(null)
-  const [locationLabel, setLocationLabel] = useState('Getting your location...')
+  const [locationLabel, setLocationLabel] = useState('')
   const [responding, setResponding] = useState(false)
 
   const holdTimer = useRef<any>(null)
@@ -31,18 +31,19 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
   // re-fire the OS prompt every time SOS is opened — silent mode reads
   // the cached status and only requests if undetermined.
   useEffect(() => {
+    setLocationLabel(t('getting_location'))
     async function getLocation() {
       try {
         const status = await ensureForegroundLocation({ silent: true })
         if (status !== 'granted') {
-          setLocationLabel('Location unavailable — enable in Settings')
+          setLocationLabel(t('location_unavailable'))
           return
         }
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
         setLocation(loc.coords)
         setLocationLabel(`${loc.coords.latitude.toFixed(6)}, ${loc.coords.longitude.toFixed(6)}`)
       } catch (e) {
-        setLocationLabel('Could not get location')
+        setLocationLabel(t('location_error'))
       }
     }
     getLocation()
@@ -138,15 +139,15 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
 
   function call911() {
     Alert.alert(
-      'Call 911?',
-      'This will dial 911 from your phone.',
+      t('call_911_title'),
+      t('call_911_msg'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('cancel'), style: 'cancel' },
         {
-          text: 'Call 911',
+          text: t('call_911_btn'),
           style: 'destructive',
           onPress: () => Linking.openURL('tel:911').catch(() => {
-            Alert.alert('Could not start call', 'Open your phone app and dial 911 directly.')
+            Alert.alert(t('location_error'), 'Open your phone app and dial 911 directly.')
           }),
         },
       ],
@@ -160,7 +161,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
       <View style={styles.header}>
         {phase !== 'sent' && (
           <TouchableOpacity onPress={onCancel} style={styles.cancelTopBtn}>
-            <Text style={styles.cancelTopText}>← Cancel</Text>
+            <Text style={styles.cancelTopText}>← {t('cancel')}</Text>
           </TouchableOpacity>
         )}
         <Text style={styles.headerTitle}>{t('emergency_sos')}</Text>
@@ -176,10 +177,10 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
       {/* Main content */}
       {phase === 'ready' || phase === 'holding' ? (
         <View style={styles.content}>
-          <Text style={styles.instructionTitle}>Hold button for 3 seconds</Text>
+          <Text style={styles.instructionTitle}>{t('hold_3_seconds')}</Text>
           <Text style={styles.instructionSub}>
-            This will alert your owner and manager immediately with your GPS location.{'\n'}
-            For a life-threatening emergency, dial 911 directly.
+            {t('sos_instruction')}{'\n'}
+            {t('sos_instruction2')}
           </Text>
 
           {/* Big SOS hold button */}
@@ -215,7 +216,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
               <Text style={styles.sosHoldText}>
                 {phase === 'holding'
                   ? `${Math.ceil((100 - holdProgress) / 33.3)}...`
-                  : 'Hold 3 sec'}
+                  : t('hold_btn_ready')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -254,8 +255,8 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
             accessibilityRole="button"
             accessibilityLabel="Call 911"
             accessibilityHint="Dials 911 from your phone for a life-threatening emergency">
-            <Text style={styles.call911BtnText}>📞 Call 911</Text>
-            <Text style={styles.call911Sub}>For a life-threatening emergency</Text>
+            <Text style={styles.call911BtnText}>📞 {t('call_911_btn')}</Text>
+            <Text style={styles.call911Sub}>{t('call_911_sub')}</Text>
           </TouchableOpacity>
 
           {/* I'm OK button */}
@@ -276,10 +277,10 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
         <View style={styles.respondedOverlay}>
           <View style={styles.respondedCard}>
             <Text style={styles.respondedEmoji}>✓</Text>
-            <Text style={styles.respondedTitle}>False alarm reported</Text>
-            <Text style={styles.respondedSub}>Your team has been notified this was a false alarm.</Text>
+            <Text style={styles.respondedTitle}>{t('false_alarm_title')}</Text>
+            <Text style={styles.respondedSub}>{t('false_alarm_sub')}</Text>
             <TouchableOpacity style={styles.respondedBtn} onPress={onCancel}>
-              <Text style={styles.respondedBtnText}>Close</Text>
+              <Text style={styles.respondedBtnText}>{t('close')}</Text>
             </TouchableOpacity>
           </View>
         </View>

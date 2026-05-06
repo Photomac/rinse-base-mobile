@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -13,7 +14,10 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled:   '#9CA3AF',
 }
 
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const STATUS_LABEL_KEYS: Record<string, string> = {
+  scheduled: 'status_scheduled', en_route: 'status_en_route',
+  in_progress: 'status_in_progress', completed: 'status_completed', cancelled: 'status_cancelled',
+}
 
 function isSameDay(a: Date, b: Date) { return a.toDateString() === b.toDateString() }
 function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
@@ -23,6 +27,7 @@ type ViewMode = 'month' | 'week'
 
 export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
   const { t } = useLang()
+  const DAY_NAMES = [t('day_sun'), t('day_mon'), t('day_tue'), t('day_wed'), t('day_thu'), t('day_fri'), t('day_sat')]
   const [jobs, setJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedDate, setSelectedDate] = useState(new Date())
@@ -102,11 +107,11 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
         {(['month', 'week'] as ViewMode[]).map(v => (
           <TouchableOpacity key={v} style={[styles.viewBtn, view === v && styles.viewBtnActive]} onPress={() => setView(v)}>
             <Text style={[styles.viewBtnText, view === v && styles.viewBtnTextActive]}>
-              {v === 'month' ? 'Month' : 'Week'}
+              {v === 'month' ? t('month_view') : t('week_view')}
             </Text>
           </TouchableOpacity>
         ))}
-        <Text style={styles.jobCountLabel}>{jobs.length} jobs</Text>
+        <Text style={styles.jobCountLabel}>{ti(t('n_jobs'), { n: String(jobs.length) })}</Text>
       </View>
 
       <ScrollView>
@@ -185,7 +190,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
         <View style={styles.selectedDaySection}>
           <Text style={styles.selectedDayLabel}>
             {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-            {isSameDay(selectedDate, now) ? ' · Today' : ''}
+            {isSameDay(selectedDate, now) ? ` · ${t('today')}` : ''}
           </Text>
           {selectedJobs.length === 0 ? (
             <View style={styles.emptyDay}>
@@ -200,12 +205,12 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}</Text>
                     <View style={[styles.statusBadge, { backgroundColor: color + '22' }]}>
-                      <Text style={[styles.statusText, { color }]}>{job.status.replace('_', ' ')}</Text>
+                      <Text style={[styles.statusText, { color }]}>{t((STATUS_LABEL_KEYS[job.status] || 'status_scheduled') as any)}</Text>
                     </View>
                   </View>
                   <Text style={styles.jobClient}>{addr?.nickname || (job.clients as any)?.full_name}</Text>
                   <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>
-                  {job.is_turnover && <Text style={styles.turnoverTag}>🏠 Turnover</Text>}
+                  {job.is_turnover && <Text style={styles.turnoverTag}>🏠 {t('turnover')}</Text>}
                 </View>
                 <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
               </TouchableOpacity>
