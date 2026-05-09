@@ -24,7 +24,11 @@ interface Item {
   unit: string | null
 }
 
-type LogState = Record<string, { qty_used: number; needs_restock: boolean; notes: string }>
+// qty_remaining is the cycle-count value entered at end of clean. NULL means
+// crew didn't count this item — they may have only logged usage / a manual
+// low flag. The DB trigger auto-flags needs_restock when qty_remaining drops
+// below par, so crew don't need to mark it themselves on counted items.
+type LogState = Record<string, { qty_used: number; qty_remaining: string; needs_restock: boolean; notes: string }>
 
 export function JobInventoryScreen({ job, user, onBack }: Props) {
   const { t } = useLang()
@@ -52,7 +56,7 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
         .order('category', { nullsFirst: false })
         .order('item_name'),
       supabase.from('job_inventory_log')
-        .select('inventory_id, qty_used, needs_restock, notes')
+        .select('inventory_id, qty_used, qty_remaining, needs_restock, notes')
         .eq('job_id', job.id),
     ])
     setItems(invRes.data ?? [])
@@ -60,6 +64,7 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
     ;(logRes.data ?? []).forEach((l: any) => {
       map[l.inventory_id] = {
         qty_used: l.qty_used ?? 0,
+        qty_remaining: l.qty_remaining != null ? String(l.qty_remaining) : '',
         needs_restock: !!l.needs_restock,
         notes: l.notes ?? '',
       }
@@ -70,13 +75,20 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
 
   function ensureRow(id: string) {
     if (log[id]) return log[id]
-    return { qty_used: 0, needs_restock: false, notes: '' }
+    return { qty_used: 0, qty_remaining: '', needs_restock: false, notes: '' }
   }
 
   function setQty(id: string, delta: number) {
     const row = ensureRow(id)
     const nextQty = Math.max(0, row.qty_used + delta)
     setLog(prev => ({ ...prev, [id]: { ...row, qty_used: nextQty } }))
+  }
+
+  function setRemaining(id: string, raw: string) {
+    // Numeric only, allow empty (= unrecorded). The DB trigger handles
+    // auto-flagging restock when this value drops below par_level.
+    const cleaned = raw.replace(/[^0-9]/g, '')
+    setLog(prev => ({ ...prev, [id]: { ...ensureRow(id), qty_remaining: cleaned } }))
   }
 
   function toggleLow(id: string) {
@@ -95,13 +107,14 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
     // InventoryTab so the crew can edit and resave without duplicating.
     await supabase.from('job_inventory_log').delete().eq('job_id', job.id)
     const rows = Object.entries(log)
-      .filter(([, v]) => v.qty_used > 0 || v.needs_restock)
+      .filter(([, v]) => v.qty_used > 0 || v.needs_restock || v.qty_remaining !== '')
       .map(([inventory_id, v]) => ({
         tenant_id: tenantId,
         job_id: job.id,
         inventory_id,
         item_name: items.find(i => i.id === inventory_id)?.item_name || '',
         qty_used: v.qty_used || 0,
+        qty_remaining: v.qty_remaining === '' ? null : Number(v.qty_remaining),
         needs_restock: !!v.needs_restock,
         notes: v.notes?.trim() || null,
       }))
@@ -119,7 +132,17 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
     acc[key].push(it)
     return acc
   }, {})
-  const lowCount = Object.values(log).filter(v => v.needs_restock).length
+  // Mirror the DB trigger logic so the banner is accurate before save:
+  // count anything manually flagged OR cycle-counted below par.
+  function isBelowPar(item: Item, row: { qty_remaining: string }): boolean {
+    if (row.qty_remaining === '' || item.par_level == null) return false
+    return Number(row.qty_remaining) < item.par_level
+  }
+  const lowCount = items.reduce((n, item) => {
+    const row = log[item.id]
+    if (!row) return n
+    return n + (row.needs_restock || isBelowPar(item, row) ? 1 : 0)
+  }, 0)
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
@@ -152,27 +175,53 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
             <View key={cat} style={styles.categoryCard}>
               <Text style={styles.categoryHeader}>{cat}</Text>
               {rows.map(item => {
-                const row = log[item.id] || { qty_used: 0, needs_restock: false, notes: '' }
+                const row = log[item.id] || { qty_used: 0, qty_remaining: '', needs_restock: false, notes: '' }
+                const belowPar = isBelowPar(item, row)
                 return (
                   <View key={item.id} style={styles.itemRow}>
-                    <View style={{ flex: 1 }}>
+                    <View style={styles.itemHead}>
                       <Text style={styles.itemName}>{item.item_name}</Text>
                       {item.par_level != null && (
-                        <Text style={styles.itemMeta}>{t('par')}: {item.par_level} {item.unit || ''}</Text>
+                        <Text style={styles.itemMeta}>{t('par')}: {item.par_level}{item.unit ? ' ' + item.unit : ''}</Text>
                       )}
                     </View>
-                    <View style={styles.qtyGroup}>
-                      <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(item.id, -1)}><Text style={styles.qtyBtnText}>−</Text></TouchableOpacity>
-                      <Text style={styles.qtyNum}>{row.qty_used}</Text>
-                      <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(item.id, +1)}><Text style={styles.qtyBtnText}>+</Text></TouchableOpacity>
+                    <View style={styles.itemControls}>
+                      {/* Cycle count — primary action */}
+                      <View style={styles.countGroup}>
+                        <Text style={styles.countLabel}>{t('count_left')}</Text>
+                        <TextInput
+                          style={[styles.countInput, belowPar && styles.countInputLow]}
+                          keyboardType="number-pad"
+                          value={row.qty_remaining}
+                          placeholder="—"
+                          placeholderTextColor="#CBD5E1"
+                          onChangeText={v => setRemaining(item.id, v)}
+                          maxLength={4}
+                        />
+                      </View>
+                      {/* Qty used — secondary, kept for crews who restock from the van */}
+                      <View style={styles.qtyGroup}>
+                        <Text style={styles.countLabel}>{t('used_short')}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(item.id, -1)}><Text style={styles.qtyBtnText}>−</Text></TouchableOpacity>
+                          <Text style={styles.qtyNum}>{row.qty_used}</Text>
+                          <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(item.id, +1)}><Text style={styles.qtyBtnText}>+</Text></TouchableOpacity>
+                        </View>
+                      </View>
+                      {/* Manual low toggle — for items the crew didn't count but knows are low */}
+                      <TouchableOpacity
+                        onPress={() => toggleLow(item.id)}
+                        style={[styles.lowToggle, (row.needs_restock || belowPar) && styles.lowToggleOn]}
+                        disabled={belowPar /* DB trigger will set this anyway */}
+                      >
+                        <Text style={[styles.lowToggleText, (row.needs_restock || belowPar) && { color: '#fff' }]}>
+                          {belowPar ? t('low') : row.needs_restock ? t('low') : t('mark_low')}
+                        </Text>
+                      </TouchableOpacity>
                     </View>
-                    <TouchableOpacity
-                      onPress={() => toggleLow(item.id)}
-                      style={[styles.lowToggle, row.needs_restock && styles.lowToggleOn]}>
-                      <Text style={[styles.lowToggleText, row.needs_restock && { color: '#fff' }]}>
-                        {row.needs_restock ? t('low') : t('mark_low')}
-                      </Text>
-                    </TouchableOpacity>
+                    {belowPar && (
+                      <Text style={styles.belowParHint}>{t('below_par')}</Text>
+                    )}
                   </View>
                 )
               })}
@@ -234,13 +283,22 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#F1F5F9',
   },
   itemRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: 12, paddingVertical: 10,
     borderBottomWidth: 1, borderBottomColor: '#F1F5F9',
   },
+  itemHead: { marginBottom: 8 },
   itemName: { fontSize: 14, fontWeight: '600', color: NAVY },
   itemMeta: { fontSize: 11, color: '#94A3B8', marginTop: 2 },
-  qtyGroup: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  itemControls: { flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
+  countGroup: { alignItems: 'flex-start' },
+  countLabel: { fontSize: 10, fontWeight: '700', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },
+  countInput: {
+    width: 56, height: 36, borderRadius: 7, borderWidth: 1, borderColor: '#CBD5E1',
+    paddingHorizontal: 8, fontSize: 15, fontWeight: '700', color: NAVY,
+    textAlign: 'center', backgroundColor: '#fff',
+  },
+  countInputLow: { borderColor: AMBER, backgroundColor: '#FFFBEB' },
+  qtyGroup: { alignItems: 'flex-start' },
   qtyBtn: {
     width: 28, height: 28, borderRadius: 6, borderWidth: 1, borderColor: '#E2E8F0',
     backgroundColor: '#F8FAFC', justifyContent: 'center', alignItems: 'center',
@@ -248,11 +306,13 @@ const styles = StyleSheet.create({
   qtyBtnText: { fontSize: 18, color: NAVY, lineHeight: 20 },
   qtyNum: { minWidth: 18, textAlign: 'center', fontSize: 14, fontWeight: '700', color: NAVY },
   lowToggle: {
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6,
+    marginLeft: 'auto', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6,
     borderWidth: 1, borderColor: '#FCD34D', backgroundColor: '#FFFBEB',
+    alignSelf: 'flex-end',
   },
   lowToggleOn: { backgroundColor: AMBER, borderColor: AMBER },
   lowToggleText: { color: '#92400E', fontWeight: '700', fontSize: 11 },
+  belowParHint: { fontSize: 10, color: '#92400E', fontWeight: '700', marginTop: 6, fontStyle: 'italic' },
 
   noteCard: {
     backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#E2E8F0',
