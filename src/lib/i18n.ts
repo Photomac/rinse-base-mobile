@@ -35,6 +35,7 @@ export const translations = {
     status_completed: 'Completed', status_cancelled: 'Cancelled',
     // Job detail
     job_detail: 'Job detail', arrival_instructions: 'Arrival instructions', lockbox_code: 'Lockbox code',
+    beds_short: 'bed', baths_short: 'bath', sqft_short: 'sqft',
     clock_in: 'Clock in — Start job', clock_in_short: 'Clock in', pause: 'Pause', resume: 'Resume',
     complete_job: 'Complete', job_completed: 'Job completed', total_time: 'Total time',
     time_tracker: 'Time tracker', active_since: 'Active since', paused: 'Paused', session: 'Session',
@@ -210,6 +211,7 @@ export const translations = {
     status_completed: 'Completado', status_cancelled: 'Cancelado',
     // Job detail
     job_detail: 'Detalle del trabajo', arrival_instructions: 'Instrucciones de llegada', lockbox_code: 'Código de caja',
+    beds_short: 'rec', baths_short: 'baño', sqft_short: 'ft²',
     clock_in: 'Registrar entrada — Iniciar', clock_in_short: 'Registrar entrada', pause: 'Pausar', resume: 'Continuar',
     complete_job: 'Completar', job_completed: 'Trabajo completado', total_time: 'Tiempo total',
     time_tracker: 'Control de tiempo', active_since: 'Activo desde', paused: 'Pausado', session: 'Sesión',

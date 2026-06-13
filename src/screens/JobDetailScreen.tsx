@@ -59,6 +59,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [elapsedMinutes, setElapsedMinutes] = useState(0)
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
+  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null } | null>(null)
   const timerRef = useRef<any>(null)
 
   const { t } = useLang()
@@ -70,7 +71,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   useEffect(() => {
     loadChecklist()
     loadTimeEntries()
+    loadPropMeta()
   }, [])
+
+  // Beds/baths/sqft aren't in the list-screen job payload, so fetch them here —
+  // works no matter which screen opened this job.
+  async function loadPropMeta() {
+    const addrId = job.client_addresses?.id || job.address_id
+    if (!addrId) return
+    const { data } = await supabase
+      .from('client_addresses')
+      .select('bedrooms, bathrooms, sqft')
+      .eq('id', addrId)
+      .maybeSingle()
+    if (data) setPropMeta(data as any)
+  }
 
   // Live timer
   useEffect(() => {
@@ -310,6 +325,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           }}>
             <Text style={styles.address}>📍 {addr?.street}, {addr?.city}</Text>
           </TouchableOpacity>
+          {(propMeta?.bedrooms != null || propMeta?.bathrooms != null || propMeta?.sqft != null) && (
+            <Text style={styles.propSpecs}>
+              🏠 {[
+                propMeta?.bedrooms != null ? `${propMeta.bedrooms} ${t('beds_short')}` : null,
+                propMeta?.bathrooms != null ? `${propMeta.bathrooms} ${t('baths_short')}` : null,
+                propMeta?.sqft != null ? `${propMeta.sqft.toLocaleString()} ${t('sqft_short')}` : null,
+              ].filter(Boolean).join('   ·   ')}
+            </Text>
+          )}
           {addr?.lockbox_code && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>🔐</Text>
@@ -500,6 +524,7 @@ const styles = StyleSheet.create({
   clientName: { fontSize: 20, fontWeight: '800', color: '#111827', marginBottom: 6 },
   timeRow: { fontSize: 14, color: '#374151', marginBottom: 6, fontWeight: '500' },
   address: { fontSize: 13, color: TEAL, marginBottom: 14, fontWeight: '500' },
+  propSpecs: { fontSize: 14, color: '#374151', fontWeight: '700', marginTop: -8, marginBottom: 14 },
   infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10, padding: 10, backgroundColor: '#F9FAFB', borderRadius: 10 },
   infoIcon: { fontSize: 18 },
   infoLabel: { fontSize: 10, color: '#9CA3AF', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
