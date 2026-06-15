@@ -1,3 +1,4 @@
+import { Sentry } from './src/lib/sentry' // first: initializes Sentry before anything else
 import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -195,7 +196,7 @@ function AppInner() {
 }
 
 // ── Root — providers wrap everything once ─────────────────────────
-export default function App() {
+function App() {
   return (
     <ErrorBoundary>
       <LangProvider>
@@ -206,6 +207,9 @@ export default function App() {
     </ErrorBoundary>
   )
 }
+
+// Sentry.wrap adds native crash + performance instrumentation around the app.
+export default Sentry.wrap(App)
 
 const styles = StyleSheet.create({
   loading: { flex: 1, backgroundColor: SLATE_DARK, alignItems: 'center', justifyContent: 'center' },

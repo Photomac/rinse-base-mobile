@@ -31,7 +31,10 @@
         "NSMicrophoneUsageDescription": "Rinsebase uses the microphone for SOS emergency audio alerts.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property and to send clock-out reminders when you leave a job site.",
         "NSLocationWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property.",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -65,7 +68,8 @@
           "isAndroidBackgroundLocationEnabled": true,
           "isIosBackgroundLocationEnabled": true
         }
-      ]
+      ],
+      "@sentry/react-native"
     ],
     "extra": {
       "eas": {
