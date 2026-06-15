@@ -16,10 +16,15 @@ import { registerPushToken } from './src/lib/notifications'
 import { startLocationTracking, stopLocationTracking } from './src/lib/locationTracker'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
+import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
+import { ErrorBoundary } from './src/components/ErrorBoundary'
 
 const GOLD = '#D4A843'
 const SLATE_DARK = '#0F172A'
 const Tab = createBottomTabNavigator()
+
+// Capture uncaught mobile errors into admin_error_log (admin System Health).
+initErrorReporting()
 
 // ── Inner app — hooks called unconditionally here ─────────────────
 function AppInner() {
@@ -53,6 +58,7 @@ function AppInner() {
     setUser(data)
     setLoading(false)
     if (data) {
+      setErrorContext({ tenantId: data.tenant_id, email: data.email, role: data.role })
       registerPushToken(data).catch(console.warn)
       startLocationTracking(data).catch(console.warn)
     }
@@ -191,11 +197,13 @@ function AppInner() {
 // ── Root — providers wrap everything once ─────────────────────────
 export default function App() {
   return (
-    <LangProvider>
-      <SafeAreaProvider>
-        <AppInner />
-      </SafeAreaProvider>
-    </LangProvider>
+    <ErrorBoundary>
+      <LangProvider>
+        <SafeAreaProvider>
+          <AppInner />
+        </SafeAreaProvider>
+      </LangProvider>
+    </ErrorBoundary>
   )
 }
 
