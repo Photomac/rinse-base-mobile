@@ -1,12 +1,14 @@
 import * as Sentry from '@sentry/react-native'
 
-// NOTE: this reuses the WEB app's Sentry DSN, so mobile crashes land in the same
-// Sentry project (tagged by platform, so still filterable). RECOMMENDED: create a
-// dedicated "rinsebase-mobile" project in your Sentry org and swap this DSN — keeps
-// web vs mobile issues cleanly separated. (Source-map upload during builds also
-// needs SENTRY_AUTH_TOKEN + org/project on the app.json plugin; add when ready.)
+// Dedicated "rinsebase-mobile" Sentry project (org rinsebase-app). Previously this
+// reused the WEB app's DSN, which commingled mobile + web issues in one project;
+// mobile now reports to its own project so crashes are cleanly separated (and show
+// up tagged as mobile on the admin System Health "Live Errors" card). DSN is public
+// (it ships in the client). (Source-map upload during builds still needs
+// SENTRY_AUTH_TOKEN + org/project on the app.json plugin; add when ready —
+// intentionally disabled for now per SENTRY_DISABLE_AUTO_UPLOAD in eas.json.)
 Sentry.init({
-  dsn: 'https://f82ac1e76f2f294f3649aa1a02169c1f@o4511111110459392.ingest.us.sentry.io/4511111117406208',
+  dsn: 'https://f58499b805c5368ac611bb0e837a6008@o4511111110459392.ingest.us.sentry.io/4511586838511616',
   environment: 'production',
   tracesSampleRate: 0.1,
   sendDefaultPii: false,
