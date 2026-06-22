@@ -155,6 +155,8 @@ export const translations = {
     uploaded_ok: 'Uploaded',
     delete_btn: 'Delete',
     could_not_upload: 'Could not upload photo',
+    photo_saved_offline_title: 'Saved — will upload',
+    photo_saved_offline_msg: "No signal right now. Your photo is saved on your phone and will upload automatically the moment you're back in coverage.",
     client_badge: 'Client',
     // Today
     please_take_after_photo: 'Please take at least one after photo before marking this job complete.',
@@ -331,6 +333,8 @@ export const translations = {
     uploaded_ok: 'Subido',
     delete_btn: 'Eliminar',
     could_not_upload: 'No se pudo subir la foto',
+    photo_saved_offline_title: 'Guardada — se subirá',
+    photo_saved_offline_msg: 'Sin señal en este momento. Tu foto está guardada en tu teléfono y se subirá automáticamente en cuanto vuelvas a tener cobertura.',
     client_badge: 'Cliente',
     // Today
     please_take_after_photo: 'Toma al menos una foto de "después" antes de marcar este trabajo como completado.',

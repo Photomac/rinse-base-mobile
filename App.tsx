@@ -1,6 +1,6 @@
 import { Sentry } from './src/lib/sentry' // first: initializes Sentry before anything else
 import React, { useState, useEffect, useRef } from 'react'
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native'
+import { View, Text, StyleSheet, ActivityIndicator, AppState } from 'react-native'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { NavigationContainer } from '@react-navigation/native'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
@@ -15,6 +15,7 @@ import { SOSScreen } from './src/screens/SOSScreen'
 import { ChatListScreen, ChatScreen } from './src/screens/ChatScreens'
 import { registerPushToken } from './src/lib/notifications'
 import { startLocationTracking, stopLocationTracking } from './src/lib/locationTracker'
+import { flushQueue } from './src/lib/photoQueue'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
 import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
@@ -94,6 +95,17 @@ function AppInner() {
       })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
+  }, [user])
+
+  // Drain any photos captured offline — once on login, and every time the app
+  // returns to the foreground (e.g. crew regains signal and reopens the app).
+  useEffect(() => {
+    if (!user) return
+    flushQueue().catch(() => {})
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') flushQueue().catch(() => {})
+    })
+    return () => sub.remove()
   }, [user])
 
   if (loading) {
