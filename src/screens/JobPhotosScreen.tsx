@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Alert, Act
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
+import { enqueuePhoto, flushQueue } from '../lib/photoQueue'
 import { useLang } from '../contexts/LangContext'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -35,7 +36,11 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   const addr = job.client_addresses as any
   const client = job.clients as any
 
-  useEffect(() => { loadPhotos() }, [])
+  useEffect(() => {
+    loadPhotos()
+    // Opening the screen in coverage drains any photos captured earlier offline.
+    flushQueue().then(({ uploaded }) => { if (uploaded > 0) loadPhotos() }).catch(() => {})
+  }, [])
 
   async function loadPhotos() {
     setLoading(true)
@@ -68,62 +73,28 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   async function uploadPhoto(uri: string) {
     setUploading(true)
     try {
-      const fileName = `${job.id}/${Date.now()}.jpg`
-
-      // Use FormData for React Native compatibility
-      const formData = new FormData()
-      formData.append('file', {
+      // Persist + queue first so the photo is never lost, then try to send it now.
+      // Offline → it stays queued and uploads automatically once back in coverage.
+      await enqueuePhoto({
         uri,
-        name: fileName,
-        type: 'image/jpeg',
-      } as any)
-
-      // Get session token
-      const { data: { session } } = await supabase.auth.getSession()
-      const token = session?.access_token
-
-      // Upload directly via fetch with FormData
-      const uploadResponse = await fetch(
-        `https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/job-photos/${fileName}`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'x-upsert': 'true',
-          },
-          body: formData,
-        }
-      )
-
-      if (!uploadResponse.ok) {
-        const err = await uploadResponse.text()
-        throw new Error(err)
-      }
-
-      const uploadError = null
-
-      if (uploadError) throw uploadError
-
-      // Get public URL
-      const { data: urlData } = supabase.storage
-        .from('job-photos')
-        .getPublicUrl(fileName)
-
-      // Save to job_photos table
-      const { error: dbError } = await supabase.from('job_photos').insert({
         tenant_id: user.tenant_id,
         job_id: job.id,
         user_id: user.id,
-        photo_url: urlData.publicUrl,
         photo_type: selectedType === 'damage' ? 'issue' : selectedType,
         caption: caption.trim() || null,
         visible_to_client: visibleToClient,
       })
-
-      if (dbError) throw dbError
+      const { remaining } = await flushQueue()
 
       setCaption('')
       loadPhotos()
+
+      if (remaining > 0) {
+        // No signal — the photo is safely saved on the device and will sync itself.
+        Alert.alert(`📥 ${t('photo_saved_offline_title')}`, t('photo_saved_offline_msg'))
+        setUploading(false)
+        return
+      }
       
       if (selectedType === 'damage') {
         Alert.alert(
