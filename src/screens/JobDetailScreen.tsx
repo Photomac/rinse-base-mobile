@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
 import { MessagesScreen } from './MessagesScreen'
+import { StayRatingCard } from '../components/StayRatingCard'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 
@@ -466,6 +467,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             ))}
           </View>
         )}
+
+        {/* Stay condition rating — how the guests left it (host sees it with photos) */}
+        {isStarted && <StayRatingCard job={job} user={user} />}
 
         {/* Notes */}
         {isStarted && (

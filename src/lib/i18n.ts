@@ -180,6 +180,20 @@ export const translations = {
     chk_trash: 'Trash — empty all bins',
     chk_beds: 'Beds — make or change linens',
     chk_walkthrough: 'Final walkthrough — nothing missed',
+    // Stay condition rating (crew rates how guests left the property)
+    stay_rating_title: 'How did the guests leave it?',
+    stay_rating_sub: 'The host sees this with your photos.',
+    stay_flag_heavy_mess: 'Heavy mess',
+    stay_flag_damage: 'Damage',
+    stay_flag_smoking: 'Smoking smell',
+    stay_flag_pets: 'Pets',
+    stay_flag_extra_time: 'Took extra time',
+    stay_flag_items_moved: 'Items moved/missing',
+    stay_note_placeholder: 'Anything the host should know? (optional)',
+    stay_save: 'Save rating',
+    stay_saved: 'Saved',
+    stay_update: 'Update rating',
+    stay_tap_star: 'Tap a star to rate',
   },
   es: {
     // Common
@@ -358,6 +372,20 @@ export const translations = {
     chk_trash: 'Basura — vaciar todos los botes',
     chk_beds: 'Camas — tender o cambiar sábanas',
     chk_walkthrough: 'Recorrido final — nada olvidado',
+    // Stay condition rating
+    stay_rating_title: '¿Cómo dejaron la propiedad los huéspedes?',
+    stay_rating_sub: 'El anfitrión lo verá junto con tus fotos.',
+    stay_flag_heavy_mess: 'Mucho desorden',
+    stay_flag_damage: 'Daños',
+    stay_flag_smoking: 'Olor a humo',
+    stay_flag_pets: 'Mascotas',
+    stay_flag_extra_time: 'Tomó tiempo extra',
+    stay_flag_items_moved: 'Objetos movidos/faltantes',
+    stay_note_placeholder: '¿Algo que el anfitrión deba saber? (opcional)',
+    stay_save: 'Guardar calificación',
+    stay_saved: 'Guardado',
+    stay_update: 'Actualizar calificación',
+    stay_tap_star: 'Toca una estrella para calificar',
   }
 }
 
