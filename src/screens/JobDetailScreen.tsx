@@ -61,6 +61,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
   const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null } | null>(null)
+  const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
 
   const { t } = useLang()
@@ -78,6 +79,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Beds/baths/sqft aren't in the list-screen job payload, so fetch them here —
   // works no matter which screen opened this job.
   async function loadPropMeta() {
+    // Time-boxed crew access code (smart lock) lives on the job, not the list payload.
+    const { data: jr } = await supabase
+      .from('jobs')
+      .select('seam_access_code')
+      .eq('id', job.id)
+      .maybeSingle()
+    if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
+
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId) return
     const { data } = await supabase
@@ -334,6 +343,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 propMeta?.sqft != null ? `${propMeta.sqft.toLocaleString()} ${t('sqft_short')}` : null,
               ].filter(Boolean).join('   ·   ')}
             </Text>
+          )}
+          {accessCode && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoIcon}>🔑</Text>
+              <View><Text style={styles.infoLabel}>{t('crew_door_code')}</Text><Text style={styles.infoValue}>{accessCode}</Text></View>
+            </View>
           )}
           {addr?.lockbox_code && (
             <View style={styles.infoRow}>
