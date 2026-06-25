@@ -34,7 +34,7 @@ export const translations = {
     status_scheduled: 'Scheduled', status_en_route: 'En route', status_in_progress: 'In progress',
     status_completed: 'Completed', status_cancelled: 'Cancelled',
     // Job detail
-    job_detail: 'Job detail', arrival_instructions: 'Arrival instructions', lockbox_code: 'Lockbox code',
+    job_detail: 'Job detail', arrival_instructions: 'Arrival instructions', lockbox_code: 'Lockbox code', crew_door_code: 'Crew door code',
     beds_short: 'bed', baths_short: 'bath', sqft_short: 'sqft',
     clock_in: 'Clock in — Start job', clock_in_short: 'Clock in', pause: 'Pause', resume: 'Resume',
     complete_job: 'Complete', job_completed: 'Job completed', total_time: 'Total time',
@@ -226,7 +226,7 @@ export const translations = {
     status_scheduled: 'Programado', status_en_route: 'En camino', status_in_progress: 'En progreso',
     status_completed: 'Completado', status_cancelled: 'Cancelado',
     // Job detail
-    job_detail: 'Detalle del trabajo', arrival_instructions: 'Instrucciones de llegada', lockbox_code: 'Código de caja',
+    job_detail: 'Detalle del trabajo', arrival_instructions: 'Instrucciones de llegada', lockbox_code: 'Código de caja', crew_door_code: 'Código de puerta del equipo',
     beds_short: 'rec', baths_short: 'baño', sqft_short: 'ft²',
     clock_in: 'Registrar entrada — Iniciar', clock_in_short: 'Registrar entrada', pause: 'Pausar', resume: 'Continuar',
     complete_job: 'Completar', job_completed: 'Trabajo completado', total_time: 'Tiempo total',
