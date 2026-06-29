@@ -171,11 +171,49 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
             </View>
           )}
 
-          {Object.entries(grouped).map(([cat, rows]) => (
+          {Object.entries(grouped).map(([cat, rows]) => {
+            // Linens are tracked as PACKED (par + packed count) rather than the
+            // supplies count-left/used/low — mirrors the web job panel.
+            const isLinen = cat === 'Linens'
+            const linenPar = isLinen ? rows.filter(r => (r.par_level ?? 0) > 0) : []
+            const linenPacked = linenPar.filter(r => (log[r.id]?.qty_used || 0) >= (r.par_level ?? 0)).length
+            return (
             <View key={cat} style={styles.categoryCard}>
-              <Text style={styles.categoryHeader}>{cat}</Text>
+              <Text style={styles.categoryHeader}>
+                {isLinen ? `🧺 ${t('linens')}` : cat}
+                {isLinen && linenPar.length > 0 ? `   ${ti(t('packed_tally'), { n: String(linenPacked), m: String(linenPar.length) })}` : ''}
+              </Text>
               {rows.map(item => {
                 const row = log[item.id] || { qty_used: 0, qty_remaining: '', needs_restock: false, notes: '' }
+                if (isLinen) {
+                  const par = item.par_level ?? 0
+                  const done = par > 0 && row.qty_used >= par
+                  return (
+                    <View key={item.id} style={styles.itemRow}>
+                      <View style={styles.itemHead}>
+                        <Text style={styles.itemName}>{item.item_name}</Text>
+                        <Text style={styles.itemMeta}>{t('par')}: {par}</Text>
+                      </View>
+                      <View style={styles.itemControls}>
+                        <View style={styles.qtyGroup}>
+                          <Text style={styles.countLabel}>{t('packed')}</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(item.id, -1)}><Text style={styles.qtyBtnText}>−</Text></TouchableOpacity>
+                            <Text style={styles.qtyNum}>{row.qty_used}</Text>
+                            <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(item.id, +1)}><Text style={styles.qtyBtnText}>+</Text></TouchableOpacity>
+                          </View>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => setQty(item.id, done ? -row.qty_used : par - row.qty_used)}
+                          disabled={par === 0}
+                          style={[styles.lowToggle, done && styles.lowToggleOn, par === 0 && { opacity: 0.4 }]}
+                        >
+                          <Text style={[styles.lowToggleText, done && { color: '#fff' }]}>{done ? '✓' : t('pack')}</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )
+                }
                 const belowPar = isBelowPar(item, row)
                 return (
                   <View key={item.id} style={styles.itemRow}>
@@ -226,7 +264,8 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
                 )
               })}
             </View>
-          ))}
+            )
+          })}
 
           <View style={{ marginTop: 8, paddingHorizontal: 4 }}>
             <Text style={styles.helper}>{t('note_helper')}</Text>
