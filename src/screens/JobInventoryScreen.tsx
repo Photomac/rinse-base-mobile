@@ -210,6 +210,12 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
                         >
                           <Text style={[styles.lowToggleText, done && { color: '#fff' }]}>{done ? '✓' : t('pack')}</Text>
                         </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => toggleLow(item.id)}
+                          style={[styles.lowToggle, row.needs_restock && styles.lowToggleOn, { marginLeft: 6 }]}
+                        >
+                          <Text style={[styles.lowToggleText, row.needs_restock && { color: '#fff' }]}>{row.needs_restock ? '⚠' : t('report')}</Text>
+                        </TouchableOpacity>
                       </View>
                     </View>
                   )
