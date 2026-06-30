@@ -7,6 +7,7 @@ import { JobPhotosScreen } from './JobPhotosScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
 import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
+import { LostFoundCard } from '../components/LostFoundCard'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 
@@ -485,6 +486,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Stay condition rating — how the guests left it (host sees it with photos) */}
         {isStarted && <StayRatingCard job={job} user={user} />}
+
+        {/* Lost & found — log a guest belonging left behind (manager reviews before host is told) */}
+        {isStarted && <LostFoundCard job={job} user={user} />}
 
         {/* Notes */}
         {isStarted && (
