@@ -131,6 +131,7 @@ export const translations = {
     permission_needed: 'Permission needed',
     role_owner: 'Owner', role_manager: 'Manager', role_dispatcher: 'Dispatcher',
     role_lead_cleaner: 'Lead Cleaner', role_cleaner: 'Cleaner', role_trainee: 'Trainee',
+    role_laundry_runner: 'Laundry Runner',
     // Inventory / supplies
     saving: 'Saving...', saved: 'Saved',
     loading_supplies: 'Loading supplies...',
@@ -339,6 +340,7 @@ export const translations = {
     permission_needed: 'Permiso necesario',
     role_owner: 'Dueño', role_manager: 'Gerente', role_dispatcher: 'Despachador',
     role_lead_cleaner: 'Limpiador principal', role_cleaner: 'Limpiador', role_trainee: 'Aprendiz',
+    role_laundry_runner: 'Encargado de lavandería',
     // Inventory / supplies
     saving: 'Guardando...', saved: 'Guardado',
     loading_supplies: 'Cargando materiales...',
