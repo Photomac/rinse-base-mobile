@@ -195,6 +195,21 @@ export const translations = {
     stay_saved: 'Saved',
     stay_update: 'Update rating',
     stay_tap_star: 'Tap a star to rate',
+    // Lost & found (crew logs a guest belonging left behind)
+    lf_title: 'Lost & found',
+    lf_sub: 'Found something a guest left behind? Log it — your manager reviews it before the host is told.',
+    lf_open: '🧳 Report a lost & found item',
+    lf_item_label: 'What did the guest leave?',
+    lf_item_placeholder: 'e.g. Black jacket in hall closet',
+    lf_note_placeholder: 'Where you found it, guest name if known (optional)',
+    lf_add_photo: '📷 Add photo',
+    lf_photo_added: '✓ Photo added',
+    lf_save: 'Log item',
+    lf_saving: 'Saving…',
+    lf_saved_title: 'Logged',
+    lf_saved_msg: 'Your manager will review it and decide whether to send it to the host.',
+    lf_cancel: 'Cancel',
+    lf_need_item: 'Add what the guest left first',
   },
   es: {
     // Common
@@ -388,6 +403,21 @@ export const translations = {
     stay_saved: 'Guardado',
     stay_update: 'Actualizar calificación',
     stay_tap_star: 'Toca una estrella para calificar',
+    // Objetos perdidos (la cuadrilla registra algo que dejó un huésped)
+    lf_title: 'Objetos perdidos',
+    lf_sub: '¿Encontraste algo que dejó un huésped? Regístralo — tu gerente lo revisa antes de avisarle al anfitrión.',
+    lf_open: '🧳 Reportar objeto perdido',
+    lf_item_label: '¿Qué dejó el huésped?',
+    lf_item_placeholder: 'ej. Chaqueta negra en el clóset del pasillo',
+    lf_note_placeholder: 'Dónde lo encontraste, nombre del huésped si lo sabes (opcional)',
+    lf_add_photo: '📷 Agregar foto',
+    lf_photo_added: '✓ Foto agregada',
+    lf_save: 'Registrar objeto',
+    lf_saving: 'Guardando…',
+    lf_saved_title: 'Registrado',
+    lf_saved_msg: 'Tu gerente lo revisará y decidirá si se lo envía al anfitrión.',
+    lf_cancel: 'Cancelar',
+    lf_need_item: 'Primero indica qué dejó el huésped',
   }
 }
 
