@@ -57,6 +57,22 @@ function AppInner() {
 
   async function loadUser(authId: string) {
     const { data } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
+    if (data) {
+      // Crew→client contact policy. Default: crew can't call the host directly
+      // (the cleaning company owns that relationship) — they reach dispatch.
+      try {
+        const { data: tenant } = await supabase.from('tenants')
+          .select('crew_can_contact_client, dispatch_phone').eq('id', data.tenant_id).maybeSingle()
+        let dispatchPhone = tenant?.dispatch_phone || null
+        if (!dispatchPhone) {
+          const { data: owner } = await supabase.from('users')
+            .select('phone').eq('tenant_id', data.tenant_id).eq('role', 'owner')
+            .not('phone', 'is', null).limit(1).maybeSingle()
+          dispatchPhone = owner?.phone || null
+        }
+        data._contact = { crewCanContactClient: !!tenant?.crew_can_contact_client, dispatchPhone }
+      } catch (e) { data._contact = { crewCanContactClient: false, dispatchPhone: null } }
+    }
     setUser(data)
     setLoading(false)
     if (data) {

@@ -363,11 +363,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('arrival_instructions')}</Text><Text style={styles.infoValue}>{addr.arrival_instructions}</Text></View>
             </View>
           )}
-          {client?.phone && (
+          {/* Direct host contact only if the owner allows it; otherwise crew
+              reach dispatch (the office), keeping the company as the single
+              point of contact with the host. */}
+          {user._contact?.crewCanContactClient && client?.phone ? (
             <TouchableOpacity style={styles.callBtn} onPress={() => Linking.openURL(`tel:${client.phone}`)}>
               <Text style={styles.callBtnText}>📞 {t('call_client')} {client.full_name?.split(' ')[0]}</Text>
             </TouchableOpacity>
-          )}
+          ) : user._contact?.dispatchPhone ? (
+            <TouchableOpacity style={styles.callBtn} onPress={() => Linking.openURL(`tel:${user._contact.dispatchPhone}`)}>
+              <Text style={styles.callBtnText}>📞 {t('call_dispatch')}</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity style={styles.photosBtn} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
             <Text style={styles.photosBtnText}>📸 {t('job_photos')}</Text>
           </TouchableOpacity>

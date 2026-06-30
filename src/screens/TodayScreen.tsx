@@ -135,11 +135,15 @@ export function TodayScreen({ user, onJobPress }: { user: any; onJobPress: (job:
                     }}>
                       <Text style={styles.actionBtnText}>🗺 {t('directions')}</Text>
                     </TouchableOpacity>
-                    {client?.phone && (
+                    {user._contact?.crewCanContactClient && client?.phone ? (
                       <TouchableOpacity style={styles.actionBtn} onPress={() => Linking.openURL(`tel:${client.phone}`)}>
                         <Text style={styles.actionBtnText}>📞 {t('call')}</Text>
                       </TouchableOpacity>
-                    )}
+                    ) : user._contact?.dispatchPhone ? (
+                      <TouchableOpacity style={styles.actionBtn} onPress={() => Linking.openURL(`tel:${user._contact.dispatchPhone}`)}>
+                        <Text style={styles.actionBtnText}>📞 {t('call_dispatch')}</Text>
+                      </TouchableOpacity>
+                    ) : null}
                     {job.status === 'scheduled' && (
                       <TouchableOpacity style={[styles.actionBtnPrimary, isUpdating && { opacity: 0.6 }]} onPress={() => updateStatus(job, 'en_route')} disabled={isUpdating}>
                         <Text style={styles.actionBtnPrimaryText}>{t('en_route')}</Text>
