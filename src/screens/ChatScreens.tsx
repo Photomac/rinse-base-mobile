@@ -31,7 +31,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
         supabase.from('message_channels').select('*')
           .eq('tenant_id', user.tenant_id)
           .order('last_message_at', { ascending: false, nullsFirst: false }),
-        supabase.from('users').select('id, full_name, role, avatar_url')
+        supabase.from('users').select('id, full_name, nickname, role, avatar_url')
           .eq('tenant_id', user.tenant_id)
           .eq('is_active', true)
           .neq('id', user.id)
@@ -70,7 +70,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
       c.participant_ids?.includes(user.id) &&
       c.participant_ids?.includes(otherUser.id)
     )
-    if (existing) { onOpenChannel({ ...existing, displayName: otherUser.full_name }); return }
+    if (existing) { onOpenChannel({ ...existing, displayName: otherUser.nickname?.trim() || otherUser.full_name }); return }
 
     const { data, error } = await supabase.from('message_channels').insert({
       tenant_id: user.tenant_id,
@@ -79,7 +79,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
       participant_ids: [user.id, otherUser.id],
     }).select().single()
     if (error) { Alert.alert(t('error'), t('failed_start_conversation')); return }
-    if (data) onOpenChannel({ ...data, displayName: otherUser.full_name })
+    if (data) onOpenChannel({ ...data, displayName: otherUser.nickname?.trim() || otherUser.full_name })
     load()
   }
 
@@ -92,7 +92,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
     if (channel.channel_type === 'group') return channel.name || t('group')
     const otherId = channel.participant_ids?.find((id: string) => id !== user.id)
     const other = crew.find(c => c.id === otherId)
-    return other?.full_name || t('unknown')
+    return other?.nickname?.trim() || other?.full_name || t('unknown')
   }
 
   return (
@@ -128,7 +128,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
                     <View style={[styles.memberCheck, selected && styles.memberCheckSelected]}>
                       {selected && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>✓</Text>}
                     </View>
-                    <Text style={styles.memberName}>{c.full_name}</Text>
+                    <Text style={styles.memberName}>{c.nickname?.trim() || c.full_name}</Text>
                   </TouchableOpacity>
                 )
               })}
@@ -197,7 +197,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
                   </View>
                 )}
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.channelName}>{item.full_name}</Text>
+                  <Text style={styles.channelName}>{item.nickname?.trim() || item.full_name}</Text>
                   <Text style={styles.channelRole}>{t((ROLE_KEYS[item.role] || 'role_cleaner') as any)}</Text>
                   {dmChannel?.last_message && <Text style={styles.channelPreview} numberOfLines={1}>{dmChannel.last_message}</Text>}
                 </View>
@@ -230,13 +230,13 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
   async function loadMessages() {
     const { data } = await supabase
       .from('chat_messages')
-      .select('*, users!chat_messages_sender_id_fkey(avatar_url, full_name)')
+      .select('*, users!chat_messages_sender_id_fkey(avatar_url, full_name, nickname)')
       .eq('channel_id', channel.id)
       .order('created_at')
     const msgs = (data ?? []).map((m: any) => ({
       ...m,
       avatar_url: m.avatar_url || m.users?.avatar_url || null,
-      sender_name: m.sender_name || m.users?.full_name || t('unknown'),
+      sender_name: m.users?.nickname?.trim() || m.sender_name || m.users?.full_name || t('unknown'),
     }))
     setMessages(msgs)
     setLoading(false)
@@ -254,7 +254,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
         tenant_id: user.tenant_id,
         channel_id: channel.id,
         sender_id: user.id,
-        sender_name: user.full_name,
+        sender_name: user.nickname?.trim() || user.full_name,
         sender_role: user.role,
         avatar_url: freshUser?.avatar_url || user.avatar_url || null,
         body: msg,
