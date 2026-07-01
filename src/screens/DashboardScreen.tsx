@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
+import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 
 function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -106,6 +107,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     setShiftBusy(false)
     if (error) { Alert.alert('Error', error.message); return }
     setActiveShift(data)
+    // Start broadcasting location for the day so the crew shows live on dispatch.
+    startLocationTracking(user).catch(() => {})
   }
 
   async function handleEndDay() {
@@ -122,6 +125,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         setShiftBusy(false)
         if (error) { Alert.alert('Error', error.message); return }
         setActiveShift(null)
+        // Stop broadcasting once the shift ends.
+        stopLocationTracking().catch(() => {})
       } },
     ])
   }
