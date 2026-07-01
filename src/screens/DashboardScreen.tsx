@@ -107,8 +107,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     setShiftBusy(false)
     if (error) { Alert.alert('Error', error.message); return }
     setActiveShift(data)
-    // Start broadcasting location for the day so the crew shows live on dispatch.
-    startLocationTracking(user).catch(() => {})
+    // Start broadcasting location for the day so the crew shows live on
+    // dispatch. Start-of-day is a user-initiated moment, so escalate to the
+    // "Always" location prompt for pocket-tracking through the shift.
+    startLocationTracking(user, { requestBackground: true }).catch(() => {})
   }
 
   async function handleEndDay() {
