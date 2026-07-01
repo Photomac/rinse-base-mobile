@@ -6,7 +6,7 @@ import * as Location from 'expo-location'
 import * as TaskManager from 'expo-task-manager'
 import * as Notifications from 'expo-notifications'
 import { supabase } from './supabase'
-import { ensureForegroundLocation, getBackgroundLocationStatus } from './permissions'
+import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
 
 const LOCATION_TASK = 'crew-location-task'
 const PING_INTERVAL = 5 * 60 * 1000 // 5 minutes
@@ -35,17 +35,20 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-export async function startLocationTracking(user: any) {
+export async function startLocationTracking(user: any, opts?: { requestBackground?: boolean }) {
   currentUser = user
 
   // Foreground only — silent ask, will use cached status if already answered.
-  // Background is requested separately via a user-initiated opt-in (see
-  // ensureBackgroundLocation in permissions.ts) so we don't prompt on every
-  // launch.
   const fgStatus = await ensureForegroundLocation({ silent: true })
   if (fgStatus !== 'granted') return
 
-  const bgStatus = await getBackgroundLocationStatus()
+  // Background ("Always") is a stronger ask, so we only escalate to the OS
+  // prompt at a user-initiated work moment (clock-in / start-of-day) — never
+  // on plain app launch, which just reads the cached status. silent:true means
+  // a past denial won't nag with the Settings alert on every clock-in.
+  const bgStatus = opts?.requestBackground
+    ? await ensureBackgroundLocation({ silent: true })
+    : await getBackgroundLocationStatus()
 
   // Start background location task if user has previously opted into Always
   if (bgStatus === 'granted') {
@@ -126,13 +129,31 @@ export async function stopLocationTracking() {
 // This runs even when the app is in the background
 TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
   if (error) { console.warn('Background location error:', error); return }
-  if (!data || !currentUser) return
+  if (!data) return
 
   const { locations } = data as { locations: Location.LocationObject[] }
   if (!locations || locations.length === 0) return
 
   const loc = locations[locations.length - 1] // most recent
-  const user = currentUser
+
+  // Module state dies with the process: when the OS relaunches us headless
+  // for a location update, currentUser is null — rebuild it from the stored
+  // session instead of dropping the ping.
+  let user = currentUser
+  if (!user) {
+    try {
+      const { data: auth } = await supabase.auth.getUser()
+      const authId = auth?.user?.id
+      if (!authId) return
+      const { data: u } = await supabase.from('users')
+        .select('id, tenant_id')
+        .or(`auth_user_id.eq.${authId},id.eq.${authId}`)
+        .maybeSingle()
+      if (!u) return
+      currentUser = u
+      user = u
+    } catch { return }
+  }
 
   try {
     // Find this crew member's active job

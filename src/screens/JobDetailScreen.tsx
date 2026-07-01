@@ -215,8 +215,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (entry) setActiveEntry(entry)
     setIsPaused(false)
     // Begin broadcasting location now that they're clocked in (don't wait for
-    // an app relaunch, and don't require a job_assignment).
-    startLocationTracking(user).catch(() => {})
+    // an app relaunch, and don't require a job_assignment). Clock-in is the
+    // user-initiated moment where we escalate to the "Always" location prompt
+    // so tracking keeps working with the phone in their pocket.
+    startLocationTracking(user, { requestBackground: true }).catch(() => {})
     // Update job status
     await supabase.from('jobs').update({ status: 'in_progress' }).eq('id', job.id)
     onStatusChange(job, 'in_progress')
@@ -263,7 +265,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }).select().single()
     if (entry) setActiveEntry(entry)
     setIsPaused(false)
-    startLocationTracking(user).catch(() => {})
+    startLocationTracking(user, { requestBackground: true }).catch(() => {})
     loadTimeEntries()
     setSaving(false)
   }
