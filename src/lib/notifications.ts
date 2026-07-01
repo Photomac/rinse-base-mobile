@@ -44,6 +44,50 @@ export async function registerPushToken(user: any) {
   return token
 }
 
+// Push a new chat message to the other members of the channel. Sent
+// client-side from the sender's device (same gateway as SOS) — recipients
+// get it regardless of their app state. Chat had NO push path before this.
+export async function sendChatNotification(channel: any, sender: any, body: string) {
+  try {
+    // Resolve recipient user_ids (everyone but the sender)
+    let recipientIds: string[] = []
+    if (channel?.channel_type === 'team') {
+      const { data } = await supabase.from('users')
+        .select('id').eq('tenant_id', sender.tenant_id).eq('is_active', true)
+      recipientIds = (data ?? []).map((u: any) => u.id)
+    } else {
+      recipientIds = channel?.participant_ids ?? []
+    }
+    recipientIds = recipientIds.filter((id: string) => id && id !== sender.id)
+    if (!recipientIds.length) return
+
+    const { data: tokens } = await supabase.from('push_tokens')
+      .select('token').eq('tenant_id', sender.tenant_id).in('user_id', recipientIds)
+    const toTokens = Array.from(new Set((tokens ?? []).map((t: any) => t.token).filter(Boolean)))
+    if (!toTokens.length) return
+
+    const senderName = sender.nickname?.trim() || sender.full_name || 'Teammate'
+    const isDm = channel?.channel_type === 'dm'
+    const title = isDm ? senderName : (channel?.name || 'Team chat')
+    const messages = toTokens.map(token => ({
+      to: token,
+      sound: 'default',
+      title,
+      body: isDm ? body : `${senderName}: ${body}`,
+      data: { type: 'chat', channelId: channel?.id, tenantId: sender.tenant_id },
+      priority: 'high',
+    }))
+    const res = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(messages),
+    })
+    if (!res.ok) console.warn('Chat push send failed:', res.status, await res.text())
+  } catch (e) {
+    console.warn('Chat push send threw:', e)
+  }
+}
+
 export async function sendSOSNotification(tenantId: string, crewName: string, location: string) {
   // Get all owner and manager tokens for this tenant
   const { data: tokens } = await supabase

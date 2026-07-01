@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { SLATE_DARK, GOLD, ROLE_COLORS } from '../lib/theme'
+import { sendChatNotification } from '../lib/notifications'
 
 const ROLE_KEYS: Record<string, string> = {
   owner: 'role_owner', manager: 'role_manager', dispatcher: 'role_dispatcher',
@@ -265,6 +266,8 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
         last_message: msg,
         last_message_at: new Date().toISOString(),
       }).eq('id', channel.id)
+      // Push the message to the other channel members (fire-and-forget)
+      sendChatNotification(channel, user, msg).catch(() => {})
       await loadMessages()
     } catch (err) { setText(msg); Alert.alert(t('error'), t('message_send_failed')) }
     setSending(false)
