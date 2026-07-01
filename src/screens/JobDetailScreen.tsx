@@ -12,6 +12,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
+import { startLocationTracking } from '../lib/locationTracker'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -206,6 +207,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }).select().single()
     if (entry) setActiveEntry(entry)
     setIsPaused(false)
+    // Begin broadcasting location now that they're clocked in (don't wait for
+    // an app relaunch, and don't require a job_assignment).
+    startLocationTracking(user).catch(() => {})
     // Update job status
     await supabase.from('jobs').update({ status: 'in_progress' }).eq('id', job.id)
     onStatusChange(job, 'in_progress')
@@ -252,6 +256,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }).select().single()
     if (entry) setActiveEntry(entry)
     setIsPaused(false)
+    startLocationTracking(user).catch(() => {})
     loadTimeEntries()
     setSaving(false)
   }

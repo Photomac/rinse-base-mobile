@@ -90,20 +90,20 @@ export async function startLocationTracking(user: any) {
     hasTodayJob = (jobs?.length ?? 0) > 0
   }
 
-  // Also track while on an OPEN day-shift (daily time-tracking mode), even
-  // without a per-job assignment — so shift workers still appear live on the
-  // dispatch map.
-  const { data: openShift } = await supabase
+  // Also track whenever the crew member is CLOCKED IN — any open time entry,
+  // per-job ('work') or day-shift ('shift') — even on a job they aren't a
+  // formal job_assignment on. Being on the clock is what "working" means; the
+  // old assignment-only gate meant clocked-in-but-unassigned crew (and shift
+  // workers) never broadcast a location.
+  const { data: openEntry } = await supabase
     .from('job_time_entries')
     .select('id')
     .eq('user_id', user.id)
-    .is('job_id', null)
-    .eq('entry_type', 'shift')
     .is('clocked_out_at', null)
     .limit(1)
-  const onShift = (openShift?.length ?? 0) > 0
+  const clockedIn = (openEntry?.length ?? 0) > 0
 
-  if (!hasTodayJob && !onShift) return // nothing to track today
+  if (!hasTodayJob && !clockedIn) return // not working right now — nothing to track
 
   // Start periodic pinging
   await pingLocation(user)
