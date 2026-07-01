@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, TextInput } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import * as ImagePicker from 'expo-image-picker'
@@ -18,6 +18,22 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
   const initials = user.full_name?.split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase() || '?'
   const [avatarUrl, setAvatarUrl] = React.useState(user.avatar_url || null)
   const [uploading, setUploading] = React.useState(false)
+  // Self-service contact edit
+  const [editingContact, setEditingContact] = useState(false)
+  const [contactEmail, setContactEmail] = useState(user.email || '')
+  const [contactPhone, setContactPhone] = useState(user.phone || '')
+  const [savingContact, setSavingContact] = useState(false)
+
+  async function saveContact() {
+    setSavingContact(true)
+    const { error } = await supabase.from('users')
+      .update({ email: contactEmail.trim() || null, phone: contactPhone.trim() || null })
+      .eq('id', user.id)
+    setSavingContact(false)
+    if (error) { Alert.alert('Error', error.message); return }
+    user.email = contactEmail.trim(); user.phone = contactPhone.trim()
+    setEditingContact(false)
+  }
 
   async function pickAvatar() {
     Alert.alert(t('profile_photo'), t('choose_photo_source'), [
@@ -86,13 +102,39 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
           <View style={styles.roleBadge}><Text style={styles.roleText}>{t((ROLE_KEYS[user.role] || 'role_cleaner') as any)}</Text></View>
         </View>
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>{t('contact_info')}</Text>
-          {[[t('email'), user.email], [t('phone'), user.phone || t('not_set')]].map(([l, v]) => (
-            <View key={l} style={styles.row}>
-              <Text style={styles.rowLabel}>{l}</Text>
-              <Text style={styles.rowValue}>{v}</Text>
-            </View>
-          ))}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={styles.sectionTitle}>{t('contact_info')}</Text>
+            {!editingContact && (
+              <TouchableOpacity onPress={() => { setContactEmail(user.email || ''); setContactPhone(user.phone || ''); setEditingContact(true) }}>
+                <Text style={{ color: GOLD, fontSize: 13, fontWeight: '700' }}>{t('edit')}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {editingContact ? (
+            <>
+              <Text style={styles.rowLabel}>{t('email')}</Text>
+              <TextInput value={contactEmail} onChangeText={setContactEmail} autoCapitalize="none" keyboardType="email-address"
+                style={styles.input} placeholderTextColor="#9E8E72" />
+              <Text style={[styles.rowLabel, { marginTop: 10 }]}>{t('phone')}</Text>
+              <TextInput value={contactPhone} onChangeText={setContactPhone} keyboardType="phone-pad"
+                style={styles.input} placeholderTextColor="#9E8E72" />
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                <TouchableOpacity style={[styles.contactBtn, { backgroundColor: '#F1F5F9' }]} onPress={() => setEditingContact(false)} disabled={savingContact}>
+                  <Text style={{ color: '#475569', fontWeight: '700', fontSize: 13 }}>{t('cancel')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.contactBtn, { backgroundColor: GOLD }]} onPress={saveContact} disabled={savingContact}>
+                  <Text style={{ color: '#1A1408', fontWeight: '800', fontSize: 13 }}>{savingContact ? t('saving') : t('save')}</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            [[t('email'), user.email], [t('phone'), user.phone || t('not_set')]].map(([l, v]) => (
+              <View key={l} style={styles.row}>
+                <Text style={styles.rowLabel}>{l}</Text>
+                <Text style={styles.rowValue}>{v}</Text>
+              </View>
+            ))
+          )}
         </View>
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>{t('pay_structure')}</Text>
@@ -132,6 +174,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F8FAFC' },
   rowLabel: { fontSize: 13, color: '#94A3B8' },
   rowValue: { fontSize: 13, color: '#0F172A', fontWeight: '500' },
+  input: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 14, color: '#0F172A', backgroundColor: '#fff', marginTop: 4 },
+  contactBtn: { flex: 1, paddingVertical: 11, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   langBtn: { backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8, marginBottom: 8 },
   langBtnText: { color: '#1D4ED8', fontSize: 15, fontWeight: '700' },
   signOutBtn: { backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FECACA', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
