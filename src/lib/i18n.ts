@@ -134,7 +134,7 @@ export const translations = {
     role_lead_cleaner: 'Lead Cleaner', role_cleaner: 'Cleaner', role_trainee: 'Trainee',
     role_laundry_runner: 'Laundry Runner',
     // Inventory / supplies
-    saving: 'Saving...', saved: 'Saved',
+    saving: 'Saving...', saved: 'Saved', edit: 'Edit', update_contact_hint: 'Keep your phone and email current so your team can reach you.',
     loading_supplies: 'Loading supplies...',
     no_supplies_yet: 'No supplies list for this property yet.',
     ask_owner_setup: 'Ask the owner or homeowner to set one up in the client portal.',
@@ -344,7 +344,7 @@ export const translations = {
     role_lead_cleaner: 'Limpiador principal', role_cleaner: 'Limpiador', role_trainee: 'Aprendiz',
     role_laundry_runner: 'Encargado de lavandería',
     // Inventory / supplies
-    saving: 'Guardando...', saved: 'Guardado',
+    saving: 'Guardando...', saved: 'Guardado', edit: 'Editar', update_contact_hint: 'Mantén tu teléfono y correo actualizados para que tu equipo pueda contactarte.',
     loading_supplies: 'Cargando materiales...',
     no_supplies_yet: 'Aún no hay lista de materiales para esta propiedad.',
     ask_owner_setup: 'Pide al dueño o propietario que la configure en el portal del cliente.',
