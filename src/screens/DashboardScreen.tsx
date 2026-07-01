@@ -19,6 +19,11 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [refreshing, setRefreshing] = useState(false)
   const sosTimer = useRef<any>(null)
   const sosInterval = useRef<any>(null)
+  // Day-long shift clock-in (only when tenant uses 'daily' time tracking)
+  const dailyMode = user._timeMode === 'daily'
+  const [activeShift, setActiveShift] = useState<any>(null)
+  const [shiftElapsed, setShiftElapsed] = useState('')
+  const [shiftBusy, setShiftBusy] = useState(false)
 
   const load = useCallback(async () => {
     const now = new Date()
@@ -64,11 +69,62 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     else if (user.pay_type === 'per_job') earnings = myMonth.length * Number(user.per_job_rate || 0)
     setMonthStats({ completed: myMonth.length, hours: Math.round(hours * 10) / 10, earnings: Math.round(earnings * 100) / 100 })
 
+    // Open shift (daily mode) — a job_time_entries row with no job and no clock-out.
+    if (user._timeMode === 'daily') {
+      const { data: shift } = await supabase.from('job_time_entries')
+        .select('id, clocked_in_at')
+        .eq('user_id', user.id).is('job_id', null).eq('entry_type', 'shift').is('clocked_out_at', null)
+        .order('clocked_in_at', { ascending: false }).limit(1).maybeSingle()
+      setActiveShift(shift || null)
+    }
+
     setLoading(false)
     setRefreshing(false)
   }, [user])
 
   useEffect(() => { load() }, [load])
+
+  // Live "on shift" timer
+  useEffect(() => {
+    if (!activeShift) { setShiftElapsed(''); return }
+    const tick = () => {
+      const secs = Math.max(0, Math.floor((Date.now() - new Date(activeShift.clocked_in_at).getTime()) / 1000))
+      const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60)
+      setShiftElapsed(`${h}h ${String(m).padStart(2, '0')}m`)
+    }
+    tick()
+    const id = setInterval(tick, 30000)
+    return () => clearInterval(id)
+  }, [activeShift])
+
+  async function handleStartDay() {
+    setShiftBusy(true)
+    const { data, error } = await supabase.from('job_time_entries').insert({
+      tenant_id: user.tenant_id, user_id: user.id, job_id: null,
+      entry_type: 'shift', clocked_in_at: new Date().toISOString(),
+    }).select('id, clocked_in_at').single()
+    setShiftBusy(false)
+    if (error) { Alert.alert('Error', error.message); return }
+    setActiveShift(data)
+  }
+
+  async function handleEndDay() {
+    if (!activeShift) return
+    Alert.alert(t('end_my_day'), t('on_shift_since') + ' ' + fmtTime(activeShift.clocked_in_at), [
+      { text: t('cancel') || 'Cancel', style: 'cancel' },
+      { text: t('end_my_day'), style: 'destructive', onPress: async () => {
+        setShiftBusy(true)
+        const out = new Date()
+        const mins = Math.round((out.getTime() - new Date(activeShift.clocked_in_at).getTime()) / 60000)
+        const { error } = await supabase.from('job_time_entries')
+          .update({ clocked_out_at: out.toISOString(), duration_minutes: mins })
+          .eq('id', activeShift.id)
+        setShiftBusy(false)
+        if (error) { Alert.alert('Error', error.message); return }
+        setActiveShift(null)
+      } },
+    ])
+  }
 
   const now = new Date()
   const hour = now.getHours()
@@ -117,6 +173,25 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             </View>
           </View>
         </View>
+
+        {/* Day-long shift clock-in (daily mode) */}
+        {dailyMode && (
+          activeShift ? (
+            <View style={styles.shiftCardOn}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.shiftOnLabel}>🟢 {t('on_shift_since')} {fmtTime(activeShift.clocked_in_at)}</Text>
+                {!!shiftElapsed && <Text style={styles.shiftTimer}>{shiftElapsed}</Text>}
+              </View>
+              <TouchableOpacity style={styles.endDayBtn} onPress={handleEndDay} disabled={shiftBusy} activeOpacity={0.85}>
+                {shiftBusy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.endDayBtnText}>{t('end_my_day')}</Text>}
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity style={styles.startDayBtn} onPress={handleStartDay} disabled={shiftBusy} activeOpacity={0.85}>
+              {shiftBusy ? <ActivityIndicator color={SLATE} /> : <Text style={styles.startDayBtnText}>⏱  {t('start_my_day')}</Text>}
+            </TouchableOpacity>
+          )
+        )}
 
         {loading ? (
           <ActivityIndicator color={GOLD} style={{ marginTop: 40 }} />
@@ -225,6 +300,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
   scroll: { paddingBottom: 40 },
+  startDayBtn: { marginHorizontal: 16, marginTop: 16, backgroundColor: GOLD, borderRadius: 14, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' },
+  startDayBtnText: { color: SLATE, fontSize: 17, fontWeight: '800' },
+  shiftCardOn: { marginHorizontal: 16, marginTop: 16, backgroundColor: '#ECFDF5', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#A7F3D0' },
+  shiftOnLabel: { color: '#065F46', fontSize: 14, fontWeight: '700' },
+  shiftTimer: { color: '#047857', fontSize: 22, fontWeight: '800', marginTop: 2, fontVariant: ['tabular-nums'] },
+  endDayBtn: { backgroundColor: '#10B981', borderRadius: 10, paddingVertical: 12, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
+  endDayBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   header: { backgroundColor: SLATE_DARK, padding: 20, paddingBottom: 0 },
   headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   greeting: { color: '#fff', fontSize: 22, fontWeight: '800' },
