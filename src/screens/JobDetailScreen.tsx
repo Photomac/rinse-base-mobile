@@ -134,6 +134,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       if (active) {
         setActiveEntry(active)
         setIsPaused(false)
+      } else {
+        // No open entry. If the most recent entry was closed by a PAUSE (has a
+        // pause_reason) and the job isn't finished, restore the paused state so
+        // the Resume button shows — otherwise a relaunch left it with no action.
+        setActiveEntry(null)
+        const last = data.length ? data[data.length - 1] : null
+        setIsPaused(!!last?.pause_reason && job.status !== 'completed')
       }
       const total = data.filter(e => e.clocked_out_at).reduce((s, e) => s + (e.duration_minutes || 0), 0)
       setElapsedMinutes(total)
