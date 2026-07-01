@@ -77,19 +77,33 @@ export async function startLocationTracking(user: any) {
     .eq('user_id', user.id)
 
   const myJobIds = (assignments ?? []).map((a: any) => a.job_id)
-  if (myJobIds.length === 0) return // No assignments, don't track
 
-  const { data: jobs } = await supabase
-    .from('jobs')
-    .select('id, status')
-    .in('id', myJobIds)
-    .gte('scheduled_start', todayStart.toISOString())
-    .lte('scheduled_start', todayEnd.toISOString())
-    .neq('status', 'cancelled')
+  let hasTodayJob = false
+  if (myJobIds.length > 0) {
+    const { data: jobs } = await supabase
+      .from('jobs')
+      .select('id')
+      .in('id', myJobIds)
+      .gte('scheduled_start', todayStart.toISOString())
+      .lte('scheduled_start', todayEnd.toISOString())
+      .neq('status', 'cancelled')
+    hasTodayJob = (jobs?.length ?? 0) > 0
+  }
 
-  const myJobs = jobs ?? []
+  // Also track while on an OPEN day-shift (daily time-tracking mode), even
+  // without a per-job assignment — so shift workers still appear live on the
+  // dispatch map.
+  const { data: openShift } = await supabase
+    .from('job_time_entries')
+    .select('id')
+    .eq('user_id', user.id)
+    .is('job_id', null)
+    .eq('entry_type', 'shift')
+    .is('clocked_out_at', null)
+    .limit(1)
+  const onShift = (openShift?.length ?? 0) > 0
 
-  if (myJobs.length === 0) return // No jobs today, don't track
+  if (!hasTodayJob && !onShift) return // nothing to track today
 
   // Start periodic pinging
   await pingLocation(user)
