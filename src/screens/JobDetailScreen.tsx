@@ -68,8 +68,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const { t } = useLang()
   const addr = job.client_addresses as any
   const client = job.clients as any
+  const dailyMode = user._timeMode === 'daily'
   const isClockedIn = !!activeEntry && !isPaused
-  const isStarted = timeEntries.length > 0 || !!activeEntry
+  // In daily mode there's no per-job timer, so "started" tracks job status instead.
+  const isStarted = timeEntries.length > 0 || !!activeEntry || (dailyMode && (job.status === 'in_progress' || job.status === 'completed'))
 
   useEffect(() => {
     loadChecklist()
@@ -208,6 +210,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     await supabase.from('jobs').update({ status: 'in_progress' }).eq('id', job.id)
     onStatusChange(job, 'in_progress')
     loadTimeEntries()
+    setSaving(false)
+  }
+
+  // Daily mode: start the clean for status + photo proof only — no per-job
+  // time entry (hours come from the day's shift on the Dashboard).
+  async function startJobDaily() {
+    setSaving(true)
+    await supabase.from('jobs').update({ status: 'in_progress' }).eq('id', job.id)
+    onStatusChange(job, 'in_progress')
     setSaving(false)
   }
 
@@ -389,14 +400,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         {/* Time tracker card */}
         <View style={[styles.card, isClockedIn && { borderColor: TEAL, borderWidth: 2 }]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={styles.sectionTitle}>⏱ {t('time_tracker')}</Text>
-            {elapsedMinutes > 0 && (
+            <Text style={styles.sectionTitle}>{dailyMode ? '🧹 ' + t('this_job') : '⏱ ' + t('time_tracker')}</Text>
+            {!dailyMode && elapsedMinutes > 0 && (
               <Text style={{ fontSize: 18, fontWeight: '900', color: TEAL }}>{fmtDuration(elapsedMinutes)}</Text>
             )}
           </View>
 
           {/* Time entries history */}
-          {timeEntries.filter(e => e.clocked_out_at).map((entry, i) => (
+          {!dailyMode && timeEntries.filter(e => e.clocked_out_at).map((entry, i) => (
             <View key={entry.id} style={styles.timeEntry}>
               <Text style={styles.timeEntryText}>
                 {t('session')} {i + 1}: {fmtTime(entry.clocked_in_at)} – {fmtTime(entry.clocked_out_at)}
@@ -407,7 +418,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           ))}
 
           {/* Active session */}
-          {isClockedIn && (
+          {!dailyMode && isClockedIn && (
             <View style={[styles.timeEntry, { backgroundColor: '#ECFDF5', borderColor: TEAL }]}>
               <Text style={[styles.timeEntryText, { color: '#065F46' }]}>
                 🟢 {t('active_since')} {fmtTime(activeEntry.clocked_in_at)}
@@ -415,14 +426,34 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             </View>
           )}
 
-          {isPaused && (
+          {!dailyMode && isPaused && (
             <View style={[styles.timeEntry, { backgroundColor: '#FEF9C3', borderColor: '#FCD34D' }]}>
               <Text style={[styles.timeEntryText, { color: '#854D0E' }]}>⏸ {t('paused')}</Text>
             </View>
           )}
 
+          {/* Daily mode: Start / Complete only — no per-job timer. */}
+          {dailyMode && job.status !== 'completed' && (
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+              {job.status !== 'in_progress' ? (
+                <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={startJobDaily} disabled={saving}>
+                  {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>{t('start_job')}</Text>}
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#10B981' }]} onPress={() => {
+                  Alert.alert(t('complete_job_confirm'), '', [
+                    { text: t('cancel'), style: 'cancel' },
+                    { text: t('complete_job'), onPress: completeJob },
+                  ])
+                }} disabled={saving}>
+                  <Text style={styles.clockBtnText}>✓ {t('complete_job')}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
           {/* Action buttons */}
-          {job.status !== 'completed' && (
+          {!dailyMode && job.status !== 'completed' && (
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
               {!isStarted && (
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={handleClockIn} disabled={saving}>
