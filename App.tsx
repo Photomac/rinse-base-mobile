@@ -84,32 +84,59 @@ function AppInner() {
     }
   }
 
-  // Real-time job change listener
+  // Real-time job change listener.
+  // INCIDENT NOTE (2026-07-02): the old version listened to ALL tenant job
+  // UPDATEs and compared against payload.old — which is PK-only under default
+  // replica identity, so every bulk sync update looked like a change and
+  // blasted every crew phone with hundreds of "New job assigned" alerts.
   useEffect(() => {
     if (!user) return
+    // Belt-and-suspenders: even legitimate bursts (bulk import auto-assigning
+    // a big book) must not machine-gun the phone. Max 3 alerts per minute.
+    let recentNotifies: number[] = []
+    const throttled = () => {
+      const now = Date.now()
+      recentNotifies = recentNotifies.filter(t => now - t < 60_000)
+      if (recentNotifies.length >= 3) return true
+      recentNotifies.push(now)
+      return false
+    }
     const channel = supabase
       .channel('job-changes')
+      // "New job assigned" keys off MY assignment row being created — the only
+      // signal that actually means this user got a job.
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'job_assignments',
+        filter: `user_id=eq.${user.id}`,
+      }, () => {
+        if (throttled()) return
+        Notifications.scheduleNotificationAsync({
+          content: { title: '✅ New job assigned', body: `You have a new job scheduled`, sound: true },
+          trigger: null,
+        }).catch(console.warn)
+      })
+      // Reschedule alerts: only when the old value is actually present and
+      // differs, and only for jobs THIS user is assigned to. (jobs is currently
+      // not in the realtime publication; this arms safely if it returns.)
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
         table: 'jobs',
         filter: `tenant_id=eq.${user.tenant_id}`,
-      }, (payload: any) => {
+      }, async (payload: any) => {
         const job = payload.new
         const old = payload.old
-        if (job.scheduled_start !== old.scheduled_start) {
-          const newTime = new Date(job.scheduled_start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-          Notifications.scheduleNotificationAsync({
-            content: { title: '📅 Job rescheduled', body: `Your job has been moved to ${newTime}`, sound: true },
-            trigger: null,
-          }).catch(console.warn)
-        }
-        if (job.status === 'scheduled' && old.status !== 'scheduled') {
-          Notifications.scheduleNotificationAsync({
-            content: { title: '✅ New job assigned', body: `You have a new job scheduled`, sound: true },
-            trigger: null,
-          }).catch(console.warn)
-        }
+        if (!old?.scheduled_start || job.scheduled_start === old.scheduled_start) return
+        const { data: mine } = await supabase.from('job_assignments')
+          .select('id').eq('job_id', job.id).eq('user_id', user.id).limit(1).maybeSingle()
+        if (!mine || throttled()) return
+        const newTime = new Date(job.scheduled_start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+        Notifications.scheduleNotificationAsync({
+          content: { title: '📅 Job rescheduled', body: `Your job has been moved to ${newTime}`, sound: true },
+          trigger: null,
+        }).catch(console.warn)
       })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
