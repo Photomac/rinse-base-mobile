@@ -229,12 +229,16 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
   }, [channel.id])
 
   async function loadMessages() {
+    // Newest 200 — PostgREST silently caps unranged selects at 1,000 rows,
+    // and ascending order would drop the NEWEST messages once a busy channel
+    // crosses that line.
     const { data } = await supabase
       .from('chat_messages')
       .select('*, users!chat_messages_sender_id_fkey(avatar_url, full_name, nickname)')
       .eq('channel_id', channel.id)
-      .order('created_at')
-    const msgs = (data ?? []).map((m: any) => ({
+      .order('created_at', { ascending: false })
+      .limit(200)
+    const msgs = (data ?? []).reverse().map((m: any) => ({
       ...m,
       avatar_url: m.avatar_url || m.users?.avatar_url || null,
       sender_name: m.users?.nickname?.trim() || m.sender_name || m.users?.full_name || t('unknown'),
