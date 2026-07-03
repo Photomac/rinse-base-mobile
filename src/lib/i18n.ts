@@ -150,6 +150,9 @@ export const translations = {
     laundry_bags_onsite: 'Bags done on-site',
     laundry_note_placeholder: 'Machines used, receipts, anything off…',
     laundry_save_run: 'Save laundry run',
+    takehome_title: 'Take-home laundry',
+    takehome_hint: 'Taking laundry home to wash? Log the bags — it adds your bonus to payroll.',
+    takehome_save: 'Save bags',
     // Inventory / supplies
     saving: 'Saving...', saved: 'Saved', edit: 'Edit', update_contact_hint: 'Keep your phone and email current so your team can reach you.',
     loading_supplies: 'Loading supplies...',
@@ -377,6 +380,9 @@ export const translations = {
     laundry_bags_onsite: 'Bolsas lavadas en el lugar',
     laundry_note_placeholder: 'Máquinas usadas, recibos, algo fuera de lo normal…',
     laundry_save_run: 'Guardar viaje',
+    takehome_title: 'Ropa para lavar en casa',
+    takehome_hint: '¿Te llevas ropa a casa para lavar? Registra las bolsas — tu bono se agrega a la nómina.',
+    takehome_save: 'Guardar bolsas',
     // Inventory / supplies
     saving: 'Guardando...', saved: 'Guardado', edit: 'Editar', update_contact_hint: 'Mantén tu teléfono y correo actualizados para que tu equipo pueda contactarte.',
     loading_supplies: 'Cargando materiales...',
