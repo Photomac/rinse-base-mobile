@@ -42,7 +42,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const end = new Date(now); end.setMonth(now.getMonth() + 2); end.setHours(23,59,59,999)
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
     const { data } = await supabase.from('jobs')
-      .select('id, status, scheduled_start, scheduled_end, is_turnover, clients!jobs_client_id_fkey(full_name), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id)')
+      .select('id, status, scheduled_start, scheduled_end, is_turnover, job_type, clients!jobs_client_id_fkey(full_name), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id)')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', start.toISOString())
       .lte('scheduled_start', end.toISOString())
@@ -208,8 +208,8 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       <Text style={[styles.statusText, { color }]}>{t((STATUS_LABEL_KEYS[job.status] || 'status_scheduled') as any)}</Text>
                     </View>
                   </View>
-                  <Text style={styles.jobClient}>{addr?.nickname || (job.clients as any)?.full_name}</Text>
-                  <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>
+                  <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : (addr?.nickname || (job.clients as any)?.full_name)}</Text>
+                  {job.job_type !== 'laundry_run' && <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>}
                   {job.is_turnover && <Text style={styles.turnoverTag}>🏠 {t('turnover')}</Text>}
                 </View>
                 <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
