@@ -62,7 +62,7 @@ function AppInner() {
       // (the cleaning company owns that relationship) — they reach dispatch.
       try {
         const { data: tenant } = await supabase.from('tenants')
-          .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, laundry_takehome_bonus').eq('id', data.tenant_id).maybeSingle()
+          .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus').eq('id', data.tenant_id).maybeSingle()
         let dispatchPhone = tenant?.dispatch_phone || null
         if (!dispatchPhone) {
           const { data: owner } = await supabase.from('users')
@@ -73,8 +73,11 @@ function AppInner() {
         data._contact = { crewCanContactClient: !!tenant?.crew_can_contact_client, dispatchPhone }
         // 'daily' → crew clock in once for the day (shift); 'per_job' (default) → per-clean timer.
         data._timeMode = tenant?.time_tracking_mode || 'per_job'
-        // >0 → tenant pays a take-home laundry bonus; gates the bag counter on cleans.
-        data._laundryBonus = Number(tenant?.laundry_takehome_bonus || 0)
+        // >0 → tenant pays a laundry bonus for at least one destination
+        // (home / on-site / office / laundromat); gates the bag counter on cleans.
+        data._laundryBonus = Math.max(
+          Number(tenant?.laundry_takehome_bonus || 0), Number(tenant?.laundry_onsite_bonus || 0),
+          Number(tenant?.laundry_office_bonus || 0), Number(tenant?.laundry_laundromat_bonus || 0))
       } catch (e) { data._contact = { crewCanContactClient: false, dispatchPhone: null }; data._timeMode = 'per_job'; data._laundryBonus = 0 }
     }
     setUser(data)
