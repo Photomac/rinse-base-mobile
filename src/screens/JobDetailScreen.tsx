@@ -26,21 +26,35 @@ const PAUSE_REASONS = [
   { value: 'Other', key: 'other' as const },
 ]
 
-// Take-home laundry on a regular clean: the cleaner bags the linens and washes
-// them at home for the tenant's per-bag bonus. Writes the same laundry_runs
-// row a laundromat task uses (keyed by this job), so payroll's bonus math and
-// the laundry reports pick it up with zero extra plumbing. Rendered only when
-// the tenant pays a bonus (user._laundryBonus > 0).
+// Laundry on a regular clean: where did the bags go? Four destinations, each
+// with its own per-bag rate on the tenant (take home / washed on-site /
+// dropped at office / dropped at laundromat) — covers Elle's split and any
+// other shop's. Writes the same laundry_runs row a laundromat task uses
+// (keyed by this job), so payroll's bonus math and the laundry reports pick
+// it up with zero extra plumbing. Rendered only when the tenant pays a bonus
+// for at least one destination (user._laundryBonus > 0).
+const LAUNDRY_MODES = [
+  { key: 'bags_taken_home' as const,    labelKey: 'laundry_bags_home' as const },
+  { key: 'bags_onsite' as const,        labelKey: 'laundry_bags_onsite' as const },
+  { key: 'bags_to_office' as const,     labelKey: 'laundry_bags_office' as const },
+  { key: 'bags_to_laundromat' as const, labelKey: 'laundry_bags_laundromat' as const },
+]
 function TakeHomeLaundryCard({ job, user }: { job: any; user: any }) {
   const { t } = useLang()
-  const [bags, setBags] = useState(0)
+  const [bags, setBags] = useState<Record<string, number>>({ bags_taken_home: 0, bags_onsite: 0, bags_to_office: 0, bags_to_laundromat: 0 })
   const [rowUserId, setRowUserId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    supabase.from('laundry_runs').select('user_id, bags_taken_home').eq('job_id', job.id).maybeSingle().then(({ data }) => {
-      if (data) { setBags(data.bags_taken_home ?? 0); setRowUserId(data.user_id ?? null) }
+    supabase.from('laundry_runs').select('user_id, bags_taken_home, bags_onsite, bags_to_office, bags_to_laundromat').eq('job_id', job.id).maybeSingle().then(({ data }) => {
+      if (data) {
+        setBags({
+          bags_taken_home: data.bags_taken_home ?? 0, bags_onsite: data.bags_onsite ?? 0,
+          bags_to_office: data.bags_to_office ?? 0, bags_to_laundromat: data.bags_to_laundromat ?? 0,
+        })
+        setRowUserId(data.user_id ?? null)
+      }
     })
   }, [])
 
@@ -50,7 +64,7 @@ function TakeHomeLaundryCard({ job, user }: { job: any; user: any }) {
       tenant_id: user.tenant_id,
       job_id: job.id,
       user_id: rowUserId || user.id,
-      bags_taken_home: bags,
+      ...bags,
     }, { onConflict: 'job_id' })
     setSaving(false)
     if (error) { Alert.alert(t('error'), error.message); return }
@@ -60,25 +74,27 @@ function TakeHomeLaundryCard({ job, user }: { job: any; user: any }) {
 
   return (
     <View style={styles.card}>
-      <Text style={styles.sectionTitle}>🧺 {t('takehome_title')}</Text>
-      <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2, marginBottom: 10 }}>{t('takehome_hint')}</Text>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151' }}>{t('laundry_bags_home')}</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <TouchableOpacity onPress={() => setBags(b => Math.max(0, b - 1))}
-            style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', lineHeight: 22 }}>−</Text>
-          </TouchableOpacity>
-          <Text style={{ fontSize: 20, fontWeight: '900', color: '#111827', minWidth: 30, textAlign: 'center' }}>{bags}</Text>
-          <TouchableOpacity onPress={() => setBags(b => b + 1)}
-            style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', lineHeight: 22 }}>+</Text>
-          </TouchableOpacity>
+      <Text style={styles.sectionTitle}>🧺 {t('laundry_card_title')}</Text>
+      <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2, marginBottom: 10 }}>{t('laundry_card_hint')}</Text>
+      {LAUNDRY_MODES.map(({ key, labelKey }) => (
+        <View key={key} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', flex: 1, paddingRight: 8 }}>{t(labelKey)}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            <TouchableOpacity onPress={() => setBags(b => ({ ...b, [key]: Math.max(0, b[key] - 1) }))}
+              style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', lineHeight: 22 }}>−</Text>
+            </TouchableOpacity>
+            <Text style={{ fontSize: 20, fontWeight: '900', color: bags[key] > 0 ? '#111827' : '#9CA3AF', minWidth: 30, textAlign: 'center' }}>{bags[key]}</Text>
+            <TouchableOpacity onPress={() => setBags(b => ({ ...b, [key]: b[key] + 1 }))}
+              style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', lineHeight: 22 }}>+</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      ))}
       <TouchableOpacity
         onPress={save} disabled={saving}
-        style={{ marginTop: 12, borderRadius: 12, padding: 12, alignItems: 'center', backgroundColor: saved ? '#10B981' : TEAL }}>
+        style={{ marginTop: 4, borderRadius: 12, padding: 12, alignItems: 'center', backgroundColor: saved ? '#10B981' : TEAL }}>
         {saving
           ? <ActivityIndicator color="#fff" size="small" />
           : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>{saved ? `✓ ${t('saved')}` : t('takehome_save')}</Text>}

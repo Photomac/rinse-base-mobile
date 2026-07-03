@@ -30,6 +30,8 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
   })
   const [bagsHome, setBagsHome] = useState(0)
   const [bagsOnsite, setBagsOnsite] = useState(0)
+  const [bagsOffice, setBagsOffice] = useState(0)
+  const [bagsMat, setBagsMat] = useState(0)
   const [existingUserId, setExistingUserId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -48,6 +50,8 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
         })
         setBagsHome(data.bags_taken_home ?? 0)
         setBagsOnsite(data.bags_onsite ?? 0)
+        setBagsOffice(data.bags_to_office ?? 0)
+        setBagsMat(data.bags_to_laundromat ?? 0)
         setExistingUserId(data.user_id ?? null)
       }
       setLoading(false)
@@ -79,6 +83,8 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
       cash_in_pouch: pouch,
       bags_taken_home: bagsHome,
       bags_onsite: bagsOnsite,
+      bags_to_office: bagsOffice,
+      bags_to_laundromat: bagsMat,
       note: form.note.trim() || null,
     }, { onConflict: 'job_id' })
     setSaving(false)
@@ -164,6 +170,8 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
           <View style={styles.card}>
             {bagStepper('laundry_bags_home', bagsHome, setBagsHome)}
             {bagStepper('laundry_bags_onsite', bagsOnsite, setBagsOnsite)}
+            {bagStepper('laundry_bags_office', bagsOffice, setBagsOffice)}
+            {bagStepper('laundry_bags_laundromat', bagsMat, setBagsMat)}
           </View>
 
           <Text style={styles.sectionTitle}>📝 {t('notes_optional')}</Text>
