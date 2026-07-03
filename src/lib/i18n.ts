@@ -135,6 +135,7 @@ export const translations = {
     role_laundry_runner: 'Laundry Runner',
     // Laundry run reconciliation form
     laundry_run: 'Laundry run',
+    task: 'Task',
     laundry_form: 'Laundry form',
     laundry_cash_section: 'Cash reconciliation',
     laundry_cash_given: 'Cash given to you',
@@ -361,6 +362,7 @@ export const translations = {
     role_laundry_runner: 'Encargado de lavandería',
     // Formulario de conciliación de lavandería
     laundry_run: 'Viaje de lavandería',
+    task: 'Tarea',
     laundry_form: 'Formulario de lavandería',
     laundry_cash_section: 'Conciliación de efectivo',
     laundry_cash_given: 'Efectivo que te dieron',

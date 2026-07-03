@@ -74,6 +74,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
   // the cash + bags reconciliation form replaces them.
   const isLaundry = job.job_type === 'laundry_run'
+  // Any internal task (laundry run, generic task): no property/checklist/photos.
+  const isTask = !!job.job_type && job.job_type !== 'clean'
   const dailyMode = user._timeMode === 'daily'
   const isClockedIn = !!activeEntry && !isPaused
   // In daily mode there's no per-job timer, so "started" tracks job status instead.
@@ -278,7 +280,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   async function completeJob() {
     // Enforce at least 1 after photo — cleans only; laundry runs have no
     // property to photograph (their proof is the reconciliation form).
-    if (isLaundry) { await completeJobNoPhotoCheck(); return }
+    if (isTask) { await completeJobNoPhotoCheck(); return }
     const { data: afterPhotos } = await supabase
       .from('job_photos')
       .select('id')
@@ -330,13 +332,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack} style={styles.backBtn}><Text style={styles.backText}>← {t('back')}</Text></TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{isLaundry ? `🧺 ${t('laundry_run')}` : (addr?.nickname || client?.full_name || t('job_detail'))}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || client?.full_name || t('job_detail'))}</Text>
         <View style={{ width: 60 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
         {/* Property photo — not for laundry runs (internal shell property) */}
-        {isLaundry ? null : addr?.photo_url ? (
+        {isTask ? null : addr?.photo_url ? (
           <Image source={{ uri: addr.photo_url }} style={{ width: '100%', height: 180, borderRadius: 12, marginBottom: 12 }} resizeMode="cover" />
         ) : addr?.id && (
           <TouchableOpacity
@@ -364,9 +366,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Job info card */}
         <View style={styles.card}>
-          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : <>{addr?.nickname || client?.full_name}{job.is_turnover ? '  🏠 Turnover' : ''}</>}</Text>
+          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{addr?.nickname || client?.full_name}{job.is_turnover ? '  🏠 Turnover' : ''}</>}</Text>
           <Text style={styles.timeRow}>🕐 {fmtTime(job.scheduled_start)} – {fmtTime(job.scheduled_end)}</Text>
-          {!isLaundry && (
+          {!isTask && (
           <TouchableOpacity onPress={() => {
             const q = addr?.lat ? `${addr.lat},${addr.lng}` : `${addr?.street}, ${addr?.city}`
             Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(q)}`)
@@ -417,14 +419,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             <TouchableOpacity style={[styles.suppliesBtn, { borderColor: TEAL }]} onPress={() => setShowLaundry(true)}>
               <Text style={[styles.suppliesBtnText, { color: TEAL }]}>🧺 {t('laundry_form')}</Text>
             </TouchableOpacity>
-          ) : (<>
+          ) : !isTask ? (<>
           <TouchableOpacity style={styles.photosBtn} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
             <Text style={styles.photosBtnText}>📸 {t('job_photos')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.suppliesBtn} onPress={() => setShowInventory(true)}>
             <Text style={styles.suppliesBtnText}>📦 {t('supplies')}</Text>
           </TouchableOpacity>
-          </>)}
+          </>) : null}
           <TouchableOpacity style={styles.messagesBtn} onPress={() => setShowMessages(true)}>
             <Text style={styles.messagesBtnText}>💬 {t('messages')}</Text>
           </TouchableOpacity>
@@ -518,7 +520,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         </View>
 
         {/* Checklist — cleans only; laundry runs use the reconciliation form */}
-        {isStarted && !isLaundry && (
+        {isStarted && !isTask && (
           <View style={styles.card}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <Text style={styles.sectionTitle}>{t('cleaning_checklist')}</Text>
@@ -556,10 +558,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         )}
 
         {/* Stay condition rating — how the guests left it (host sees it with photos) */}
-        {isStarted && !isLaundry && <StayRatingCard job={job} user={user} />}
+        {isStarted && !isTask && <StayRatingCard job={job} user={user} />}
 
         {/* Lost & found — log a guest belonging left behind (manager reviews before host is told) */}
-        {isStarted && !isLaundry && <LostFoundCard job={job} user={user} />}
+        {isStarted && !isTask && <LostFoundCard job={job} user={user} />}
 
         {/* Notes */}
         {isStarted && (
