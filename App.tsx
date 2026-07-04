@@ -36,6 +36,7 @@ function AppInner() {
   const [user, setUser] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [selectedJob, setSelectedJob] = useState<any>(null)
+  const [chatUnread, setChatUnread] = useState(0)
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [showSOS, setShowSOS] = useState(false)
   const [activeChannel, setActiveChannel] = useState<any>(null)
@@ -147,6 +148,43 @@ function AppInner() {
     return () => { supabase.removeChannel(channel) }
   }, [user])
 
+  // Chat unread badge — a channel is unread when its last_message_at is newer
+  // than this user's chat_channel_reads row (same cheap rule the web uses; no
+  // message counting). message_channels IS in the realtime publication, and
+  // BOTH apps bump last_message_at on send, so one subscription covers all.
+  const refreshChatUnread = async () => {
+    if (!user) return
+    try {
+      const [chanRes, readsRes] = await Promise.all([
+        supabase.from('message_channels').select('id, channel_type, participant_ids, last_message_at').eq('tenant_id', user.tenant_id),
+        supabase.from('chat_channel_reads').select('channel_id, last_read_at').eq('user_id', user.id),
+      ])
+      const reads = Object.fromEntries((readsRes.data ?? []).map((r: any) => [r.channel_id, r.last_read_at]))
+      const mine = (chanRes.data ?? []).filter((c: any) => c.channel_type === 'team' || c.participant_ids?.includes(user.id))
+      setChatUnread(mine.filter((c: any) => c.last_message_at && (!reads[c.id] || c.last_message_at > reads[c.id])).length)
+    } catch { /* badge is best-effort */ }
+  }
+
+  useEffect(() => {
+    if (!user) return
+    refreshChatUnread()
+    const ch = supabase
+      .channel(`chat-unread-${user.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'message_channels', filter: `tenant_id=eq.${user.tenant_id}` }, () => { refreshChatUnread() })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [user?.id])
+
+  function openChatChannel(ch: any) {
+    setActiveChannel(ch)
+    if (user) {
+      supabase.from('chat_channel_reads').upsert(
+        { tenant_id: user.tenant_id, channel_id: ch.id, user_id: user.id, last_read_at: new Date().toISOString() },
+        { onConflict: 'channel_id,user_id' },
+      ).then(() => refreshChatUnread())
+    }
+  }
+
   // Drain any photos captured offline — once on login, and every time the app
   // returns to the foreground (e.g. crew regains signal and reopens the app).
   useEffect(() => {
@@ -172,7 +210,7 @@ function AppInner() {
   }
 
   if (activeChannel) {
-    return <ChatScreen channel={activeChannel} user={user} onBack={() => setActiveChannel(null)} />
+    return <ChatScreen channel={activeChannel} user={user} onBack={() => { setActiveChannel(null); refreshChatUnread() }} />
   }
 
   if (showSOS) {
@@ -241,9 +279,14 @@ function AppInner() {
 
         <Tab.Screen
           name="Chat"
-          options={{ tabBarLabel: 'Chat', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>💬</Text> }}
+          options={{
+            tabBarLabel: 'Chat',
+            tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>💬</Text>,
+            tabBarBadge: chatUnread > 0 ? (chatUnread > 9 ? '9+' : chatUnread) : undefined,
+            tabBarBadgeStyle: { backgroundColor: '#EF4444', color: '#fff', fontSize: 10, fontWeight: '800' },
+          }}
         >
-          {() => <ChatListScreen user={user} onOpenChannel={setActiveChannel} onNewDM={() => {}} />}
+          {() => <ChatListScreen user={user} onOpenChannel={openChatChannel} onNewDM={() => {}} />}
         </Tab.Screen>
 
         <Tab.Screen

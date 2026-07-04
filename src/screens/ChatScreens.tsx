@@ -23,11 +23,24 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
   const [selectedMembers, setSelectedMembers] = useState<string[]>([])
   const [creatingGroup, setCreatingGroup] = useState(false)
 
-  useEffect(() => { load() }, [])
+  const [reads, setReads] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    load()
+    // Live channel list — message_channels.last_message_at is bumped on every
+    // send from either app, and the table is in the realtime publication.
+    const ch = supabase
+      .channel(`chat-list-${user.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'message_channels', filter: `tenant_id=eq.${user.tenant_id}` }, () => { load() })
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [])
 
   async function load() {
     setLoading(true)
     try {
+      const { data: readRows } = await supabase.from('chat_channel_reads').select('channel_id, last_read_at').eq('user_id', user.id)
+      setReads(Object.fromEntries((readRows ?? []).map((r: any) => [r.channel_id, r.last_read_at])))
       const [chanRes, crewRes] = await Promise.all([
         supabase.from('message_channels').select('*')
           .eq('tenant_id', user.tenant_id)
@@ -94,6 +107,12 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
     const otherId = channel.participant_ids?.find((id: string) => id !== user.id)
     const other = crew.find(c => c.id === otherId)
     return other?.nickname?.trim() || other?.full_name || t('unknown')
+  }
+
+  function isUnread(channel: any) {
+    if (!channel?.last_message_at) return false
+    const readAt = reads[channel.id]
+    return !readAt || channel.last_message_at > readAt
   }
 
   return (
@@ -172,9 +191,10 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
                 <Text style={styles.channelIconText}>#</Text>
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.channelName}>{item.name}</Text>
+                <Text style={[styles.channelName, isUnread(item) && { fontWeight: '900' }]}>{item.name}</Text>
                 {item.last_message && <Text style={styles.channelPreview} numberOfLines={1}>{item.last_message}</Text>}
               </View>
+              {isUnread(item) && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444', marginRight: 8 }} />}
               <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
             </TouchableOpacity>
           )}
@@ -202,6 +222,7 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
                   <Text style={styles.channelRole}>{t((ROLE_KEYS[item.role] || 'role_cleaner') as any)}</Text>
                   {dmChannel?.last_message && <Text style={styles.channelPreview} numberOfLines={1}>{dmChannel.last_message}</Text>}
                 </View>
+                {dmChannel && isUnread(dmChannel) && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444', marginRight: 8 }} />}
                 <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
               </TouchableOpacity>
             )
@@ -224,9 +245,25 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
 
   useEffect(() => {
     loadMessages()
-    const interval = setInterval(loadMessages, 8000)
-    return () => clearInterval(interval)
+    // Realtime instead of the old 8-second poll: every send (web or mobile)
+    // bumps message_channels.last_message_at, which IS realtime-published —
+    // so incoming messages appear in ~1s. A slow poll stays as the safety
+    // net for dropped websockets.
+    const rt = supabase
+      .channel(`chat-${channel.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'message_channels', filter: `id=eq.${channel.id}` }, () => { loadMessages() })
+      .subscribe()
+    const interval = setInterval(loadMessages, 30000)
+    return () => { supabase.removeChannel(rt); clearInterval(interval) }
   }, [channel.id])
+
+  // Reading the channel — keep the unread badge honest while it's open.
+  function markRead() {
+    supabase.from('chat_channel_reads').upsert(
+      { tenant_id: user.tenant_id, channel_id: channel.id, user_id: user.id, last_read_at: new Date().toISOString() },
+      { onConflict: 'channel_id,user_id' },
+    ).then(() => {})
+  }
 
   async function loadMessages() {
     // Newest 200 — PostgREST silently caps unranged selects at 1,000 rows,
@@ -245,6 +282,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
     }))
     setMessages(msgs)
     setLoading(false)
+    markRead()
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 100)
   }
 

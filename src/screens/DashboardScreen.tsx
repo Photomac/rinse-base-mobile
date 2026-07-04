@@ -13,6 +13,7 @@ function fmtTime(iso: string) {
 export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void; onSOS: () => void }) {
   const { t, lang } = useLang()
   const [todayJobs, setTodayJobs] = useState<any[]>([])
+  const [cancelledToday, setCancelledToday] = useState<any[]>([])
   const [activeJob, setActiveJob] = useState<any>(null)
   const [nextJob, setNextJob] = useState<any>(null)
   const [monthStats, setMonthStats] = useState({ completed: 0, hours: 0, earnings: 0 })
@@ -40,7 +41,6 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         .eq('tenant_id', user.tenant_id)
         .gte('scheduled_start', todayStart.toISOString())
         .lte('scheduled_start', todayEnd.toISOString())
-        .neq('status', 'cancelled')
         .order('scheduled_start'),
       // Monthly stats. For crew, filter to THEIR jobs server-side (inner join)
       // — the old fetch-everything-then-filter pulled every tenant job of the
@@ -60,9 +60,14 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             .gte('scheduled_start', monthStart.toISOString()),
     ])
 
-    const myToday = isOwner
+    const myTodayAll = isOwner
       ? (todayRes.data ?? [])
       : (todayRes.data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
+    // Cancelled jobs used to be filtered out server-side, so a cancellation
+    // silently vanished from the crew's day — show explicit "cancelled" cards
+    // instead, so nobody drives to a dead job or wonders where it went.
+    const myToday = myTodayAll.filter((j: any) => j.status !== 'cancelled')
+    setCancelledToday(myTodayAll.filter((j: any) => j.status === 'cancelled'))
 
     const myMonth = monthRes.data ?? []
 
@@ -285,6 +290,26 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     </View>
                     <Text style={styles.jobArrow}>→</Text>
                   </TouchableOpacity>
+                )
+              })}
+
+              {/* Cancelled today — the job doesn't just vanish; the crew sees
+                  what happened and why (first line of the cancellation note). */}
+              {cancelledToday.map((job: any) => {
+                const addr = job.client_addresses
+                const reason = (job.internal_notes || '').split('\n')[0]
+                return (
+                  <View key={job.id} style={[styles.jobRow, { opacity: 0.65, borderStyle: 'dashed' as const }]}>
+                    <View style={[styles.jobDot, { backgroundColor: '#EF4444' }]} />
+                    <View style={styles.jobInfo}>
+                      <Text style={[styles.jobClient, { textDecorationLine: 'line-through' as const }]}>
+                        {addr?.nickname || (job.clients as any)?.full_name}
+                      </Text>
+                      <Text style={[styles.jobTime, { color: '#EF4444', fontWeight: '700' as const }]}>
+                        ❌ {t('job_cancelled_label')}{reason ? ` — ${reason}` : ''}
+                      </Text>
+                    </View>
+                  </View>
                 )
               })}
             </View>
