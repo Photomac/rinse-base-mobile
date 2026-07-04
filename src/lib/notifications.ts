@@ -27,21 +27,34 @@ export async function registerPushToken(user: any) {
   if (status !== 'granted') return null
 
   // Get Expo push token (projectId pulled from app.json so it stays
-  // in lockstep with the EAS Update URL)
-  const tokenData = await Notifications.getExpoPushTokenAsync({
-    projectId: '4768586a-ae45-4b35-984c-a1803f1b2985',
-  })
-  const token = tokenData.data
+  // in lockstep with the EAS Update URL).
+  //
+  // getExpoPushTokenAsync registers the device with FCM/APNs and can throw
+  // ("Calling the 'getRegistrationInfoAsync' function has failed") when that
+  // registration fails — flaky network, Android without Google Play Services,
+  // APNs hiccup, etc. That's an expected device condition, not a bug: swallow
+  // it so it doesn't blow up the login flow or spam Sentry. The crew member
+  // simply has no push token this session (SMS fallbacks still cover geofence/
+  // clockout); it retries on the next launch.
+  try {
+    const tokenData = await Notifications.getExpoPushTokenAsync({
+      projectId: '4768586a-ae45-4b35-984c-a1803f1b2985',
+    })
+    const token = tokenData.data
 
-  // Save token to Supabase
-  await supabase.from('push_tokens').upsert({
-    tenant_id: user.tenant_id,
-    user_id: user.id,
-    token,
-    platform: Platform.OS,
-  }, { onConflict: 'user_id,token' })
+    // Save token to Supabase
+    await supabase.from('push_tokens').upsert({
+      tenant_id: user.tenant_id,
+      user_id: user.id,
+      token,
+      platform: Platform.OS,
+    }, { onConflict: 'user_id,token' })
 
-  return token
+    return token
+  } catch (e) {
+    console.warn('Push token registration failed (device will retry next launch):', e)
+    return null
+  }
 }
 
 export async function sendSOSNotification(tenantId: string, crewName: string, location: string) {
