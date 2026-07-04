@@ -24,6 +24,60 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
   const [contactPhone, setContactPhone] = useState(user.phone || '')
   const [savingContact, setSavingContact] = useState(false)
 
+  // ── Time-off requests ─────────────────────────────────────────────────────
+  const today = new Date().toISOString().split('T')[0]
+  const TO_TYPES = ['pto', 'sick', 'personal', 'unpaid', 'holiday'] as const
+  type TimeOffType = typeof TO_TYPES[number]
+  const [toRequests, setToRequests] = useState<any[]>([])
+  const [toLoading, setToLoading] = useState(true)
+  const [toStart, setToStart] = useState(today)
+  const [toEnd, setToEnd] = useState(today)
+  const [toType, setToType] = useState<TimeOffType>('pto')
+  const [toNote, setToNote] = useState('')
+  const [toSubmitting, setToSubmitting] = useState(false)
+
+  React.useEffect(() => { loadTimeOff() }, [])
+
+  async function loadTimeOff() {
+    setToLoading(true)
+    const { data } = await supabase.from('crew_time_off')
+      .select('id, start_date, end_date, type, note, status, created_at')
+      .eq('tenant_id', user.tenant_id)
+      .eq('user_id', user.id)
+      .order('start_date', { ascending: false })
+    setToRequests(data || [])
+    setToLoading(false)
+  }
+
+  const isValidDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + 'T12:00:00').getTime())
+
+  async function submitTimeOff() {
+    if (!isValidDate(toStart) || !isValidDate(toEnd)) { Alert.alert(t('error'), t('to_date_format')); return }
+    if (toEnd < toStart) { Alert.alert(t('error'), t('to_end_after_start')); return }
+    setToSubmitting(true)
+    const { error } = await supabase.from('crew_time_off').insert({
+      tenant_id: user.tenant_id,
+      user_id: user.id,
+      start_date: toStart,
+      end_date: toEnd,
+      type: toType,
+      note: toNote.trim() || null,
+      status: 'pending',
+    })
+    setToSubmitting(false)
+    if (error) { Alert.alert(t('error'), error.message); return }
+    setToNote(''); setToStart(today); setToEnd(today); setToType('pto')
+    Alert.alert(t('time_off'), t('request_submitted'))
+    loadTimeOff()
+  }
+
+  const toTypeLabel = (ty: string) => t(('to_type_' + ty) as any) || ty
+  const toStatusStyle = (st: string) =>
+    st === 'approved' ? { color: '#047857', bg: '#ECFDF5', border: '#A7F3D0' }
+    : st === 'denied' ? { color: '#B91C1C', bg: '#FEF2F2', border: '#FECACA' }
+    : { color: '#B45309', bg: '#FFFBEB', border: '#FDE68A' }
+  const fmtToDate = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
   async function saveContact() {
     setSavingContact(true)
     const { error } = await supabase.from('users')
@@ -145,6 +199,69 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
           {user.hourly_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('hourly_rate')}</Text><Text style={styles.rowValue}>${Number(user.hourly_rate).toFixed(2)}/hr</Text></View>}
           {user.per_job_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('per_job_rate')}</Text><Text style={styles.rowValue}>${Number(user.per_job_rate).toFixed(2)}/job</Text></View>}
         </View>
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>{t('time_off')}</Text>
+          <Text style={styles.toHint}>{t('time_off_hint')}</Text>
+
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>{t('to_start_date')}</Text>
+              <TextInput value={toStart} onChangeText={setToStart} placeholder="YYYY-MM-DD" autoCapitalize="none"
+                keyboardType="numbers-and-punctuation" style={styles.input} placeholderTextColor="#9E8E72" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>{t('to_end_date')}</Text>
+              <TextInput value={toEnd} onChangeText={setToEnd} placeholder="YYYY-MM-DD" autoCapitalize="none"
+                keyboardType="numbers-and-punctuation" style={styles.input} placeholderTextColor="#9E8E72" />
+            </View>
+          </View>
+
+          <Text style={[styles.rowLabel, { marginTop: 12 }]}>{t('to_type')}</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+            {TO_TYPES.map(ty => (
+              <TouchableOpacity key={ty} onPress={() => setToType(ty)}
+                style={[styles.typeChip, toType === ty && styles.typeChipActive]}>
+                <Text style={[styles.typeChipText, toType === ty && styles.typeChipTextActive]}>{toTypeLabel(ty)}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={[styles.rowLabel, { marginTop: 12 }]}>{t('to_note')}</Text>
+          <TextInput value={toNote} onChangeText={setToNote} placeholder={t('to_note_ph')} multiline
+            style={[styles.input, { minHeight: 44 }]} placeholderTextColor="#9E8E72" />
+
+          <TouchableOpacity style={[styles.contactBtn, { backgroundColor: GOLD, marginTop: 12 }]}
+            onPress={submitTimeOff} disabled={toSubmitting}>
+            <Text style={{ color: '#1A1408', fontWeight: '800', fontSize: 13 }}>
+              {toSubmitting ? t('submitting') : t('submit_request')}
+            </Text>
+          </TouchableOpacity>
+
+          <Text style={[styles.sectionTitle, { marginTop: 20 }]}>{t('my_requests')}</Text>
+          {toLoading ? (
+            <Text style={styles.toEmpty}>{t('loading')}</Text>
+          ) : toRequests.length === 0 ? (
+            <Text style={styles.toEmpty}>{t('no_requests_yet')}</Text>
+          ) : (
+            toRequests.map(r => {
+              const s = toStatusStyle(r.status)
+              return (
+                <View key={r.id} style={styles.toRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.toRowDates}>
+                      {fmtToDate(r.start_date)}{r.end_date !== r.start_date ? ` – ${fmtToDate(r.end_date)}` : ''}
+                    </Text>
+                    <Text style={styles.toRowMeta}>{toTypeLabel(r.type)}{r.note ? ` · ${r.note}` : ''}</Text>
+                  </View>
+                  <View style={[styles.toBadge, { backgroundColor: s.bg, borderColor: s.border }]}>
+                    <Text style={[styles.toBadgeText, { color: s.color }]}>{t(('to_status_' + r.status) as any)}</Text>
+                  </View>
+                </View>
+              )
+            })
+          )}
+        </View>
+
         <TouchableOpacity style={styles.langBtn} onPress={toggleLanguage}>
           <Text style={styles.langBtnText}>{lang === 'en' ? '🇲🇽 Cambiar a Español' : '🇺🇸 Switch to English'}</Text>
         </TouchableOpacity>
@@ -180,4 +297,15 @@ const styles = StyleSheet.create({
   langBtnText: { color: '#1D4ED8', fontSize: 15, fontWeight: '700' },
   signOutBtn: { backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FECACA', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
   signOutText: { color: '#DC2626', fontSize: 15, fontWeight: '700' },
+  toHint: { fontSize: 12, color: '#94A3B8', marginBottom: 12, lineHeight: 17 },
+  typeChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#fff' },
+  typeChipActive: { backgroundColor: GOLD, borderColor: GOLD },
+  typeChipText: { fontSize: 12, color: '#475569', fontWeight: '600' },
+  typeChipTextActive: { color: '#1A1408', fontWeight: '800' },
+  toEmpty: { fontSize: 13, color: '#94A3B8', paddingVertical: 6 },
+  toRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F1F5F9', gap: 10 },
+  toRowDates: { fontSize: 13, color: '#0F172A', fontWeight: '700' },
+  toRowMeta: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
+  toBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1 },
+  toBadgeText: { fontSize: 11, fontWeight: '700' },
 })
