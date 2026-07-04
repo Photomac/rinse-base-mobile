@@ -42,20 +42,29 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         .lte('scheduled_start', todayEnd.toISOString())
         .neq('status', 'cancelled')
         .order('scheduled_start'),
-      supabase.from('jobs')
-        .select('id, status, scheduled_start, scheduled_end, job_assignments(user_id)')
-        .eq('tenant_id', user.tenant_id)
-        .eq('status', 'completed')
-        .gte('scheduled_start', monthStart.toISOString()),
+      // Monthly stats. For crew, filter to THEIR jobs server-side (inner join)
+      // — the old fetch-everything-then-filter pulled every tenant job of the
+      // month, which silently truncates at PostgREST's 1,000-row cap on a busy
+      // tenant and understates the crew member's own hours/earnings.
+      isOwner
+        ? supabase.from('jobs')
+            .select('id, status, scheduled_start, scheduled_end')
+            .eq('tenant_id', user.tenant_id)
+            .eq('status', 'completed')
+            .gte('scheduled_start', monthStart.toISOString())
+        : supabase.from('jobs')
+            .select('id, status, scheduled_start, scheduled_end, job_assignments!inner(user_id)')
+            .eq('tenant_id', user.tenant_id)
+            .eq('job_assignments.user_id', user.id)
+            .eq('status', 'completed')
+            .gte('scheduled_start', monthStart.toISOString()),
     ])
 
     const myToday = isOwner
       ? (todayRes.data ?? [])
       : (todayRes.data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
 
-    const myMonth = isOwner
-      ? (monthRes.data ?? [])
-      : (monthRes.data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
+    const myMonth = monthRes.data ?? []
 
     setTodayJobs(myToday)
     setActiveJob(myToday.find((j: any) => j.status === 'in_progress') || null)

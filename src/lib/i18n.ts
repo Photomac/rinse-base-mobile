@@ -154,6 +154,20 @@ export const translations = {
     laundry_card_hint: 'Where did the laundry go? Log bags per destination — bonuses are added to payroll.',
     laundry_note_placeholder: 'Machines used, receipts, anything off…',
     laundry_save_run: 'Save laundry run',
+    login_invalid_credentials: 'Email or password is incorrect. Check both and try again.',
+    login_network_error: "Couldn't reach the server — check your internet connection and try again.",
+    perm_bg_location_title: 'Background location off',
+    perm_bg_location_ios: 'To get auto clock-out reminders when you leave a job site, set Location to "Always Allow" in Settings → Rinsebase Crew → Location.',
+    perm_bg_location_android: 'To get auto clock-out reminders when you leave a job site, set Location to "Allow all the time" in Settings → Apps → Rinsebase Crew → Permissions → Location.',
+    perm_notifications_title: 'Notifications are off',
+    perm_notifications_msg: 'Turn on Notifications in Settings → Rinsebase Crew so you get job updates and SOS alerts.',
+    dial_911_manually: 'Open your phone app and dial 911 directly.',
+    perm_location_off_title: 'Location is off for Rinsebase',
+    perm_location_off_msg: 'Turn on Location in Settings → Rinsebase Crew to use the GPS-based features.',
+    photo_updated: 'Photo updated!',
+    clock_in_failed: "Couldn't clock you in — check your signal and try again. Your time was NOT started.",
+    clock_out_failed: "Couldn't save your clock-out — check your signal and try again. Your time is still running.",
+    pending_upload: 'waiting to upload',
     takehome_title: 'Take-home laundry',
     takehome_hint: 'Taking laundry home to wash? Log the bags — it adds your bonus to payroll.',
     takehome_save: 'Save bags',
@@ -388,6 +402,20 @@ export const translations = {
     laundry_card_hint: '¿A dónde fue la ropa? Registra las bolsas por destino — los bonos se agregan a la nómina.',
     laundry_note_placeholder: 'Máquinas usadas, recibos, algo fuera de lo normal…',
     laundry_save_run: 'Guardar viaje',
+    login_invalid_credentials: 'El correo o la contraseña son incorrectos. Revísalos e inténtalo de nuevo.',
+    login_network_error: 'No se pudo conectar al servidor — revisa tu conexión a internet e inténtalo de nuevo.',
+    perm_bg_location_title: 'Ubicación en segundo plano desactivada',
+    perm_bg_location_ios: 'Para recibir recordatorios de salida al dejar el sitio de trabajo, pon la ubicación en "Permitir siempre" en Ajustes → Rinsebase Crew → Ubicación.',
+    perm_bg_location_android: 'Para recibir recordatorios de salida al dejar el sitio de trabajo, pon la ubicación en "Permitir todo el tiempo" en Ajustes → Aplicaciones → Rinsebase Crew → Permisos → Ubicación.',
+    perm_notifications_title: 'Las notificaciones están desactivadas',
+    perm_notifications_msg: 'Activa las notificaciones en Ajustes → Rinsebase Crew para recibir avisos de trabajos y alertas SOS.',
+    dial_911_manually: 'Abre la aplicación de teléfono y marca el 911 directamente.',
+    perm_location_off_title: 'La ubicación está desactivada para Rinsebase',
+    perm_location_off_msg: 'Activa la ubicación en Ajustes → Rinsebase Crew para usar las funciones de GPS.',
+    photo_updated: '¡Foto actualizada!',
+    clock_in_failed: 'No se pudo registrar tu entrada — revisa tu señal e inténtalo de nuevo. Tu tiempo NO comenzó.',
+    clock_out_failed: 'No se pudo guardar tu salida — revisa tu señal e inténtalo de nuevo. Tu tiempo sigue corriendo.',
+    pending_upload: 'esperando para subir',
     takehome_title: 'Ropa para lavar en casa',
     takehome_hint: '¿Te llevas ropa a casa para lavar? Registra las bolsas — tu bono se agrega a la nómina.',
     takehome_save: 'Guardar bolsas',
@@ -484,9 +512,19 @@ export function t(lang: Language, key: TranslationKey): string {
   return translations[lang][key] || translations.en[key] || key
 }
 
+// Static translator for lib code that runs outside React (permissions
+// prompts, background tasks). Cache updated by getLanguage/setLanguage, so
+// after app boot it always reflects the user's choice; 'en' only before the
+// first load resolves.
+let cachedLang: Language = 'en'
+export function tStatic(key: TranslationKey): string {
+  return t(cachedLang, key)
+}
+
 export async function getLanguage(): Promise<Language> {
   try {
     const lang = await AsyncStorage.getItem('language')
+    if (lang === 'en' || lang === 'es') cachedLang = lang
     return (lang as Language) || 'en'
   } catch {
     return 'en'
@@ -494,5 +532,6 @@ export async function getLanguage(): Promise<Language> {
 }
 
 export async function setLanguage(lang: Language): Promise<void> {
+  cachedLang = lang
   await AsyncStorage.setItem('language', lang)
 }

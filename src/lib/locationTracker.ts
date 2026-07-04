@@ -5,6 +5,7 @@
 import * as Location from 'expo-location'
 import * as TaskManager from 'expo-task-manager'
 import * as Notifications from 'expo-notifications'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
 
@@ -16,14 +17,38 @@ const GEOFENCE_DISMISS_DURATION = 15 * 60 * 1000 // 15 minutes after "Still work
 let pingTimer: any = null
 let currentUser: any = null
 let geofenceDismissedUntil: Record<string, number> = {} // jobId → timestamp
+let dismissalsHydrated = false
 
 export function setTrackedUser(user: any) {
   currentUser = user
 }
 
+// Module state dies whenever the OS restarts the process (backgrounding,
+// headless relaunch for a location update) — without persistence, a crew
+// member who tapped "Still working" gets re-nagged minutes later. Persist
+// dismissals and hydrate lazily before any geofence check.
+const DISMISS_KEY = 'geofence_dismissals'
+async function hydrateDismissals() {
+  if (dismissalsHydrated) return
+  dismissalsHydrated = true
+  try {
+    const raw = await AsyncStorage.getItem(DISMISS_KEY)
+    if (raw) {
+      const stored = JSON.parse(raw)
+      // keep the later of stored vs in-memory, drop expired
+      for (const [jobId, until] of Object.entries(stored)) {
+        if ((until as number) > Date.now() && (until as number) > (geofenceDismissedUntil[jobId] || 0)) {
+          geofenceDismissedUntil[jobId] = until as number
+        }
+      }
+    }
+  } catch { /* cache-only degradation */ }
+}
+
 // Dismiss geofence alert for a specific job (crew tapped "Still working")
 export function dismissGeofenceAlert(jobId: string) {
   geofenceDismissedUntil[jobId] = Date.now() + GEOFENCE_DISMISS_DURATION
+  AsyncStorage.setItem(DISMISS_KEY, JSON.stringify(geofenceDismissedUntil)).catch(() => {})
 }
 
 // Haversine distance in meters
@@ -108,7 +133,9 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
 
   if (!hasTodayJob && !clockedIn) return // not working right now — nothing to track
 
-  // Start periodic pinging
+  // Start periodic pinging. Clear any existing timer first — clock-in, resume
+  // and relaunch all call this, and stacked intervals meant duplicate pings.
+  if (pingTimer) clearInterval(pingTimer)
   await pingLocation(user)
   pingTimer = setInterval(() => pingLocation(user), PING_INTERVAL)
 }
@@ -123,6 +150,39 @@ export async function stopLocationTracking() {
   if (isRegistered) {
     await Location.stopLocationUpdatesAsync(LOCATION_TASK)
   }
+}
+
+// Stop tracking when the crew member is genuinely done working — no open time
+// entry (work or shift) AND no still-active job today. Called after clock-out /
+// job completion. Before this, per-job crews had NO stop path at all: the ping
+// timer and the OS background task ran until the app was killed (battery drain
+// + "why is it tracking me at home"). Daily-shift crews keep tracking until
+// "End my day" because their shift entry stays open.
+export async function maybeStopLocationTracking(user: any) {
+  try {
+    const { data: openEntry } = await supabase
+      .from('job_time_entries')
+      .select('id')
+      .eq('user_id', user.id)
+      .is('clocked_out_at', null)
+      .limit(1)
+    if ((openEntry?.length ?? 0) > 0) return // still on the clock somewhere
+
+    const now = new Date()
+    const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
+    const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
+    const { data: active } = await supabase
+      .from('jobs')
+      .select('id, job_assignments!inner(user_id)')
+      .eq('job_assignments.user_id', user.id)
+      .in('status', ['scheduled', 'en_route', 'in_progress'])
+      .gte('scheduled_start', todayStart.toISOString())
+      .lte('scheduled_start', todayEnd.toISOString())
+      .limit(1)
+    if ((active?.length ?? 0) > 0) return // more work today — stay visible to dispatch
+
+    await stopLocationTracking()
+  } catch { /* best-effort — worst case tracking continues as before */ }
 }
 
 // ── BACKGROUND TASK HANDLER ──
@@ -196,6 +256,7 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
       const addr = activeJob.client_addresses as any
       if (addr.lat && addr.lng) {
         const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
+        await hydrateDismissals()
         const dismissed = geofenceDismissedUntil[activeJob.id] || 0
 
         if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
@@ -264,6 +325,7 @@ async function pingLocation(user: any) {
       const addr = activeJob.client_addresses as any
       if (addr.lat && addr.lng) {
         const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
+        await hydrateDismissals()
         const dismissed = geofenceDismissedUntil[activeJob.id] || 0
 
         if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
