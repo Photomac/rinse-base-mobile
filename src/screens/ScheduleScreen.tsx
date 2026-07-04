@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator , RefreshControl } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
@@ -30,6 +30,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const DAY_NAMES = [t('day_sun'), t('day_mon'), t('day_tue'), t('day_wed'), t('day_thu'), t('day_fri'), t('day_sat')]
   const [jobs, setJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [anchor, setAnchor] = useState(new Date())
   const [view, setView] = useState<ViewMode>('month')
@@ -53,6 +54,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
       : (data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
     setJobs(myJobs)
     setLoading(false)
+    setRefreshing(false)
   }
 
   function getJobsForDay(day: Date) {
@@ -114,7 +116,8 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
         <Text style={styles.jobCountLabel}>{ti(t('n_jobs'), { n: String(jobs.length) })}</Text>
       </View>
 
-      <ScrollView>
+      <ScrollView
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={GOLD} />}>
         <View style={styles.dayNamesRow}>
           {DAY_NAMES.map(d => (
             <Text key={d} style={styles.dayName}>{d}</Text>

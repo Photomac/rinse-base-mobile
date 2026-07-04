@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Alert, Act
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
-import { enqueuePhoto, flushQueue } from '../lib/photoQueue'
+import { enqueuePhoto, flushQueue, pendingCount } from '../lib/photoQueue'
 import { useLang } from '../contexts/LangContext'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -32,6 +32,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   const [selectedType, setSelectedType] = useState('after')
   const [caption, setCaption] = useState(preselectedItem?.title || '')
   const [visibleToClient, setVisibleToClient] = useState(true)
+  const [pending, setPending] = useState(0)
 
   const addr = job.client_addresses as any
   const client = job.clients as any
@@ -40,6 +41,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
     loadPhotos()
     // Opening the screen in coverage drains any photos captured earlier offline.
     flushQueue().then(({ uploaded }) => { if (uploaded > 0) loadPhotos() }).catch(() => {})
+      .finally(() => { pendingCount().then(setPending).catch(() => {}) })
   }, [])
 
   async function loadPhotos() {
@@ -85,6 +87,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
         visible_to_client: visibleToClient,
       })
       const { remaining } = await flushQueue()
+      setPending(remaining)
 
       setCaption('')
       loadPhotos()
@@ -155,6 +158,19 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
+        {/* Offline queue status — crew proof-of-work must never feel uncertain.
+            Shows only while photos are waiting on signal; taps retry the flush. */}
+        {pending > 0 && (
+          <TouchableOpacity
+            onPress={() => flushQueue().then(({ uploaded, remaining }) => { setPending(remaining); if (uploaded > 0) loadPhotos() }).catch(() => {})}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEF9C3', borderWidth: 1, borderColor: '#FCD34D', borderRadius: 10, padding: 10, marginBottom: 10 }}>
+            <Text style={{ fontSize: 16 }}>📥</Text>
+            <Text style={{ flex: 1, fontSize: 12, fontWeight: '700', color: '#854D0E' }}>
+              {pending} 📷 {t('pending_upload')}
+            </Text>
+            <Text style={{ fontSize: 11, fontWeight: '700', color: '#854D0E' }}>↻</Text>
+          </TouchableOpacity>
+        )}
         {/* Photo type selector */}
         <View style={styles.typeRow}>
           {PHOTO_TYPES.map(pt => (

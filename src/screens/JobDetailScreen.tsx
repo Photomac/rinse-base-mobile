@@ -13,7 +13,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
-import { startLocationTracking } from '../lib/locationTracker'
+import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -277,26 +277,39 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   async function saveCheckItem(item: any, isChecked: boolean) {
+    // Ticks save optimistically — on failure, revert the box and tell the
+    // crew, or they walk away believing the checklist is done when it isn't.
+    let error
     if (isChecked) {
-      const { error } = await supabase.from('job_checklist_items').upsert({
+      ;({ error } = await supabase.from('job_checklist_items').upsert({
         tenant_id: user.tenant_id, job_id: job.id,
         room: item.room, task: item.title, sort_order: 0,
         completed: true, completed_at: new Date().toISOString(), completed_by: user.id,
-      }, { onConflict: 'job_id,task,room' })
-      if (error) console.log('CHECKLIST SAVE ERROR:', error.message)
+      }, { onConflict: 'job_id,task,room' }))
     } else {
-      await supabase.from('job_checklist_items').delete().eq('job_id', job.id).eq('task', item.title).eq('room', item.room)
+      ;({ error } = await supabase.from('job_checklist_items').delete().eq('job_id', job.id).eq('task', item.title).eq('room', item.room))
+    }
+    if (error) {
+      setChecked(prev => ({ ...prev, [item.id]: !isChecked }))
+      Alert.alert(t('error'), t('could_not_save'))
     }
   }
 
   async function handleClockIn() {
     setSaving(true)
-    // Create time entry
-    const { data: entry } = await supabase.from('job_time_entries').insert({
+    // Create time entry — this row IS the crew member's pay. If the insert
+    // fails (dead spot, RLS hiccup) we must NOT mark the job in_progress:
+    // that's exactly the "worked all day, no hours on payroll" failure.
+    const { data: entry, error: entryErr } = await supabase.from('job_time_entries').insert({
       tenant_id: user.tenant_id, job_id: job.id, user_id: user.id,
       clocked_in_at: new Date().toISOString(), entry_type: 'work',
     }).select().single()
-    if (entry) setActiveEntry(entry)
+    if (entryErr || !entry) {
+      setSaving(false)
+      Alert.alert(t('error'), t('clock_in_failed'))
+      return
+    }
+    setActiveEntry(entry)
     setIsPaused(false)
     // Begin broadcasting location now that they're clocked in (don't wait for
     // an app relaunch, and don't require a job_assignment). Clock-in is the
@@ -328,11 +341,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setSaving(true)
     const now = new Date()
     const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
-    await supabase.from('job_time_entries').update({
+    const { error: pauseErr } = await supabase.from('job_time_entries').update({
       clocked_out_at: now.toISOString(),
       pause_reason: pauseReason,
       duration_minutes: Math.round(mins),
     }).eq('id', activeEntry.id)
+    if (pauseErr) {
+      setSaving(false)
+      Alert.alert(t('error'), t('clock_out_failed'))
+      return
+    }
     setActiveEntry(null)
     setIsPaused(true)
     setShowPauseModal(false)
@@ -343,11 +361,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   async function handleResume() {
     setSaving(true)
-    const { data: entry } = await supabase.from('job_time_entries').insert({
+    const { data: entry, error: resumeErr } = await supabase.from('job_time_entries').insert({
       tenant_id: user.tenant_id, job_id: job.id, user_id: user.id,
       clocked_in_at: new Date().toISOString(), entry_type: 'work',
     }).select().single()
-    if (entry) setActiveEntry(entry)
+    if (resumeErr || !entry) {
+      setSaving(false)
+      Alert.alert(t('error'), t('clock_in_failed'))
+      return
+    }
+    setActiveEntry(entry)
     setIsPaused(false)
     startLocationTracking(user, { requestBackground: true }).catch(() => {})
     loadTimeEntries()
@@ -381,16 +404,31 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   async function completeJobNoPhotoCheck() {
     setSaving(true)
-    // Clock out active entry
+    // Clock out active entry — the clock-out IS the paid duration. If it
+    // fails, bail before marking complete: an open entry on a "completed"
+    // job would run forever and corrupt payroll.
     if (activeEntry) {
       const now = new Date()
       const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
-      await supabase.from('job_time_entries').update({
+      const { error: outErr } = await supabase.from('job_time_entries').update({
         clocked_out_at: now.toISOString(),
         duration_minutes: Math.round(mins),
       }).eq('id', activeEntry.id)
+      if (outErr) {
+        setSaving(false)
+        Alert.alert(t('error'), t('clock_out_failed'))
+        return
+      }
     }
-    await supabase.from('jobs').update({ status: 'completed', internal_notes: notes.trim() || null }).eq('id', job.id)
+    const { error: doneErr } = await supabase.from('jobs').update({ status: 'completed', internal_notes: notes.trim() || null }).eq('id', job.id)
+    if (doneErr) {
+      setSaving(false)
+      Alert.alert(t('error'), doneErr.message)
+      return
+    }
+    // Done working? Stop GPS. (No-op if another entry/shift is still open or
+    // more jobs remain today — daily-shift crews keep broadcasting.)
+    maybeStopLocationTracking(user).catch(() => {})
     onStatusChange(job, 'completed')
     onBack()
     setSaving(false)
@@ -443,7 +481,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Job info card */}
         <View style={styles.card}>
-          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{addr?.nickname || client?.full_name}{job.is_turnover ? '  🏠 Turnover' : ''}</>}</Text>
+          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{addr?.nickname || client?.full_name}{job.is_turnover ? `  🏠 ${t('turnover')}` : ''}</>}</Text>
           <Text style={styles.timeRow}>🕐 {fmtTime(job.scheduled_start)} – {fmtTime(job.scheduled_end)}</Text>
           {!isTask && (
           <TouchableOpacity onPress={() => {

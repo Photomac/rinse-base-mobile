@@ -76,7 +76,7 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
       await supabase.from('users').update({ avatar_url: url }).eq('id', user.id)
       setAvatarUrl(url)
       onAvatarUpdate?.(url)
-      Alert.alert('✅ Photo updated!')
+      Alert.alert(`✅ ${t('photo_updated')}`)
     } catch(e: any) {
       Alert.alert('Error', e.message)
     }

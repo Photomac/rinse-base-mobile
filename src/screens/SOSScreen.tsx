@@ -147,7 +147,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
           text: t('call_911_btn'),
           style: 'destructive',
           onPress: () => Linking.openURL('tel:911').catch(() => {
-            Alert.alert(t('location_error'), 'Open your phone app and dial 911 directly.')
+            Alert.alert(t('location_error'), t('dial_911_manually'))
           }),
         },
       ],

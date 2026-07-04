@@ -14,7 +14,14 @@ export function LoginScreen() {
     if (!email || !password) { Alert.alert(t('login_failed'), !email ? t('enter_email') : t('enter_password')); return }
     setLoading(true)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) Alert.alert(t('login_failed'), error.message)
+    if (error) {
+      // Supabase auth errors arrive in English — map the common ones so
+      // Spanish-first crew get a readable reason, not a raw API string.
+      const msg = /invalid login credentials/i.test(error.message) ? t('login_invalid_credentials')
+        : /network|fetch/i.test(error.message) ? t('login_network_error')
+        : error.message
+      Alert.alert(t('login_failed'), msg)
+    }
     setLoading(false)
   }
 

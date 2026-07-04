@@ -12,6 +12,7 @@ import { Alert, Linking, Platform } from 'react-native'
 import * as Location from 'expo-location'
 import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { tStatic } from './i18n'
 
 const FG_LOCATION_ASKED = 'perm:location:fg:asked'
 const BG_LOCATION_ASKED = 'perm:location:bg:asked'
@@ -46,8 +47,8 @@ export async function ensureForegroundLocation(opts?: { silent?: boolean }): Pro
   // Permission was denied and OS won't show the prompt again — only Settings can fix it.
   if (!opts?.silent) {
     showSettingsAlert(
-      'Location is off for Rinsebase',
-      'Turn on Location in Settings → Rinsebase Crew to use the GPS-based features.',
+      tStatic('perm_location_off_title'),
+      tStatic('perm_location_off_msg'),
     )
   }
   return 'denied'
@@ -73,10 +74,10 @@ export async function ensureBackgroundLocation(opts?: { silent?: boolean }): Pro
 
   if (!opts?.silent) {
     showSettingsAlert(
-      'Background location off',
+      tStatic('perm_bg_location_title'),
       Platform.OS === 'ios'
-        ? 'To get auto clock-out reminders when you leave a job site, set Location to "Always Allow" in Settings → Rinsebase Crew → Location.'
-        : 'To get auto clock-out reminders when you leave a job site, set Location to "Allow all the time" in Settings → Apps → Rinsebase Crew → Permissions → Location.',
+        ? tStatic('perm_bg_location_ios')
+        : tStatic('perm_bg_location_android'),
     )
   }
   return 'denied'
@@ -95,8 +96,8 @@ export async function ensureNotifications(opts?: { silent?: boolean }): Promise<
 
   if (!opts?.silent) {
     showSettingsAlert(
-      'Notifications are off',
-      'Turn on Notifications in Settings → Rinsebase Crew so you get job updates and SOS alerts.',
+      tStatic('perm_notifications_title'),
+      tStatic('perm_notifications_msg'),
     )
   }
   return 'denied'
