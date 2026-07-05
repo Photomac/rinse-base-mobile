@@ -148,6 +148,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const { t } = useLang()
   const addr = job.client_addresses as any
   const client = job.clients as any
+  // Dispatcher-suggested driving order → "Stop k of M" for this crew's day.
+  const [routeStop, setRouteStop] = useState<{ k: number; m: number } | null>(null)
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
   // the cash + bags reconciliation form replaces them.
   const isLaundry = job.job_type === 'laundry_run'
@@ -162,7 +164,27 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     loadChecklist()
     loadTimeEntries()
     loadPropMeta()
+    loadRouteStop()
   }, [])
+
+  // Rank this job among the crew member's own route-ordered jobs for the same
+  // day, so the badge is a clean "Stop k of M" (matches the Dashboard).
+  async function loadRouteStop() {
+    const day = new Date(job.scheduled_start)
+    const start = new Date(day); start.setHours(0, 0, 0, 0)
+    const end = new Date(day); end.setHours(23, 59, 59, 999)
+    const { data } = await supabase.from('jobs')
+      .select('id, route_order, job_assignments!inner(user_id)')
+      .eq('tenant_id', user.tenant_id)
+      .eq('job_assignments.user_id', user.id)
+      .not('route_order', 'is', null)
+      .gte('scheduled_start', start.toISOString())
+      .lte('scheduled_start', end.toISOString())
+    if (!data || !data.length) { setRouteStop(null); return }
+    const ordered = [...data].sort((a: any, b: any) => a.route_order - b.route_order)
+    const idx = ordered.findIndex((j: any) => j.id === job.id)
+    setRouteStop(idx === -1 ? null : { k: idx + 1, m: ordered.length })
+  }
 
   // Beds/baths/sqft aren't in the list-screen job payload, so fetch them here —
   // works no matter which screen opened this job.
@@ -495,6 +517,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         {/* Job info card */}
         <View style={styles.card}>
           <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{addr?.nickname || client?.full_name}{job.is_turnover ? `  🏠 ${t('turnover')}` : ''}</>}</Text>
+          {routeStop && (
+            <View style={styles.routeStopBadge}>
+              <Text style={styles.routeStopText}>🧭 {ti(t('route_stop_of'), { k: String(routeStop.k), m: String(routeStop.m) })}</Text>
+            </View>
+          )}
           <Text style={styles.timeRow}>🕐 {fmtTime(job.scheduled_start)} – {fmtTime(job.scheduled_end)}</Text>
           {!isTask && (
           <TouchableOpacity onPress={() => {
@@ -763,6 +790,8 @@ const styles = StyleSheet.create({
   scroll: { padding: 16, paddingBottom: 40 },
   card: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2, borderWidth: 1, borderColor: '#F3F4F6' },
   clientName: { fontSize: 20, fontWeight: '800', color: '#111827', marginBottom: 6 },
+  routeStopBadge: { alignSelf: 'flex-start', backgroundColor: '#F5F3FF', borderColor: '#DDD6FE', borderWidth: 1, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 4, marginBottom: 8 },
+  routeStopText: { fontSize: 12, fontWeight: '800', color: '#6D28D9' },
   timeRow: { fontSize: 14, color: '#374151', marginBottom: 6, fontWeight: '500' },
   address: { fontSize: 13, color: TEAL, marginBottom: 14, fontWeight: '500' },
   propSpecs: { fontSize: 14, color: '#374151', fontWeight: '700', marginTop: -8, marginBottom: 14 },
