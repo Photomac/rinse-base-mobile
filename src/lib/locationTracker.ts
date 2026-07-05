@@ -60,6 +60,29 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
+// Is this crew member actively working RIGHT NOW — clocked in (per-job 'work'
+// or day 'shift') OR en route / in progress on a job today? Merely having a job
+// scheduled for later today is NOT "working" and must not broadcast a location
+// (that was the "why am I on the map at home, with the app closed?" leak). This
+// gates BOTH starting tracking and continuing it, so tracking self-terminates
+// the moment someone goes off the clock.
+async function isActivelyWorking(userId: string): Promise<boolean> {
+  const { data: openEntry } = await supabase
+    .from('job_time_entries').select('id').eq('user_id', userId).is('clocked_out_at', null).limit(1)
+  if ((openEntry?.length ?? 0) > 0) return true
+  const now = new Date()
+  const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
+  const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
+  const { data: active } = await supabase
+    .from('jobs').select('id, job_assignments!inner(user_id)')
+    .eq('job_assignments.user_id', userId)
+    .in('status', ['en_route', 'in_progress'])
+    .gte('scheduled_start', todayStart.toISOString())
+    .lte('scheduled_start', todayEnd.toISOString())
+    .limit(1)
+  return (active?.length ?? 0) > 0
+}
+
 export async function startLocationTracking(user: any, opts?: { requestBackground?: boolean }) {
   currentUser = user
 
@@ -67,15 +90,26 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
   const fgStatus = await ensureForegroundLocation({ silent: true })
   if (fgStatus !== 'granted') return
 
+  // Only broadcast while actively working. If not (e.g. app just opened with no
+  // job, or clocked out), make sure any prior tracking — including a lingering
+  // background task from an earlier session — is fully stopped and the dispatch
+  // dot is removed. Off the clock = off the map.
+  if (!(await isActivelyWorking(user.id))) {
+    await stopLocationTracking()
+    return
+  }
+
   // Background ("Always") is a stronger ask, so we only escalate to the OS
-  // prompt at a user-initiated work moment (clock-in / start-of-day) — never
-  // on plain app launch, which just reads the cached status. silent:true means
-  // a past denial won't nag with the Settings alert on every clock-in.
+  // prompt at a user-initiated work moment (clock-in / start-of-day) — never on
+  // plain app launch, which just reads the cached status. silent:true means a
+  // past denial won't nag with the Settings alert on every clock-in.
   const bgStatus = opts?.requestBackground
     ? await ensureBackgroundLocation({ silent: true })
     : await getBackgroundLocationStatus()
 
-  // Start background location task if user has previously opted into Always
+  // Register the OS background task ONLY now that we've confirmed they're
+  // working. Previously this ran BEFORE the work check, so an Always-granted
+  // phone kept pinging location with no job and the app closed.
   if (bgStatus === 'granted') {
     const isRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TASK)
     if (!isRegistered) {
@@ -94,45 +128,6 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
     }
   }
 
-  // Check if user has any active jobs today
-  const now = new Date()
-  const todayStart = new Date(now); todayStart.setHours(0,0,0,0)
-  const todayEnd = new Date(now); todayEnd.setHours(23,59,59,999)
-
-  const { data: assignments } = await supabase
-    .from('job_assignments')
-    .select('job_id')
-    .eq('user_id', user.id)
-
-  const myJobIds = (assignments ?? []).map((a: any) => a.job_id)
-
-  let hasTodayJob = false
-  if (myJobIds.length > 0) {
-    const { data: jobs } = await supabase
-      .from('jobs')
-      .select('id')
-      .in('id', myJobIds)
-      .gte('scheduled_start', todayStart.toISOString())
-      .lte('scheduled_start', todayEnd.toISOString())
-      .neq('status', 'cancelled')
-    hasTodayJob = (jobs?.length ?? 0) > 0
-  }
-
-  // Also track whenever the crew member is CLOCKED IN — any open time entry,
-  // per-job ('work') or day-shift ('shift') — even on a job they aren't a
-  // formal job_assignment on. Being on the clock is what "working" means; the
-  // old assignment-only gate meant clocked-in-but-unassigned crew (and shift
-  // workers) never broadcast a location.
-  const { data: openEntry } = await supabase
-    .from('job_time_entries')
-    .select('id')
-    .eq('user_id', user.id)
-    .is('clocked_out_at', null)
-    .limit(1)
-  const clockedIn = (openEntry?.length ?? 0) > 0
-
-  if (!hasTodayJob && !clockedIn) return // not working right now — nothing to track
-
   // Start periodic pinging. Clear any existing timer first — clock-in, resume
   // and relaunch all call this, and stacked intervals meant duplicate pings.
   if (pingTimer) clearInterval(pingTimer)
@@ -150,6 +145,17 @@ export async function stopLocationTracking() {
   if (isRegistered) {
     await Location.stopLocationUpdatesAsync(LOCATION_TASK)
   }
+  // Remove this crew member's live dot from dispatch. Without this the last
+  // known position lingers in crew_locations forever and keeps showing on the
+  // map ("why am I always on the map?"). RLS lets a user delete their own row
+  // (crew_update_own_location). Best-effort — a server cron also expires stale
+  // rows as a safety net.
+  const u = currentUser
+  if (u?.id && u?.tenant_id) {
+    try {
+      await supabase.from('crew_locations').delete().eq('tenant_id', u.tenant_id).eq('user_id', u.id)
+    } catch { /* best-effort */ }
+  }
 }
 
 // Stop tracking when the crew member is genuinely done working — no open time
@@ -160,27 +166,8 @@ export async function stopLocationTracking() {
 // "End my day" because their shift entry stays open.
 export async function maybeStopLocationTracking(user: any) {
   try {
-    const { data: openEntry } = await supabase
-      .from('job_time_entries')
-      .select('id')
-      .eq('user_id', user.id)
-      .is('clocked_out_at', null)
-      .limit(1)
-    if ((openEntry?.length ?? 0) > 0) return // still on the clock somewhere
-
-    const now = new Date()
-    const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
-    const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
-    const { data: active } = await supabase
-      .from('jobs')
-      .select('id, job_assignments!inner(user_id)')
-      .eq('job_assignments.user_id', user.id)
-      .in('status', ['scheduled', 'en_route', 'in_progress'])
-      .gte('scheduled_start', todayStart.toISOString())
-      .lte('scheduled_start', todayEnd.toISOString())
-      .limit(1)
-    if ((active?.length ?? 0) > 0) return // more work today — stay visible to dispatch
-
+    currentUser = user // so stopLocationTracking clears the right row
+    if (await isActivelyWorking(user.id)) return // still working — keep tracking
     await stopLocationTracking()
   } catch { /* best-effort — worst case tracking continues as before */ }
 }
@@ -216,6 +203,14 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
   }
 
   try {
+    // Off the clock? Self-terminate: stop the background task, drop the dispatch
+    // dot, and record nothing. This is what stops an Always-granted phone from
+    // reporting location after the crew member is done for the day.
+    if (!(await isActivelyWorking(user.id))) {
+      await stopLocationTracking()
+      return
+    }
+
     // Find this crew member's active job
     const now = new Date()
     const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
@@ -279,6 +274,13 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
 
 async function pingLocation(user: any) {
   try {
+    // Stop the moment they're no longer working — belt-and-suspenders with
+    // maybeStopLocationTracking so a stray timer can't keep broadcasting.
+    if (!(await isActivelyWorking(user.id))) {
+      await stopLocationTracking()
+      return
+    }
+
     const loc = await Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced,
     })
