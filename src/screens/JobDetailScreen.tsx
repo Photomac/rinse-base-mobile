@@ -332,6 +332,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setSaving(false)
   }
 
+  // "On my way" — one tap tells dispatch (and the client portal, which already
+  // shows "On the way") the crew is heading to this job, and starts GPS now so
+  // they appear moving on the dispatch map BEFORE they arrive. No time entry /
+  // no pay yet — that begins at clock-in when they get there.
+  async function handleOnMyWay() {
+    setSaving(true)
+    startLocationTracking(user, { requestBackground: true }).catch(() => {})
+    const { error } = await supabase.from('jobs').update({ status: 'en_route' }).eq('id', job.id)
+    setSaving(false)
+    if (error) { Alert.alert(t('error'), t('en_route_failed')); return }
+    onStatusChange(job, 'en_route')
+  }
+
   async function handlePause() {
     setShowPauseModal(true)
   }
@@ -579,6 +592,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {!dailyMode && isPaused && (
             <View style={[styles.timeEntry, { backgroundColor: '#FEF9C3', borderColor: '#FCD34D' }]}>
               <Text style={[styles.timeEntryText, { color: '#854D0E' }]}>⏸ {t('paused')}</Text>
+            </View>
+          )}
+
+          {/* On my way — tell dispatch you're heading out (starts GPS early).
+              Mode-agnostic: shows before the clean is started. */}
+          {job.status === 'scheduled' && (
+            <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#8B5CF6', marginTop: 12 }]} onPress={handleOnMyWay} disabled={saving}>
+              {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>🚗 {t('on_my_way')}</Text>}
+            </TouchableOpacity>
+          )}
+          {job.status === 'en_route' && (
+            <View style={[styles.timeEntry, { backgroundColor: '#F5F3FF', borderColor: '#DDD6FE', marginTop: 12 }]}>
+              <Text style={[styles.timeEntryText, { color: '#6D28D9' }]}>🚗 {t('on_the_way_banner')}</Text>
             </View>
           )}
 
