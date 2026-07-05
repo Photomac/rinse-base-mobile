@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIn
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { ti } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 
@@ -37,7 +38,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     const [todayRes, monthRes] = await Promise.all([
       supabase.from('jobs')
-        .select('id, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
+        .select('id, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
         .eq('tenant_id', user.tenant_id)
         .gte('scheduled_start', todayStart.toISOString())
         .lte('scheduled_start', todayEnd.toISOString())
@@ -151,6 +152,18 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const hour = now.getHours()
   const greeting = hour < 12 ? t('good_morning') : hour < 17 ? t('good_afternoon') : t('good_evening')
   const completedToday = todayJobs.filter(j => j.status === 'completed').length
+
+  // Dispatcher-suggested driving order → "Stop k of M" for the crew's day.
+  // Rank among today's jobs that carry a route_order so it's always a clean
+  // "1 of N" regardless of how the dispatcher generated it.
+  const routeStops: Record<string, { k: number; m: number }> = (() => {
+    const ordered = todayJobs
+      .filter((j: any) => j.route_order != null)
+      .sort((a: any, b: any) => a.route_order - b.route_order)
+    const map: Record<string, { k: number; m: number }> = {}
+    ordered.forEach((j: any, i: number) => { map[j.id] = { k: i + 1, m: ordered.length } })
+    return map
+  })()
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -281,6 +294,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                 const addr = job.client_addresses
                 const isDone = job.status === 'completed'
                 const isActive = job.status === 'in_progress'
+                const stop = routeStops[job.id]
                 return (
                   <TouchableOpacity key={job.id} style={[styles.jobRow, isDone && { opacity: 0.5 }]} onPress={() => onJobPress(job)}>
                     <View style={[styles.jobDot, { backgroundColor: isDone ? '#10B981' : isActive ? '#F59E0B' : '#3B82F6' }]} />
@@ -288,6 +302,11 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                       <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (job.clients as any)?.full_name)}</Text>
                       <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}{job.is_turnover ? ' · 🏠 ' + t('turnover') : ''}</Text>
                     </View>
+                    {stop && (
+                      <View style={styles.routeStopBadge}>
+                        <Text style={styles.routeStopText}>🧭 {ti(t('route_stop_of'), { k: String(stop.k), m: String(stop.m) })}</Text>
+                      </View>
+                    )}
                     <Text style={styles.jobArrow}>→</Text>
                   </TouchableOpacity>
                 )
@@ -390,6 +409,8 @@ const styles = StyleSheet.create({
   jobClient: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
   jobTime: { fontSize: 11, color: '#94A3B8', marginTop: 2 },
   jobArrow: { fontSize: 16, color: '#CBD5E1' },
+  routeStopBadge: { backgroundColor: '#F5F3FF', borderColor: '#DDD6FE', borderWidth: 1, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, marginRight: 8 },
+  routeStopText: { fontSize: 10, fontWeight: '800', color: '#6D28D9' },
   moreBtn: { backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
   moreBtnText: { fontSize: 12, color: '#64748B', fontWeight: '600' },
   earningsCard: { margin: 16, backgroundColor: SLATE_DARK, borderRadius: 16, padding: 20 },
