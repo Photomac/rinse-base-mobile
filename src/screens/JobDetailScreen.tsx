@@ -360,11 +360,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // no pay yet — that begins at clock-in when they get there.
   async function handleOnMyWay() {
     setSaving(true)
-    startLocationTracking(user, { requestBackground: true }).catch(() => {})
+    // Set en_route FIRST, then start tracking — location broadcasting is now
+    // gated on being actively working (clocked in OR en_route/in_progress), so
+    // the status must be committed before startLocationTracking checks it.
     const { error } = await supabase.from('jobs').update({ status: 'en_route' }).eq('id', job.id)
-    setSaving(false)
-    if (error) { Alert.alert(t('error'), t('en_route_failed')); return }
+    if (error) { setSaving(false); Alert.alert(t('error'), t('en_route_failed')); return }
     onStatusChange(job, 'en_route')
+    startLocationTracking(user, { requestBackground: true }).catch(() => {})
+    setSaving(false)
   }
 
   async function handlePause() {
