@@ -431,7 +431,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       .limit(1)
 
     if (!afterPhotos || afterPhotos.length === 0) {
-      const queued = await pendingCount().catch(() => 0)
+      const queued = await pendingCount(job.id).catch(() => 0)
       if (queued > 0) {
         // Photos exist but can't reach the server yet — completing needs
         // signal too, so a dead-end "photo required" here reads as a bug.
