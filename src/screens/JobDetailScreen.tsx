@@ -14,6 +14,7 @@ import { ti } from '../lib/i18n'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
+import { flushQueue, pendingCount } from '../lib/photoQueue'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -419,14 +420,24 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Enforce at least 1 after photo — cleans only; laundry runs have no
     // property to photograph (their proof is the reconciliation form).
     if (isTask) { await completeJobNoPhotoCheck(); return }
+    // Photos taken with no signal wait in the on-device queue; give them a
+    // chance to land now so the gate below sees them.
+    try { await flushQueue() } catch { /* offline — handled below */ }
     const { data: afterPhotos } = await supabase
       .from('job_photos')
       .select('id')
       .eq('job_id', job.id)
       .in('photo_type', ['after', 'general'])
       .limit(1)
-    
+
     if (!afterPhotos || afterPhotos.length === 0) {
+      const queued = await pendingCount(job.id).catch(() => 0)
+      if (queued > 0) {
+        // Photos exist but can't reach the server yet — completing needs
+        // signal too, so a dead-end "photo required" here reads as a bug.
+        Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
+        return
+      }
       Alert.alert(
         `📸 ${t('photo_required_alert')}`,
         t('add_after_photo_msg'),

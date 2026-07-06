@@ -135,6 +135,7 @@ export async function flushQueue(): Promise<{ uploaded: number; remaining: numbe
   }
 }
 
-export async function pendingCount(): Promise<number> {
-  return (await readQueue()).length
+export async function pendingCount(jobId?: string): Promise<number> {
+  const q = await readQueue()
+  return jobId ? q.filter(p => p.job_id === jobId).length : q.length
 }
