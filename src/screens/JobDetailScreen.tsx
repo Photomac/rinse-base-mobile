@@ -280,42 +280,71 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!addrId) {
       // Fallback: lookup by street
       const street = job.client_addresses?.street
-      if (!street) return
+      if (!street) return loadChecklistForAddress(null)
       setLoadingChecklist(true)
       const { data: addrData } = await supabase
         .from('client_addresses').select('id')
         .eq('street', street).eq('tenant_id', user.tenant_id).maybeSingle()
-      if (!addrData?.id) { setLoadingChecklist(false); return }
-      return loadChecklistForAddress(addrData.id)
+      return loadChecklistForAddress(addrData?.id || null)
     }
     setLoadingChecklist(true)
     return loadChecklistForAddress(addrId)
   }
 
-  async function loadChecklistForAddress(addressId: string) {
-    const { data } = await supabase
-      .from('address_checklist_templates')
-      .select('id, room, title, sort_order, requires_photo')
-      .eq('address_id', addressId)
-      .order('room').order('sort_order')
-    if (data && data.length > 0) {
-      const items = data.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title, requires_photo: item.requires_photo || false }))
-      setChecklist(items)
-      const { data: savedItems } = await supabase
-        .from('job_checklist_items').select('task, room').eq('job_id', job.id)
-      if (savedItems?.length) {
-        const savedChecked: Record<string, boolean> = {}
-        items.forEach(item => {
-          if (savedItems.some(s => s.task === item.title && s.room === item.room)) savedChecked[item.id] = true
-        })
-        setChecked(savedChecked)
-      }
-      const { data: photos } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
-      if (photos) {
-        const counts: Record<string, number> = {}
-        items.forEach(item => { counts[item.id] = photos.filter(p => p.caption === item.title).length })
-        setItemPhotos(counts)
-      }
+  // The job's own checklist rows (seeded at job creation) are the shared
+  // source of truth with the owner dashboard — both sides must read the same
+  // rows and the same `completed` flags, or the crew and the owner see
+  // different checklists. A row EXISTING does not mean it's done; only
+  // `completed = true` does. Templates are a fallback for jobs that were
+  // never seeded; the built-in default list covers properties with no
+  // template at all.
+  async function loadChecklistForAddress(addressId: string | null) {
+    setLoadingChecklist(true)
+    const [tmplRes, rowsRes] = await Promise.all([
+      addressId
+        ? supabase.from('address_checklist_templates')
+            .select('id, room, title, sort_order, requires_photo')
+            .eq('address_id', addressId)
+            .order('room').order('sort_order')
+        : Promise.resolve({ data: [] as any[] }),
+      supabase.from('job_checklist_items')
+        .select('id, room, task, sort_order, completed, photo_required')
+        .eq('job_id', job.id)
+        .order('room').order('sort_order'),
+    ])
+    const tmpl = tmplRes.data || []
+    const rows = rowsRes.data || []
+    let items: any[]
+    const checkedMap: Record<string, boolean> = {}
+    if (rows.length > 0 && tmpl.length > 0) {
+      items = rows.map(r => ({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false }))
+      rows.forEach(r => { if (r.completed) checkedMap[r.id] = true })
+    } else if (tmpl.length > 0) {
+      // Template exists but this job was never seeded — ticks upsert rows.
+      items = tmpl.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title, requires_photo: item.requires_photo || false }))
+    } else {
+      // No template: default list, merged with any rows the crew already
+      // created so re-opening the job keeps the ticks.
+      const byKey = new Map(rows.map(r => [`${r.room}|${r.task}`, r]))
+      items = DEFAULT_CHECKLIST.map(d => {
+        const r = byKey.get(`${d.room}|${d.title}`)
+        if (r?.completed) checkedMap[d.id] = true
+        return { ...d, jobItemId: r?.id, requires_photo: r?.photo_required || false }
+      })
+      // Rows outside the default list (seeded from a since-deleted template)
+      // still show — the owner sees them too.
+      rows.filter(r => !DEFAULT_CHECKLIST.some(d => d.room === r.room && d.title === r.task)).forEach(r => {
+        items.push({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false })
+        if (r.completed) checkedMap[r.id] = true
+      })
+    }
+    setChecklist(items)
+    setChecked(checkedMap)
+    const { data: photos } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
+    if (photos) {
+      const counts: Record<string, number> = {}
+      items.forEach(item => { counts[item.id] = photos.filter(p => p.caption === item.title).length })
+      setItemPhotos(counts)
     }
     setLoadingChecklist(false)
   }
@@ -324,14 +353,24 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Ticks save optimistically — on failure, revert the box and tell the
     // crew, or they walk away believing the checklist is done when it isn't.
     let error
-    if (isChecked) {
+    if (item.jobItemId) {
+      // Seeded row — flip the same flag the owner dashboard reads. Never
+      // delete: these rows ARE the owner's checklist.
+      ;({ error } = await supabase.from('job_checklist_items').update({
+        completed: isChecked,
+        completed_at: isChecked ? new Date().toISOString() : null,
+        completed_by: isChecked ? user.id : null,
+      }).eq('id', item.jobItemId))
+    } else if (isChecked) {
       ;({ error } = await supabase.from('job_checklist_items').upsert({
         tenant_id: user.tenant_id, job_id: job.id,
         room: item.room, task: item.title, sort_order: 0,
         completed: true, completed_at: new Date().toISOString(), completed_by: user.id,
       }, { onConflict: 'job_id,task,room' }))
     } else {
-      ;({ error } = await supabase.from('job_checklist_items').delete().eq('job_id', job.id).eq('task', item.title).eq('room', item.room))
+      ;({ error } = await supabase.from('job_checklist_items').update({
+        completed: false, completed_at: null, completed_by: null,
+      }).eq('job_id', job.id).eq('task', item.title).eq('room', item.room))
     }
     if (error) {
       setChecked(prev => ({ ...prev, [item.id]: !isChecked }))
@@ -468,6 +507,30 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         ]
       )
       return
+    }
+    // Per-item photo requirements: every 📷-required checklist task needs a
+    // photo before the job can complete (the owner-side panel enforces the
+    // same rule, so completing here without them would just bounce later).
+    const required = checklist.filter((i: any) => i.requires_photo)
+    if (required.length > 0) {
+      const { data: photoRows } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
+      const missing = required.filter((i: any) => !(photoRows || []).some(p => p.caption === i.title))
+      if (missing.length > 0) {
+        const queued = await pendingCount(job.id).catch(() => 0)
+        if (queued > 0) {
+          Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
+          return
+        }
+        Alert.alert(
+          `📸 ${t('photo_required_alert')}`,
+          `${t('item_photos_missing_msg')}\n\n• ${missing.map((i: any) => i.labelKey ? t(i.labelKey) : (i.label || i.title)).join('\n• ')}`,
+          [
+            { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(missing[0]); setShowPhotos(true) } },
+            { text: t('cancel'), style: 'cancel' }
+          ]
+        )
+        return
+      }
     }
     await completeJobNoPhotoCheck()
   }
@@ -736,6 +799,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View key={item.id} style={styles.checkItem}>
                 <TouchableOpacity onPress={() => {
                   const newVal = !checked[item.id]
+                  if (newVal && item.requires_photo && !itemPhotos[item.id]) {
+                    // Photo-required task: proof first, then the tick.
+                    Alert.alert(`📸 ${t('photo_required_alert')}`, t('item_photo_before_check_msg'), [
+                      { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(item); setShowPhotos(true) } },
+                      { text: t('cancel'), style: 'cancel' },
+                    ])
+                    return
+                  }
                   setChecked(prev => ({ ...prev, [item.id]: newVal }))
                   saveCheckItem(item, newVal)
                 }} style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 }}>
