@@ -149,6 +149,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const { t } = useLang()
   const addr = job.client_addresses as any
   const client = job.clients as any
+  // Laundry + "how did the guests leave it" are STR/PM turnover features — a
+  // residential client's clean hides both. client_type isn't in every list
+  // payload, so loadPropMeta backfills it from the job's client.
+  const [clientType, setClientType] = useState<string | null>(client?.client_type ?? null)
+  const isResidential = clientType === 'residential'
+  // One-tap "all laundry done on-site" flag — the lightweight cousin of the
+  // bag-count card; payroll counts it per crew per period for on-site bonuses.
+  const [laundryDoneOnsite, setLaundryDoneOnsite] = useState<boolean>(!!job.laundry_done_onsite)
   // Dispatcher-suggested driving order → "Stop k of M" for this crew's day.
   const [routeStop, setRouteStop] = useState<{ k: number; m: number } | null>(null)
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
@@ -190,13 +198,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Beds/baths/sqft aren't in the list-screen job payload, so fetch them here —
   // works no matter which screen opened this job.
   async function loadPropMeta() {
-    // Time-boxed crew access code (smart lock) lives on the job, not the list payload.
+    // Time-boxed crew access code (smart lock) lives on the job, not the list
+    // payload — same for the laundry flag and the client's type.
     const { data: jr } = await supabase
       .from('jobs')
-      .select('seam_access_code')
+      .select('seam_access_code, laundry_done_onsite, clients!jobs_client_id_fkey(client_type)')
       .eq('id', job.id)
       .maybeSingle()
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
+    if (jr) {
+      setLaundryDoneOnsite(!!(jr as any).laundry_done_onsite)
+      const ct = (jr as any).clients?.client_type
+      if (ct) setClientType(ct)
+    }
 
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId) return
@@ -206,6 +220,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       .eq('id', addrId)
       .maybeSingle()
     if (data) setPropMeta(data as any)
+  }
+
+  async function toggleLaundryDoneOnsite() {
+    const next = !laundryDoneOnsite
+    setLaundryDoneOnsite(next)
+    const { error } = await supabase.from('jobs').update({ laundry_done_onsite: next }).eq('id', job.id)
+    if (error) { setLaundryDoneOnsite(!next); Alert.alert(t('error'), error.message) }
   }
 
   // Live timer
@@ -259,42 +280,71 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!addrId) {
       // Fallback: lookup by street
       const street = job.client_addresses?.street
-      if (!street) return
+      if (!street) return loadChecklistForAddress(null)
       setLoadingChecklist(true)
       const { data: addrData } = await supabase
         .from('client_addresses').select('id')
         .eq('street', street).eq('tenant_id', user.tenant_id).maybeSingle()
-      if (!addrData?.id) { setLoadingChecklist(false); return }
-      return loadChecklistForAddress(addrData.id)
+      return loadChecklistForAddress(addrData?.id || null)
     }
     setLoadingChecklist(true)
     return loadChecklistForAddress(addrId)
   }
 
-  async function loadChecklistForAddress(addressId: string) {
-    const { data } = await supabase
-      .from('address_checklist_templates')
-      .select('id, room, title, sort_order, requires_photo')
-      .eq('address_id', addressId)
-      .order('room').order('sort_order')
-    if (data && data.length > 0) {
-      const items = data.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title, requires_photo: item.requires_photo || false }))
-      setChecklist(items)
-      const { data: savedItems } = await supabase
-        .from('job_checklist_items').select('task, room').eq('job_id', job.id)
-      if (savedItems?.length) {
-        const savedChecked: Record<string, boolean> = {}
-        items.forEach(item => {
-          if (savedItems.some(s => s.task === item.title && s.room === item.room)) savedChecked[item.id] = true
-        })
-        setChecked(savedChecked)
-      }
-      const { data: photos } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
-      if (photos) {
-        const counts: Record<string, number> = {}
-        items.forEach(item => { counts[item.id] = photos.filter(p => p.caption === item.title).length })
-        setItemPhotos(counts)
-      }
+  // The job's own checklist rows (seeded at job creation) are the shared
+  // source of truth with the owner dashboard — both sides must read the same
+  // rows and the same `completed` flags, or the crew and the owner see
+  // different checklists. A row EXISTING does not mean it's done; only
+  // `completed = true` does. Templates are a fallback for jobs that were
+  // never seeded; the built-in default list covers properties with no
+  // template at all.
+  async function loadChecklistForAddress(addressId: string | null) {
+    setLoadingChecklist(true)
+    const [tmplRes, rowsRes] = await Promise.all([
+      addressId
+        ? supabase.from('address_checklist_templates')
+            .select('id, room, title, sort_order, requires_photo')
+            .eq('address_id', addressId)
+            .order('room').order('sort_order')
+        : Promise.resolve({ data: [] as any[] }),
+      supabase.from('job_checklist_items')
+        .select('id, room, task, sort_order, completed, photo_required')
+        .eq('job_id', job.id)
+        .order('room').order('sort_order'),
+    ])
+    const tmpl = tmplRes.data || []
+    const rows = rowsRes.data || []
+    let items: any[]
+    const checkedMap: Record<string, boolean> = {}
+    if (rows.length > 0 && tmpl.length > 0) {
+      items = rows.map(r => ({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false }))
+      rows.forEach(r => { if (r.completed) checkedMap[r.id] = true })
+    } else if (tmpl.length > 0) {
+      // Template exists but this job was never seeded — ticks upsert rows.
+      items = tmpl.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title, requires_photo: item.requires_photo || false }))
+    } else {
+      // No template: default list, merged with any rows the crew already
+      // created so re-opening the job keeps the ticks.
+      const byKey = new Map(rows.map(r => [`${r.room}|${r.task}`, r]))
+      items = DEFAULT_CHECKLIST.map(d => {
+        const r = byKey.get(`${d.room}|${d.title}`)
+        if (r?.completed) checkedMap[d.id] = true
+        return { ...d, jobItemId: r?.id, requires_photo: r?.photo_required || false }
+      })
+      // Rows outside the default list (seeded from a since-deleted template)
+      // still show — the owner sees them too.
+      rows.filter(r => !DEFAULT_CHECKLIST.some(d => d.room === r.room && d.title === r.task)).forEach(r => {
+        items.push({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false })
+        if (r.completed) checkedMap[r.id] = true
+      })
+    }
+    setChecklist(items)
+    setChecked(checkedMap)
+    const { data: photos } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
+    if (photos) {
+      const counts: Record<string, number> = {}
+      items.forEach(item => { counts[item.id] = photos.filter(p => p.caption === item.title).length })
+      setItemPhotos(counts)
     }
     setLoadingChecklist(false)
   }
@@ -303,14 +353,24 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Ticks save optimistically — on failure, revert the box and tell the
     // crew, or they walk away believing the checklist is done when it isn't.
     let error
-    if (isChecked) {
+    if (item.jobItemId) {
+      // Seeded row — flip the same flag the owner dashboard reads. Never
+      // delete: these rows ARE the owner's checklist.
+      ;({ error } = await supabase.from('job_checklist_items').update({
+        completed: isChecked,
+        completed_at: isChecked ? new Date().toISOString() : null,
+        completed_by: isChecked ? user.id : null,
+      }).eq('id', item.jobItemId))
+    } else if (isChecked) {
       ;({ error } = await supabase.from('job_checklist_items').upsert({
         tenant_id: user.tenant_id, job_id: job.id,
         room: item.room, task: item.title, sort_order: 0,
         completed: true, completed_at: new Date().toISOString(), completed_by: user.id,
       }, { onConflict: 'job_id,task,room' }))
     } else {
-      ;({ error } = await supabase.from('job_checklist_items').delete().eq('job_id', job.id).eq('task', item.title).eq('room', item.room))
+      ;({ error } = await supabase.from('job_checklist_items').update({
+        completed: false, completed_at: null, completed_by: null,
+      }).eq('job_id', job.id).eq('task', item.title).eq('room', item.room))
     }
     if (error) {
       setChecked(prev => ({ ...prev, [item.id]: !isChecked }))
@@ -447,6 +507,30 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         ]
       )
       return
+    }
+    // Per-item photo requirements: every 📷-required checklist task needs a
+    // photo before the job can complete (the owner-side panel enforces the
+    // same rule, so completing here without them would just bounce later).
+    const required = checklist.filter((i: any) => i.requires_photo)
+    if (required.length > 0) {
+      const { data: photoRows } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
+      const missing = required.filter((i: any) => !(photoRows || []).some(p => p.caption === i.title))
+      if (missing.length > 0) {
+        const queued = await pendingCount(job.id).catch(() => 0)
+        if (queued > 0) {
+          Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
+          return
+        }
+        Alert.alert(
+          `📸 ${t('photo_required_alert')}`,
+          `${t('item_photos_missing_msg')}\n\n• ${missing.map((i: any) => i.labelKey ? t(i.labelKey) : (i.label || i.title)).join('\n• ')}`,
+          [
+            { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(missing[0]); setShowPhotos(true) } },
+            { text: t('cancel'), style: 'cancel' }
+          ]
+        )
+        return
+      }
     }
     await completeJobNoPhotoCheck()
   }
@@ -715,6 +799,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View key={item.id} style={styles.checkItem}>
                 <TouchableOpacity onPress={() => {
                   const newVal = !checked[item.id]
+                  if (newVal && item.requires_photo && !itemPhotos[item.id]) {
+                    // Photo-required task: proof first, then the tick.
+                    Alert.alert(`📸 ${t('photo_required_alert')}`, t('item_photo_before_check_msg'), [
+                      { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(item); setShowPhotos(true) } },
+                      { text: t('cancel'), style: 'cancel' },
+                    ])
+                    return
+                  }
                   setChecked(prev => ({ ...prev, [item.id]: newVal }))
                   saveCheckItem(item, newVal)
                 }} style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 }}>
@@ -741,10 +833,25 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Take-home laundry — cleaner bags laundry on a clean and washes it at
             home for the per-bag bonus. Only shows when the tenant pays one. */}
-        {isStarted && !isTask && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} />}
+        {isStarted && !isTask && !isResidential && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} />}
+
+        {/* All laundry done on-site — one-tap flag, counted per crew on Payroll */}
+        {isStarted && !isTask && !isResidential && (
+          <View style={styles.card}>
+            <TouchableOpacity onPress={toggleLaundryDoneOnsite} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={[styles.checkbox, laundryDoneOnsite && styles.checkboxDone]}>
+                {laundryDoneOnsite && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.checkLabel}>🧺 {t('laundry_done_onsite')}</Text>
+                <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{t('laundry_done_onsite_hint')}</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Stay condition rating — how the guests left it (host sees it with photos) */}
-        {isStarted && !isTask && <StayRatingCard job={job} user={user} />}
+        {isStarted && !isTask && !isResidential && <StayRatingCard job={job} user={user} />}
 
         {/* Lost & found — log a guest belonging left behind (manager reviews before host is told) */}
         {isStarted && !isTask && <LostFoundCard job={job} user={user} />}
