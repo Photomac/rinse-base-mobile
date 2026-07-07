@@ -14,7 +14,7 @@ import { ti } from '../lib/i18n'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
-import { flushQueue, pendingCount } from '../lib/photoQueue'
+import { flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -431,8 +431,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       .limit(1)
 
     if (!afterPhotos || afterPhotos.length === 0) {
-      const queued = await pendingCount(job.id).catch(() => 0)
-      if (queued > 0) {
+      const queued = await pendingStatus(job.id).catch((): PendingStatus => ({ count: 0, serverRejected: 0, lastServerError: null }))
+      if (queued.count > 0) {
+        if (queued.serverRejected > 0) {
+          // The server is rejecting the uploads — waiting for signal won't
+          // help, so say what's wrong and who can fix it instead.
+          Alert.alert(
+            `⚠️ ${t('photo_upload_failing_title')}`,
+            ti(t('photo_pending_complete_failing_msg'), { error: queued.lastServerError || '?' }),
+          )
+          return
+        }
         // Photos exist but can't reach the server yet — completing needs
         // signal too, so a dead-end "photo required" here reads as a bug.
         Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))

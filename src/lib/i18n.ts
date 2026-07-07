@@ -214,6 +214,10 @@ export const translations = {
     photo_saved_offline_msg: "No signal right now. Your photo is saved on your phone and will upload automatically the moment you're back in coverage.",
     photo_pending_complete_title: 'Photos waiting for signal',
     photo_pending_complete_msg: "Your photos are saved on this phone and will upload automatically once you're back in coverage. Completing the job also needs signal — try again as soon as you have service. Nothing will be lost.",
+    pending_upload_failing: 'upload failing — tap to retry',
+    photo_upload_failing_title: 'Upload failed — not a signal problem',
+    photo_upload_failing_msg: "Your photo is safe on this phone, but the server rejected the upload ({{error}}). This isn't a coverage issue — please let the owner know so they can fix it. Your photo will upload automatically once it's resolved.",
+    photo_pending_complete_failing_msg: "Your photos are safe on this phone, but the server is rejecting uploads ({{error}}). This isn't a signal problem — please let the owner know so they can fix it. Your photos will upload automatically once it's resolved, and nothing will be lost.",
     client_badge: 'Client',
     // Today
     please_take_after_photo: 'Please take at least one after photo before marking this job complete.',
@@ -478,6 +482,10 @@ export const translations = {
     photo_saved_offline_msg: 'Sin señal en este momento. Tu foto está guardada en tu teléfono y se subirá automáticamente en cuanto vuelvas a tener cobertura.',
     photo_pending_complete_title: 'Fotos esperando señal',
     photo_pending_complete_msg: 'Tus fotos están guardadas en este teléfono y se subirán automáticamente cuando vuelvas a tener cobertura. Completar el trabajo también necesita señal — inténtalo de nuevo en cuanto tengas servicio. No se perderá nada.',
+    pending_upload_failing: 'error al subir — toca para reintentar',
+    photo_upload_failing_title: 'Error al subir — no es problema de señal',
+    photo_upload_failing_msg: 'Tu foto está segura en este teléfono, pero el servidor rechazó la subida ({{error}}). No es un problema de cobertura — avísale al dueño para que lo arregle. Tu foto se subirá automáticamente en cuanto se resuelva.',
+    photo_pending_complete_failing_msg: 'Tus fotos están seguras en este teléfono, pero el servidor está rechazando las subidas ({{error}}). No es un problema de señal — avísale al dueño para que lo arregle. Tus fotos se subirán automáticamente en cuanto se resuelva, y no se perderá nada.',
     client_badge: 'Cliente',
     // Today
     please_take_after_photo: 'Toma al menos una foto de "después" antes de marcar este trabajo como completado.',
