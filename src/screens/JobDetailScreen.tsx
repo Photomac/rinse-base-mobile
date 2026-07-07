@@ -149,6 +149,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const { t } = useLang()
   const addr = job.client_addresses as any
   const client = job.clients as any
+  // Laundry + "how did the guests leave it" are STR/PM turnover features — a
+  // residential client's clean hides both. client_type isn't in every list
+  // payload, so loadPropMeta backfills it from the job's client.
+  const [clientType, setClientType] = useState<string | null>(client?.client_type ?? null)
+  const isResidential = clientType === 'residential'
+  // One-tap "all laundry done on-site" flag — the lightweight cousin of the
+  // bag-count card; payroll counts it per crew per period for on-site bonuses.
+  const [laundryDoneOnsite, setLaundryDoneOnsite] = useState<boolean>(!!job.laundry_done_onsite)
   // Dispatcher-suggested driving order → "Stop k of M" for this crew's day.
   const [routeStop, setRouteStop] = useState<{ k: number; m: number } | null>(null)
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
@@ -190,13 +198,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Beds/baths/sqft aren't in the list-screen job payload, so fetch them here —
   // works no matter which screen opened this job.
   async function loadPropMeta() {
-    // Time-boxed crew access code (smart lock) lives on the job, not the list payload.
+    // Time-boxed crew access code (smart lock) lives on the job, not the list
+    // payload — same for the laundry flag and the client's type.
     const { data: jr } = await supabase
       .from('jobs')
-      .select('seam_access_code')
+      .select('seam_access_code, laundry_done_onsite, clients!jobs_client_id_fkey(client_type)')
       .eq('id', job.id)
       .maybeSingle()
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
+    if (jr) {
+      setLaundryDoneOnsite(!!(jr as any).laundry_done_onsite)
+      const ct = (jr as any).clients?.client_type
+      if (ct) setClientType(ct)
+    }
 
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId) return
@@ -206,6 +220,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       .eq('id', addrId)
       .maybeSingle()
     if (data) setPropMeta(data as any)
+  }
+
+  async function toggleLaundryDoneOnsite() {
+    const next = !laundryDoneOnsite
+    setLaundryDoneOnsite(next)
+    const { error } = await supabase.from('jobs').update({ laundry_done_onsite: next }).eq('id', job.id)
+    if (error) { setLaundryDoneOnsite(!next); Alert.alert(t('error'), error.message) }
   }
 
   // Live timer
@@ -741,10 +762,25 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Take-home laundry — cleaner bags laundry on a clean and washes it at
             home for the per-bag bonus. Only shows when the tenant pays one. */}
-        {isStarted && !isTask && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} />}
+        {isStarted && !isTask && !isResidential && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} />}
+
+        {/* All laundry done on-site — one-tap flag, counted per crew on Payroll */}
+        {isStarted && !isTask && !isResidential && (
+          <View style={styles.card}>
+            <TouchableOpacity onPress={toggleLaundryDoneOnsite} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={[styles.checkbox, laundryDoneOnsite && styles.checkboxDone]}>
+                {laundryDoneOnsite && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.checkLabel}>🧺 {t('laundry_done_onsite')}</Text>
+                <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{t('laundry_done_onsite_hint')}</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Stay condition rating — how the guests left it (host sees it with photos) */}
-        {isStarted && !isTask && <StayRatingCard job={job} user={user} />}
+        {isStarted && !isTask && !isResidential && <StayRatingCard job={job} user={user} />}
 
         {/* Lost & found — log a guest belonging left behind (manager reviews before host is told) */}
         {isStarted && !isTask && <LostFoundCard job={job} user={user} />}
