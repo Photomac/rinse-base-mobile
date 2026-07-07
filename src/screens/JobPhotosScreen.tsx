@@ -3,8 +3,9 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Alert, Act
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
-import { enqueuePhoto, flushQueue, pendingCount } from '../lib/photoQueue'
+import { enqueuePhoto, flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
 import { useLang } from '../contexts/LangContext'
+import { ti } from '../lib/i18n'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 const TEAL = GOLD
@@ -32,7 +33,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   const [selectedType, setSelectedType] = useState('after')
   const [caption, setCaption] = useState(preselectedItem?.title || '')
   const [visibleToClient, setVisibleToClient] = useState(true)
-  const [pending, setPending] = useState(0)
+  const [pending, setPending] = useState<PendingStatus>({ count: 0, serverRejected: 0, lastServerError: null })
 
   const addr = job.client_addresses as any
   const client = job.clients as any
@@ -41,7 +42,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
     loadPhotos()
     // Opening the screen in coverage drains any photos captured earlier offline.
     flushQueue().then(({ uploaded }) => { if (uploaded > 0) loadPhotos() }).catch(() => {})
-      .finally(() => { pendingCount().then(setPending).catch(() => {}) })
+      .finally(() => { pendingStatus().then(setPending).catch(() => {}) })
   }, [])
 
   async function loadPhotos() {
@@ -86,15 +87,24 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
         caption: caption.trim() || null,
         visible_to_client: visibleToClient,
       })
-      const { remaining } = await flushQueue()
-      setPending(remaining)
+      const result = await flushQueue()
+      setPending({ count: result.remaining, serverRejected: result.serverRejected, lastServerError: result.lastServerError })
 
       setCaption('')
       loadPhotos()
 
-      if (remaining > 0) {
-        // No signal — the photo is safely saved on the device and will sync itself.
-        Alert.alert(`📥 ${t('photo_saved_offline_title')}`, t('photo_saved_offline_msg'))
+      if (result.remaining > 0) {
+        if (result.serverRejected > 0) {
+          // The server heard us and said no (auth/policy/etc). Signal is fine —
+          // don't tell the crew to wait for coverage; tell them who can fix it.
+          Alert.alert(
+            `⚠️ ${t('photo_upload_failing_title')}`,
+            ti(t('photo_upload_failing_msg'), { error: result.lastServerError || '?' }),
+          )
+        } else {
+          // No signal — the photo is safely saved on the device and will sync itself.
+          Alert.alert(`📥 ${t('photo_saved_offline_title')}`, t('photo_saved_offline_msg'))
+        }
         setUploading(false)
         return
       }
@@ -158,17 +168,27 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Offline queue status — crew proof-of-work must never feel uncertain.
-            Shows only while photos are waiting on signal; taps retry the flush. */}
-        {pending > 0 && (
+        {/* Pending queue status — crew proof-of-work must never feel uncertain.
+            Yellow = waiting on signal; red = the server is rejecting uploads
+            (shows the error, so it's not mistaken for coverage). Tap retries. */}
+        {pending.count > 0 && (
           <TouchableOpacity
-            onPress={() => flushQueue().then(({ uploaded, remaining }) => { setPending(remaining); if (uploaded > 0) loadPhotos() }).catch(() => {})}
-            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEF9C3', borderWidth: 1, borderColor: '#FCD34D', borderRadius: 10, padding: 10, marginBottom: 10 }}>
-            <Text style={{ fontSize: 16 }}>📥</Text>
-            <Text style={{ flex: 1, fontSize: 12, fontWeight: '700', color: '#854D0E' }}>
-              {pending} 📷 {t('pending_upload')}
-            </Text>
-            <Text style={{ fontSize: 11, fontWeight: '700', color: '#854D0E' }}>↻</Text>
+            onPress={() => flushQueue({ force: true }).then(r => { setPending({ count: r.remaining, serverRejected: r.serverRejected, lastServerError: r.lastServerError }); if (r.uploaded > 0) loadPhotos() }).catch(() => {})}
+            style={pending.serverRejected > 0
+              ? { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FCA5A5', borderRadius: 10, padding: 10, marginBottom: 10 }
+              : { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEF9C3', borderWidth: 1, borderColor: '#FCD34D', borderRadius: 10, padding: 10, marginBottom: 10 }}>
+            <Text style={{ fontSize: 16 }}>{pending.serverRejected > 0 ? '⚠️' : '📥'}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: pending.serverRejected > 0 ? '#991B1B' : '#854D0E' }}>
+                {pending.count} 📷 {pending.serverRejected > 0 ? t('pending_upload_failing') : t('pending_upload')}
+              </Text>
+              {pending.serverRejected > 0 && !!pending.lastServerError && (
+                <Text style={{ fontSize: 10, color: '#991B1B', marginTop: 2 }} numberOfLines={2}>
+                  {pending.lastServerError}
+                </Text>
+              )}
+            </View>
+            <Text style={{ fontSize: 11, fontWeight: '700', color: pending.serverRejected > 0 ? '#991B1B' : '#854D0E' }}>↻</Text>
           </TouchableOpacity>
         )}
         {/* Photo type selector */}
