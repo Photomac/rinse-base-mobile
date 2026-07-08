@@ -28,6 +28,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [shiftElapsed, setShiftElapsed] = useState('')
   const [shiftBusy, setShiftBusy] = useState(false)
 
+  // Crew see the property, not the homeowner — client names are for admins.
+  const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
+
   const load = useCallback(async () => {
     const now = new Date()
     const todayStart = new Date(now); todayStart.setHours(0,0,0,0)
@@ -38,7 +41,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     const [todayRes, monthRes] = await Promise.all([
       supabase.from('jobs')
-        .select('id, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
+        .select('id, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
         .eq('tenant_id', user.tenant_id)
         .gte('scheduled_start', todayStart.toISOString())
         .lte('scheduled_start', todayEnd.toISOString())
@@ -238,7 +241,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                 <View style={styles.activeInfo}>
                   <Text style={styles.activeLabel}>🔶 {t('active_job')}</Text>
                   <Text style={styles.activeClient}>
-                    {(activeJob.client_addresses as any)?.nickname || (activeJob.clients as any)?.full_name}
+                    {(activeJob.client_addresses as any)?.nickname || (canSeeClientNames ? (activeJob.clients as any)?.full_name : (activeJob.client_addresses as any)?.street)}
                   </Text>
                   <Text style={styles.activeTime}>{fmtTime(activeJob.scheduled_start)} – {fmtTime(activeJob.scheduled_end)}</Text>
                 </View>
@@ -254,7 +257,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   <Text style={styles.nextJobTime}>{fmtTime(nextJob.scheduled_start)}</Text>
                 </View>
                 <Text style={styles.nextJobClient}>
-                  {(nextJob.client_addresses as any)?.nickname || (nextJob.clients as any)?.full_name}
+                  {(nextJob.client_addresses as any)?.nickname || (canSeeClientNames ? (nextJob.clients as any)?.full_name : (nextJob.client_addresses as any)?.street)}
                 </Text>
                 <Text style={styles.nextJobAddress}>
                   📍 {(nextJob.client_addresses as any)?.street}, {(nextJob.client_addresses as any)?.city}
@@ -299,8 +302,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   <TouchableOpacity key={job.id} style={[styles.jobRow, isDone && { opacity: 0.5 }]} onPress={() => onJobPress(job)}>
                     <View style={[styles.jobDot, { backgroundColor: isDone ? '#10B981' : isActive ? '#F59E0B' : '#3B82F6' }]} />
                     <View style={styles.jobInfo}>
-                      <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (job.clients as any)?.full_name)}</Text>
-                      <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}{job.is_turnover ? ' · 🏠 ' + t('turnover') : ''}</Text>
+                      <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}</Text>
+                      <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}{job.is_turnover ? ' · 🏠 ' + t('turnover') : ''}{job.window_minutes != null ? ' · ↔ ' + t('back_to_back') : ''}</Text>
                     </View>
                     {stop && (
                       <View style={styles.routeStopBadge}>
