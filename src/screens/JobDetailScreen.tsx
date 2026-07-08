@@ -14,7 +14,7 @@ import { ti } from '../lib/i18n'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
-import { flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
+import { flushQueue, pendingCount, pendingStatus, PendingStatus } from '../lib/photoQueue'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -40,7 +40,7 @@ const LAUNDRY_MODES = [
   { key: 'bags_to_office' as const,     labelKey: 'laundry_bags_office' as const },
   { key: 'bags_to_laundromat' as const, labelKey: 'laundry_bags_laundromat' as const },
 ]
-function TakeHomeLaundryCard({ job, user }: { job: any; user: any }) {
+function TakeHomeLaundryCard({ job, user, bagColor }: { job: any; user: any; bagColor?: string | null }) {
   const { t } = useLang()
   const [bags, setBags] = useState<Record<string, number>>({ bags_taken_home: 0, bags_onsite: 0, bags_to_office: 0, bags_to_laundromat: 0 })
   const [rowUserId, setRowUserId] = useState<string | null>(null)
@@ -77,6 +77,7 @@ function TakeHomeLaundryCard({ job, user }: { job: any; user: any }) {
     <View style={styles.card}>
       <Text style={styles.sectionTitle}>🧺 {t('laundry_card_title')}</Text>
       <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 2, marginBottom: 10 }}>{t('laundry_card_hint')}</Text>
+      {bagColor && <Text style={{ fontSize: 12, fontWeight: '700', color: '#92400E', backgroundColor: '#FEF3C7', alignSelf: 'flex-start', paddingVertical: 3, paddingHorizontal: 8, borderRadius: 6, marginBottom: 10 }}>🧺 {bagColor}</Text>}
       {LAUNDRY_MODES.map(({ key, labelKey }) => (
         <View key={key} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
           <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', flex: 1, paddingRight: 8 }}>{t(labelKey)}</Text>
@@ -157,6 +158,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // One-tap "all laundry done on-site" flag — the lightweight cousin of the
   // bag-count card; payroll counts it per crew per period for on-site bonuses.
   const [laundryDoneOnsite, setLaundryDoneOnsite] = useState<boolean>(!!job.laundry_done_onsite)
+  // Operto-parity turnover strip: checkout / next check-in / window live on the
+  // job row (sync-ical keeps them fresh on drift); bag color lives on the property.
+  const [turnover, setTurnover] = useState<{ checkout: string | null; checkin: string | null; window: number | null; urgency: string | null } | null>(null)
+  const [bagColor, setBagColor] = useState<string | null>(null)
+  // Crew see the property, not the homeowner — client names are for admins.
+  const isAdminRole = ['owner', 'manager', 'dispatcher'].includes(user.role)
+  const propLabel = addr?.nickname || (isAdminRole ? client?.full_name : addr?.street)
   // Dispatcher-suggested driving order → "Stop k of M" for this crew's day.
   const [routeStop, setRouteStop] = useState<{ k: number; m: number } | null>(null)
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
@@ -202,7 +210,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // payload — same for the laundry flag and the client's type.
     const { data: jr } = await supabase
       .from('jobs')
-      .select('seam_access_code, laundry_done_onsite, clients!jobs_client_id_fkey(client_type)')
+      .select('seam_access_code, laundry_done_onsite, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type)')
       .eq('id', job.id)
       .maybeSingle()
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
@@ -210,16 +218,25 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       setLaundryDoneOnsite(!!(jr as any).laundry_done_onsite)
       const ct = (jr as any).clients?.client_type
       if (ct) setClientType(ct)
+      if ((jr as any).checkout_time) setTurnover({
+        checkout: (jr as any).checkout_time,
+        checkin: (jr as any).checkin_time,
+        window: (jr as any).window_minutes,
+        urgency: (jr as any).urgency,
+      })
     }
 
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId) return
     const { data } = await supabase
       .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft')
+      .select('bedrooms, bathrooms, sqft, laundry_bag_color')
       .eq('id', addrId)
       .maybeSingle()
-    if (data) setPropMeta(data as any)
+    if (data) {
+      setPropMeta(data as any)
+      setBagColor((data as any).laundry_bag_color ?? null)
+    }
   }
 
   async function toggleLaundryDoneOnsite() {
@@ -589,7 +606,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack} style={styles.backBtn}><Text style={styles.backText}>← {t('back')}</Text></TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || client?.full_name || t('job_detail'))}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (propLabel || t('job_detail'))}</Text>
         <View style={{ width: 60 }} />
       </View>
 
@@ -623,13 +640,29 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Job info card */}
         <View style={styles.card}>
-          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{addr?.nickname || client?.full_name}{job.is_turnover ? `  🏠 ${t('turnover')}` : ''}</>}</Text>
+          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{propLabel}{job.is_turnover ? `  🏠 ${t('turnover')}` : ''}</>}</Text>
           {routeStop && (
             <View style={styles.routeStopBadge}>
               <Text style={styles.routeStopText}>🧭 {ti(t('route_stop_of'), { k: String(routeStop.k), m: String(routeStop.m) })}</Text>
             </View>
           )}
           <Text style={styles.timeRow}>🕐 {fmtTime(job.scheduled_start)} – {fmtTime(job.scheduled_end)}</Text>
+          {turnover?.checkout && (
+            <View style={{ backgroundColor: turnover.urgency === 'rapid' ? '#FEF2F2' : turnover.urgency === 'tight' ? '#FFFBEB' : '#EFF6FF', borderRadius: 10, padding: 10, marginTop: 8, marginBottom: 4 }}>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827' }}>🧳 {t('guest_checkout')}: {fmtTime(turnover.checkout)}</Text>
+              {turnover.checkin && (
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827', marginTop: 3 }}>🔑 {t('next_checkin')}: {fmtTime(turnover.checkin)}</Text>
+              )}
+              {turnover.window != null && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
+                  <View style={{ backgroundColor: turnover.urgency === 'rapid' ? '#DC2626' : turnover.urgency === 'tight' ? '#D97706' : '#2563EB', borderRadius: 6, paddingVertical: 2, paddingHorizontal: 8 }}>
+                    <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>↔ {t('back_to_back')}</Text>
+                  </View>
+                  <Text style={{ fontSize: 12, fontWeight: '700', marginLeft: 8, color: '#374151' }}>{ti(t('turnover_window'), { h: String(Math.round(turnover.window / 60 * 10) / 10) })}</Text>
+                </View>
+              )}
+            </View>
+          )}
           {!isTask && (
           <TouchableOpacity onPress={() => {
             const q = addr?.lat ? `${addr.lat},${addr.lng}` : `${addr?.street}, ${addr?.city}`
@@ -663,6 +696,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📋</Text>
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('arrival_instructions')}</Text><Text style={styles.infoValue}>{addr.arrival_instructions}</Text></View>
+            </View>
+          )}
+          {!isTask && bagColor && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoIcon}>🧺</Text>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('laundry_bags_label')}</Text><Text style={styles.infoValue}>{bagColor}</Text></View>
+            </View>
+          )}
+          {!isTask && job.internal_notes && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoIcon}>📝</Text>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('job_notes')}</Text><Text style={styles.infoValue}>{job.internal_notes}</Text></View>
             </View>
           )}
           {/* Direct host contact only if the owner allows it; otherwise crew
@@ -842,7 +887,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Take-home laundry — cleaner bags laundry on a clean and washes it at
             home for the per-bag bonus. Only shows when the tenant pays one. */}
-        {isStarted && !isTask && !isResidential && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} />}
+        {isStarted && !isTask && !isResidential && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} bagColor={bagColor} />}
 
         {/* All laundry done on-site — one-tap flag, counted per crew on Payroll */}
         {isStarted && !isTask && !isResidential && (
