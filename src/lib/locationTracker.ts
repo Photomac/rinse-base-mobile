@@ -2,12 +2,14 @@
 // Pings crew GPS every 5 minutes when they have an active job
 // Monitors geofence — alerts crew if they leave job site without clocking out
 
+import { Alert, Linking, Platform } from 'react-native'
 import * as Location from 'expo-location'
 import * as TaskManager from 'expo-task-manager'
 import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
+import { tStatic } from './i18n'
 
 const LOCATION_TASK = 'crew-location-task'
 const PING_INTERVAL = 5 * 60 * 1000 // 5 minutes
@@ -106,6 +108,26 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
   const bgStatus = opts?.requestBackground
     ? await ensureBackgroundLocation({ silent: true })
     : await getBackgroundLocationStatus()
+
+  // Without "Always", the dispatch dot dies the moment the screen sleeps —
+  // crew mid-clean silently fall off the map after 20 minutes. Explain that
+  // ONCE at a clock-in moment (never on app launch, never repeatedly).
+  if (opts?.requestBackground && bgStatus !== 'granted') {
+    try {
+      const NUDGE_KEY = 'bg_location_map_nudge_shown'
+      if (!(await AsyncStorage.getItem(NUDGE_KEY))) {
+        await AsyncStorage.setItem(NUDGE_KEY, '1')
+        Alert.alert(
+          tStatic('bg_nudge_title'),
+          Platform.OS === 'ios' ? tStatic('bg_nudge_ios') : tStatic('bg_nudge_android'),
+          [
+            { text: tStatic('bg_nudge_later'), style: 'cancel' },
+            { text: tStatic('bg_nudge_settings'), onPress: () => Linking.openSettings() },
+          ],
+        )
+      }
+    } catch { /* education is best-effort */ }
+  }
 
   // Register the OS background task ONLY now that we've confirmed they're
   // working. Previously this ran BEFORE the work check, so an Always-granted
