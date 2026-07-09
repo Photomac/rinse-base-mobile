@@ -143,7 +143,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [elapsedMinutes, setElapsedMinutes] = useState(0)
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
-  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null } | null>(null)
+  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; crew_notes?: string | null } | null>(null)
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
 
@@ -161,6 +161,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Operto-parity turnover strip: checkout / next check-in / window live on the
   // job row (sync-ical keeps them fresh on drift); bag color lives on the property.
   const [turnover, setTurnover] = useState<{ checkout: string | null; checkin: string | null; window: number | null; urgency: string | null } | null>(null)
+  const [guestCount, setGuestCount] = useState<number | null>(null)
+  // Everyone working this job (lead first) — crew see who they're working with.
+  const [crewOnJob, setCrewOnJob] = useState<{ name: string; isLead: boolean }[]>([])
   const [bagColor, setBagColor] = useState<string | null>(null)
   // Crew see the property, not the homeowner — client names are for admins.
   const isAdminRole = ['owner', 'manager', 'dispatcher'].includes(user.role)
@@ -210,7 +213,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // payload — same for the laundry flag and the client's type.
     const { data: jr } = await supabase
       .from('jobs')
-      .select('seam_access_code, laundry_done_onsite, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type)')
+      .select('seam_access_code, laundry_done_onsite, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count)')
       .eq('id', job.id)
       .maybeSingle()
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
@@ -224,13 +227,23 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         window: (jr as any).window_minutes,
         urgency: (jr as any).urgency,
       })
+      const gc = (jr as any).property_reservations?.guest_count
+      if (gc) setGuestCount(gc)
     }
+
+    // Full crew roster for this job, lead first.
+    const { data: crewRows } = await supabase
+      .from('job_assignments')
+      .select('is_lead, users!job_assignments_user_id_fkey(full_name)')
+      .eq('job_id', job.id)
+      .order('is_lead', { ascending: false })
+    setCrewOnJob((crewRows ?? []).map((a: any) => ({ name: a.users?.full_name, isLead: !!a.is_lead })).filter((c: any) => c.name))
 
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId) return
     const { data } = await supabase
       .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft, laundry_bag_color')
+      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color')
       .eq('id', addrId)
       .maybeSingle()
     if (data) {
@@ -653,6 +666,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               {turnover.checkin && (
                 <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827', marginTop: 3 }}>🔑 {t('next_checkin')}: {fmtTime(turnover.checkin)}</Text>
               )}
+              {guestCount != null && (
+                <Text style={{ fontSize: 12, fontWeight: '600', color: '#374151', marginTop: 3 }}>👥 {ti(t('guests_stayed'), { n: String(guestCount) })}</Text>
+              )}
               {turnover.window != null && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
                   <View style={{ backgroundColor: turnover.urgency === 'rapid' ? '#DC2626' : turnover.urgency === 'tight' ? '#D97706' : '#2563EB', borderRadius: 6, paddingVertical: 2, paddingHorizontal: 8 }}>
@@ -676,6 +692,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               🏠 {[
                 propMeta?.bedrooms != null ? `${propMeta.bedrooms} ${t('beds_short')}` : null,
                 propMeta?.bathrooms != null ? `${propMeta.bathrooms} ${t('baths_short')}` : null,
+                propMeta?.beds != null ? `🛏 ${propMeta.beds} ${t('beds_total_short')}` : null,
                 propMeta?.sqft != null ? `${propMeta.sqft.toLocaleString()} ${t('sqft_short')}` : null,
               ].filter(Boolean).join('   ·   ')}
             </Text>
@@ -698,6 +715,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('arrival_instructions')}</Text><Text style={styles.infoValue}>{addr.arrival_instructions}</Text></View>
             </View>
           )}
+          {!isTask && propMeta?.crew_notes && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoIcon}>📄</Text>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('property_notes')}</Text><Text style={styles.infoValue}>{propMeta.crew_notes}</Text></View>
+            </View>
+          )}
           {!isTask && bagColor && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>🧺</Text>
@@ -708,6 +731,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📝</Text>
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('job_notes')}</Text><Text style={styles.infoValue}>{job.internal_notes}</Text></View>
+            </View>
+          )}
+          {!isTask && crewOnJob.length > 0 && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoIcon}>👥</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.infoLabel}>{t('crew_on_job')}</Text>
+                <Text style={styles.infoValue}>
+                  {crewOnJob.map(c => c.isLead ? `${c.name} (${t('lead_tag')})` : c.name).join(' · ')}
+                </Text>
+              </View>
             </View>
           )}
           {/* Direct host contact only if the owner allows it; otherwise crew
