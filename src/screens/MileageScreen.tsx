@@ -6,7 +6,7 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
-import { ensureForegroundLocation } from '../lib/permissions'
+import { startTrip, stopTrip, getTripState, accumulate } from '../lib/mileageTracker'
 
 const IRS_RATE = 0.70 // 2025 IRS standard mileage rate fallback
 const PURPOSES_KEYS = ['job_travel', 'supply_run_miles', 'equipment_pickup', 'client_meeting', 'training', 'other'] as const
@@ -18,15 +18,6 @@ function fmtDuration(ms: number) {
   const mins = Math.floor(ms / 60000)
   if (mins < 60) return `${mins}m`
   return `${Math.floor(mins / 60)}h ${mins % 60}m`
-}
-
-// Haversine distance in miles
-function haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 3958.8
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLon = (lon2 - lon1) * Math.PI / 180
-  const a = Math.sin(dLat/2) ** 2 + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.sin(dLon/2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
 }
 
 export function MileageScreen({ user }: { user: any }) {
@@ -45,9 +36,8 @@ export function MileageScreen({ user }: { user: any }) {
   const [trackingPurpose, setTrackingPurpose] = useState<PurposeKey>('job_travel')
   const [elapsed, setElapsed] = useState(0)
   const locationSub = useRef<any>(null)
-  const lastCoord = useRef<{ lat: number; lng: number } | null>(null)
   const timerRef = useRef<any>(null)
-  const milesRef = useRef(0)
+  const pollRef = useRef<any>(null)
   const [mileageRate, setMileageRate] = useState(IRS_RATE)
 
   async function load() {
@@ -69,6 +59,31 @@ export function MileageScreen({ user }: { user: any }) {
 
   useEffect(() => { load() }, [])
 
+  // A trip may already be running (screen re-opened mid-drive, or the app was
+  // killed and relaunched) — the odometer lives in persisted state, so pick it
+  // back up instead of showing an idle screen while the OS task keeps counting.
+  useEffect(() => {
+    (async () => {
+      const s = await getTripState()
+      if (s) {
+        setTracking(true)
+        setTrackingStart(new Date(s.startedAt))
+        setTrackingMiles(s.miles)
+        startPollingMiles()
+      }
+    })()
+    return () => clearInterval(pollRef.current)
+  }, [])
+
+  // The background task writes miles to persisted state; the screen just reads.
+  function startPollingMiles() {
+    clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      const s = await getTripState()
+      if (s) setTrackingMiles(s.miles)
+    }, 3000)
+  }
+
   // Elapsed timer
   useEffect(() => {
     if (tracking && trackingStart) {
@@ -82,39 +97,34 @@ export function MileageScreen({ user }: { user: any }) {
   }, [tracking, trackingStart])
 
   async function startTracking() {
-    // User explicitly tapped Start tracking, so it's the right moment to
-    // surface a Settings deep-link if the permission was previously denied.
-    const status = await ensureForegroundLocation()
-    if (status !== 'granted') return
-    milesRef.current = 0
-    lastCoord.current = null
+    // User explicitly tapped Start tracking — the right moment for the
+    // location permission prompts. Background mode survives Google Maps /
+    // screen-off / app kill; foreground fallback warns to keep the app open.
+    const mode = await startTrip({ title: t('mileage_notif_title'), body: t('mileage_notif_body') })
+    if (mode === 'denied') return
     setTrackingMiles(0)
     setTrackingStart(new Date())
     setTracking(true)
+    startPollingMiles()
 
-    locationSub.current = await Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.High, distanceInterval: 10, timeInterval: 5000 },
-      (loc) => {
-        const { latitude, longitude } = loc.coords
-        if (lastCoord.current) {
-          const d = haversine(lastCoord.current.lat, lastCoord.current.lng, latitude, longitude)
-          if (d > 0.01) { // ignore < 50ft noise
-            milesRef.current += d
-            setTrackingMiles(Math.round(milesRef.current * 100) / 100)
-          }
-        }
-        lastCoord.current = { lat: latitude, lng: longitude }
-      }
-    )
+    if (mode === 'foreground') {
+      Alert.alert(t('mileage_fg_only_title'), t('mileage_fg_only_msg'))
+      locationSub.current = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, distanceInterval: 10, timeInterval: 5000 },
+        (loc) => { accumulate([loc.coords]).catch(() => {}) }
+      )
+    }
   }
 
   async function stopTracking() {
+    clearInterval(pollRef.current)
     if (locationSub.current) {
       locationSub.current.remove()
       locationSub.current = null
     }
+    const trip = await stopTrip()
     setTracking(false)
-    const miles = Math.round(milesRef.current * 100) / 100
+    const miles = Math.round((trip?.miles ?? 0) * 100) / 100
 
     if (miles < 0.1) {
       Alert.alert(t('trip_too_short'), t('trip_too_short_msg'))
@@ -133,7 +143,7 @@ export function MileageScreen({ user }: { user: any }) {
             setSaving(true)
             const { error } = await supabase.from('mileage_logs').insert({
               tenant_id: user.tenant_id, user_id: user.id,
-              started_at: trackingStart?.toISOString() || new Date().toISOString(),
+              started_at: trip?.startedAt || trackingStart?.toISOString() || new Date().toISOString(),
               origin_label: 'GPS tracked', dest_label: 'GPS tracked',
               distance_miles: miles,
               reimbursement_amt: Math.round(miles * mileageRate * 100) / 100,
