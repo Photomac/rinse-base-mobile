@@ -75,6 +75,8 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
 
   async function uploadPhoto(uri: string) {
     setUploading(true)
+    // Capture before setCaption('') clears it — a damage report reuses it as the note/title.
+    const damageCaption = caption.trim()
     try {
       // Persist + queue first so the photo is never lost, then try to send it now.
       // Offline → it stays queued and uploads automatically once back in coverage.
@@ -117,12 +119,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
             { text: t('not_now'), style: 'cancel' },
             {
               text: t('flag_for_report'),
-              onPress: async () => {
-                await supabase.from('job_photos').update({
-                  flagged_for_report: true
-                }).eq('job_id', job.id).eq('photo_type', 'issue').is('flagged_for_report', null)
-                Alert.alert(`✓ ${t('photo_flagged')}`, t('damage_report_sent'))
-              }
+              onPress: () => submitDamageReport(damageCaption),
             }
           ]
         )
@@ -133,6 +130,52 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
       Alert.alert(t('upload_failed'), e.message || t('could_not_upload'))
     }
     setUploading(false)
+  }
+
+  // Create a real damage report the owner can see + send to the host. A tagged
+  // damage photo alone lives only in job_photos, which the owner's Issues view and
+  // dashboard never read — they're built on job_damage_reports (same as LostFoundCard).
+  async function submitDamageReport(captionText: string) {
+    try {
+      // The damage photo was saved as photo_type 'issue' — grab its URL for the report.
+      const { data: latest } = await supabase
+        .from('job_photos')
+        .select('photo_url')
+        .eq('job_id', job.id)
+        .eq('photo_type', 'issue')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const photoUrl = (latest as any)?.photo_url || null
+
+      const addressId = job.client_addresses?.id || job.address_id || null
+      const title = captionText || 'Damage reported by crew'
+      const { error } = await supabase.from('job_damage_reports').insert({
+        tenant_id: user.tenant_id,
+        job_id: job.id,
+        address_id: addressId,
+        reported_by: user?.id ?? null,
+        report_type: 'damage',
+        severity: 'minor',
+        title,
+        description: captionText || null,
+        photo_urls: photoUrl ? [photoUrl] : [],
+        status: 'reported',
+      })
+      if (error) throw error
+
+      // Heads-up the cleaning company only — the host is told later, if/when the
+      // owner reviews and chooses to send (owner-controlled QC).
+      try {
+        await supabase.functions.invoke('notify-damage-report', {
+          body: { job_id: job.id, tenant_id: user.tenant_id, report_type: 'damage', severity: 'minor', title, photo_url: photoUrl, recipients: 'owner' },
+        })
+      } catch { /* report is saved; notify is best-effort */ }
+
+      Alert.alert(`✓ ${t('photo_flagged')}`, t('damage_report_sent'))
+    } catch (e: any) {
+      Alert.alert(t('error'), e?.message || t('could_not_upload'))
+    }
   }
 
   async function deletePhoto(photo: any) {

@@ -55,7 +55,9 @@ export function LostFoundCard({ job, user }: { job: any; user: any }) {
     setSaving(true)
     try {
       const addressId = job.client_addresses?.id || job.address_id || null
-      await supabase.from('job_damage_reports').insert({
+      // supabase-js returns { error } instead of throwing — check it, or a failed
+      // insert falls through to the "saved" success path (silent-failure family).
+      const { error: insertError } = await supabase.from('job_damage_reports').insert({
         tenant_id: user.tenant_id,
         job_id: job.id,
         address_id: addressId,
@@ -67,6 +69,7 @@ export function LostFoundCard({ job, user }: { job: any; user: any }) {
         photo_urls: photoUrl ? [photoUrl] : [],
         status: 'reported',
       })
+      if (insertError) throw insertError
 
       // Heads-up the cleaning company only — the host is told later, if/when the
       // manager reviews it and chooses to send (owner-controlled QC).
