@@ -35,7 +35,8 @@ export const translations = {
     status_completed: 'Completed', status_cancelled: 'Cancelled',
     // Job detail
     job_detail: 'Job detail', arrival_instructions: 'Arrival instructions', lockbox_code: 'Lockbox code', crew_door_code: 'Crew door code',
-    beds_short: 'bed', baths_short: 'bath', sqft_short: 'sqft',
+    beds_short: 'bed', baths_short: 'bath', sqft_short: 'sqft', beds_total_short: 'beds',
+    property_notes: 'Property notes',
     clock_in: 'Clock in — Start job', clock_in_short: 'Clock in', pause: 'Pause', resume: 'Resume',
     start_my_day: 'Start my day', end_my_day: 'End my day', on_shift_since: 'On shift since', clocked_out_today: 'Clocked out for the day', this_job: 'This job',
     on_my_way: "On my way", on_the_way_banner: "You're on your way — dispatch can see you", en_route_failed: 'Could not update status. Please try again.',
@@ -316,7 +317,8 @@ export const translations = {
     status_completed: 'Completado', status_cancelled: 'Cancelado',
     // Job detail
     job_detail: 'Detalle del trabajo', arrival_instructions: 'Instrucciones de llegada', lockbox_code: 'Código de caja', crew_door_code: 'Código de puerta del equipo',
-    beds_short: 'rec', baths_short: 'baño', sqft_short: 'ft²',
+    beds_short: 'rec', baths_short: 'baño', sqft_short: 'ft²', beds_total_short: 'camas',
+    property_notes: 'Notas de la propiedad',
     clock_in: 'Registrar entrada — Iniciar', clock_in_short: 'Registrar entrada', pause: 'Pausar', resume: 'Continuar',
     start_my_day: 'Iniciar mi día', end_my_day: 'Terminar mi día', on_shift_since: 'En turno desde', clocked_out_today: 'Salida registrada por hoy', this_job: 'Este trabajo',
     on_my_way: 'Voy en camino', on_the_way_banner: 'Vas en camino — el despacho puede verte', en_route_failed: 'No se pudo actualizar el estado. Inténtalo de nuevo.',

@@ -143,7 +143,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [elapsedMinutes, setElapsedMinutes] = useState(0)
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
-  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null } | null>(null)
+  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; crew_notes?: string | null } | null>(null)
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
 
@@ -243,7 +243,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!addrId) return
     const { data } = await supabase
       .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft, laundry_bag_color')
+      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color')
       .eq('id', addrId)
       .maybeSingle()
     if (data) {
@@ -692,6 +692,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               🏠 {[
                 propMeta?.bedrooms != null ? `${propMeta.bedrooms} ${t('beds_short')}` : null,
                 propMeta?.bathrooms != null ? `${propMeta.bathrooms} ${t('baths_short')}` : null,
+                propMeta?.beds != null ? `🛏 ${propMeta.beds} ${t('beds_total_short')}` : null,
                 propMeta?.sqft != null ? `${propMeta.sqft.toLocaleString()} ${t('sqft_short')}` : null,
               ].filter(Boolean).join('   ·   ')}
             </Text>
@@ -712,6 +713,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📋</Text>
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('arrival_instructions')}</Text><Text style={styles.infoValue}>{addr.arrival_instructions}</Text></View>
+            </View>
+          )}
+          {!isTask && propMeta?.crew_notes && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoIcon}>📄</Text>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('property_notes')}</Text><Text style={styles.infoValue}>{propMeta.crew_notes}</Text></View>
             </View>
           )}
           {!isTask && bagColor && (
