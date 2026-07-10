@@ -10,6 +10,7 @@
 import React, { useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Image, Alert } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
+import { ensureCamera } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT } from '../lib/theme'
@@ -30,9 +31,11 @@ export function LostFoundCard({ job, user }: { job: any; user: any }) {
   }
 
   async function addPhoto() {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync()
-    if (status !== 'granted') return
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.7 })
+    if (await ensureCamera() !== 'granted') return
+    let result
+    try {
+      result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.7 })
+    } catch { return }
     if (result.canceled || !result.assets?.[0]) return
     setUploading(true)
     try {
