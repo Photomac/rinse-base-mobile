@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, Linking, ActivityIndicator, Modal, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
+import { ensureCamera } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
@@ -618,9 +619,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           <TouchableOpacity
             style={{ width: '100%', height: 100, borderRadius: 12, marginBottom: 12, borderWidth: 1.5, borderStyle: 'dashed', borderColor: TEAL + '60', backgroundColor: TEAL + '08', alignItems: 'center', justifyContent: 'center' }}
             onPress={async () => {
-              const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.8 })
-              if (result.canceled || !result.assets?.[0]) return
               try {
+                // Gate on camera permission — launchCameraAsync throws
+                // "Missing camera or camera roll permission" if it isn't granted.
+                if (await ensureCamera() !== 'granted') return
+                const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.8 })
+                if (result.canceled || !result.assets?.[0]) return
                 const asset = result.assets[0]
                 const ext = asset.uri.split('.').pop() || 'jpg'
                 const path = `${user.tenant_id}/properties/${addr.id}_${Date.now()}.${ext}`

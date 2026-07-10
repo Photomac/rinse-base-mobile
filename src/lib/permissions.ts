@@ -11,12 +11,15 @@
 import { Alert, Linking, Platform } from 'react-native'
 import * as Location from 'expo-location'
 import * as Notifications from 'expo-notifications'
+import * as ImagePicker from 'expo-image-picker'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { tStatic } from './i18n'
 
 const FG_LOCATION_ASKED = 'perm:location:fg:asked'
 const BG_LOCATION_ASKED = 'perm:location:bg:asked'
 const NOTIFICATIONS_ASKED = 'perm:notifications:asked'
+const CAMERA_ASKED = 'perm:camera:asked'
+const MEDIA_ASKED = 'perm:media:asked'
 
 type Status = 'granted' | 'denied' | 'undetermined'
 
@@ -99,6 +102,44 @@ export async function ensureNotifications(opts?: { silent?: boolean }): Promise<
       tStatic('perm_notifications_title'),
       tStatic('perm_notifications_msg'),
     )
+  }
+  return 'denied'
+}
+
+// ── Camera ────────────────────────────────────────────────────────
+// Call this BEFORE ImagePicker.launchCameraAsync — the picker throws
+// "Missing camera or camera roll permission" if launched without it, which
+// otherwise surfaces as an uncaught crash.
+export async function ensureCamera(opts?: { silent?: boolean }): Promise<Status> {
+  const current = await ImagePicker.getCameraPermissionsAsync()
+  if (current.status === 'granted') return 'granted'
+
+  if (current.canAskAgain) {
+    const requested = await ImagePicker.requestCameraPermissionsAsync()
+    await AsyncStorage.setItem(CAMERA_ASKED, '1')
+    return requested.status as Status
+  }
+
+  if (!opts?.silent) {
+    showSettingsAlert(tStatic('perm_camera_title'), tStatic('perm_camera_msg'))
+  }
+  return 'denied'
+}
+
+// ── Media library (photo roll) ────────────────────────────────────
+// Call this BEFORE ImagePicker.launchImageLibraryAsync.
+export async function ensureMediaLibrary(opts?: { silent?: boolean }): Promise<Status> {
+  const current = await ImagePicker.getMediaLibraryPermissionsAsync()
+  if (current.status === 'granted') return 'granted'
+
+  if (current.canAskAgain) {
+    const requested = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    await AsyncStorage.setItem(MEDIA_ASKED, '1')
+    return requested.status as Status
+  }
+
+  if (!opts?.silent) {
+    showSettingsAlert(tStatic('perm_media_title'), tStatic('perm_media_msg'))
   }
   return 'denied'
 }

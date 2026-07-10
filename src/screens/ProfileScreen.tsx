@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, TextInput 
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import * as ImagePicker from 'expo-image-picker'
+import { ensureCamera, ensureMediaLibrary } from '../lib/permissions'
 import { Image } from 'react-native'
 import { useLang } from '../contexts/LangContext'
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -98,19 +99,21 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
   }
 
   async function takePhoto() {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync()
-    if (status !== 'granted') { Alert.alert(t('permission_needed'), t('allow_camera_access')); return }
-    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1,1], quality: 0.7 })
-    if (result.canceled) return
-    uploadAvatar(result.assets[0].uri)
+    if (await ensureCamera() !== 'granted') return
+    try {
+      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1,1], quality: 0.7 })
+      if (result.canceled) return
+      uploadAvatar(result.assets[0].uri)
+    } catch { /* no crash */ }
   }
 
   async function pickFromGallery() {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') { Alert.alert(t('permission_needed'), t('allow_photo_access')); return }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1,1], quality: 0.7 })
-    if (result.canceled) return
-    uploadAvatar(result.assets[0].uri)
+    if (await ensureMediaLibrary() !== 'granted') return
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, aspect: [1,1], quality: 0.7 })
+      if (result.canceled) return
+      uploadAvatar(result.assets[0].uri)
+    } catch { /* no crash */ }
   }
 
   async function uploadAvatar(uri: string) {
