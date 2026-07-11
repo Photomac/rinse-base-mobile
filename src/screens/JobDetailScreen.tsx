@@ -190,6 +190,30 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     loadRouteStop()
   }, [])
 
+  // Live mirror of teammates' phones + the owner dashboard: stream checklist
+  // ticks and photo uploads for this job so paired cleaners see each other's
+  // progress without reopening the screen. Reloads are quiet (no spinner
+  // flash) and debounced to coalesce event bursts. Events fire post-commit,
+  // so a refetch always reads the teammate's saved state — our own optimistic
+  // ticks are simply confirmed, never reverted.
+  useEffect(() => {
+    if (isTask) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const reload = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => loadChecklist(true), 300)
+    }
+    const channel = supabase
+      .channel(`job-detail-${job.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'job_checklist_items', filter: `job_id=eq.${job.id}` }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'job_photos', filter: `job_id=eq.${job.id}` }, reload)
+      .subscribe()
+    return () => {
+      if (timer) clearTimeout(timer)
+      supabase.removeChannel(channel)
+    }
+  }, [job.id])
+
   // Rank this job among the crew member's own route-ordered jobs for the same
   // day, so the badge is a clean "Stop k of M" (matches the Dashboard).
   async function loadRouteStop() {
@@ -308,20 +332,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
   }
 
-  async function loadChecklist() {
+  // quiet = refresh in place (realtime teammate updates) — no spinner flash.
+  async function loadChecklist(quiet = false) {
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId) {
       // Fallback: lookup by street
       const street = job.client_addresses?.street
-      if (!street) return loadChecklistForAddress(null)
-      setLoadingChecklist(true)
+      if (!street) return loadChecklistForAddress(null, quiet)
+      if (!quiet) setLoadingChecklist(true)
       const { data: addrData } = await supabase
         .from('client_addresses').select('id')
         .eq('street', street).eq('tenant_id', user.tenant_id).maybeSingle()
-      return loadChecklistForAddress(addrData?.id || null)
+      return loadChecklistForAddress(addrData?.id || null, quiet)
     }
-    setLoadingChecklist(true)
-    return loadChecklistForAddress(addrId)
+    if (!quiet) setLoadingChecklist(true)
+    return loadChecklistForAddress(addrId, quiet)
   }
 
   // The job's own checklist rows (seeded at job creation) are the shared
@@ -331,8 +356,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // `completed = true` does. Templates are a fallback for jobs that were
   // never seeded; the built-in default list covers properties with no
   // template at all.
-  async function loadChecklistForAddress(addressId: string | null) {
-    setLoadingChecklist(true)
+  async function loadChecklistForAddress(addressId: string | null, quiet = false) {
+    if (!quiet) setLoadingChecklist(true)
     const [tmplRes, rowsRes] = await Promise.all([
       addressId
         ? supabase.from('address_checklist_templates')
