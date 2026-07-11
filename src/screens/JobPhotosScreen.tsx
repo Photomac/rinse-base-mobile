@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase'
 import { enqueuePhoto, flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
+import { PhotoViewer, ViewerPhoto } from '../components/PhotoViewer'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 const TEAL = GOLD
@@ -35,6 +36,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   const [caption, setCaption] = useState(preselectedItem?.title || '')
   const [visibleToClient, setVisibleToClient] = useState(true)
   const [pending, setPending] = useState<PendingStatus>({ count: 0, serverRejected: 0, lastServerError: null })
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null)
 
   const addr = job.client_addresses as any
   const client = job.clients as any
@@ -194,6 +196,15 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   const damagePhotos  = photos.filter(p => p.photo_type === 'issue' || p.photo_type === 'damage')
   const generalPhotos = photos.filter(p => p.photo_type === 'general')
 
+  // Flattened in section render order, so tapping a thumbnail opens the
+  // viewer on that photo.
+  const galleryPhotos = [...beforePhotos, ...afterPhotos, ...damagePhotos, ...generalPhotos]
+  const galleryItems: ViewerPhoto[] = galleryPhotos.map(p => ({
+    url: p.photo_url,
+    caption: p.caption || null,
+    meta: p.photo_type ? p.photo_type.charAt(0).toUpperCase() + p.photo_type.slice(1) : null,
+  }))
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -303,6 +314,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
                     <TouchableOpacity
                       key={photo.id}
                       style={styles.photoWrapper}
+                      onPress={() => setViewerIndex(galleryPhotos.findIndex(p => p.id === photo.id))}
                       onLongPress={() => deletePhoto(photo)}
                     >
                       <Image source={{ uri: photo.photo_url }} style={styles.photo} />
@@ -324,6 +336,10 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
 
         <Text style={styles.hint}>{t('long_press_delete')}</Text>
       </ScrollView>
+
+      {viewerIndex !== null && viewerIndex >= 0 && (
+        <PhotoViewer photos={galleryItems} startIndex={viewerIndex} onClose={() => setViewerIndex(null)} />
+      )}
     </SafeAreaView>
   )
 }

@@ -9,6 +9,7 @@ import { JobInventoryScreen } from './JobInventoryScreen'
 import { LaundryRunScreen } from './LaundryRunScreen'
 import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
+import { PhotoViewer } from '../components/PhotoViewer'
 import { LostFoundCard } from '../components/LostFoundCard'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
@@ -136,6 +137,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [loadingChecklist, setLoadingChecklist] = useState(false)
   const [itemPhotos, setItemPhotos] = useState<Record<string, number>>({})
   const [activePhotoItem, setActivePhotoItem] = useState<any>(null)
+  const [viewPropertyPhoto, setViewPropertyPhoto] = useState(false)
 
   // Time tracking
   const [timeEntries, setTimeEntries] = useState<any[]>([])
@@ -627,7 +629,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       <ScrollView contentContainerStyle={styles.scroll}>
         {/* Property photo — not for laundry runs (internal shell property) */}
         {isTask ? null : addr?.photo_url ? (
-          <Image source={{ uri: addr.photo_url }} style={{ width: '100%', height: 180, borderRadius: 12, marginBottom: 12 }} resizeMode="cover" />
+          <TouchableOpacity activeOpacity={0.85} onPress={() => setViewPropertyPhoto(true)}>
+            <Image source={{ uri: addr.photo_url }} style={{ width: '100%', height: 180, borderRadius: 12, marginBottom: 12 }} resizeMode="cover" />
+          </TouchableOpacity>
         ) : addr?.id && (
           <TouchableOpacity
             style={{ width: '100%', height: 100, borderRadius: 12, marginBottom: 12, borderWidth: 1.5, borderStyle: 'dashed', borderColor: TEAL + '60', backgroundColor: TEAL + '08', alignItems: 'center', justifyContent: 'center' }}
@@ -963,6 +967,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           </View>
         )}
       </ScrollView>
+
+      {viewPropertyPhoto && addr?.photo_url && (
+        <PhotoViewer
+          photos={[{ url: addr.photo_url, caption: propLabel || null, meta: t('property_photo') }]}
+          onClose={() => setViewPropertyPhoto(false)}
+        />
+      )}
 
       {/* Pause modal */}
       <Modal visible={showPauseModal} transparent animationType="slide">
