@@ -81,6 +81,14 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
     try {
       // Persist + queue first so the photo is never lost, then try to send it now.
       // Offline → it stays queued and uploads automatically once back in coverage.
+      // Canonical checklist link: this photo satisfies the preselected item as
+      // long as the caption still names it (legacy caption-matching wouldn't
+      // have counted an edited caption either). The caption itself stays as a
+      // dual-write until old bundles that match on it have aged out.
+      const checklistItemId =
+        preselectedItem?.jobItemId && caption.trim() === (preselectedItem.title || '').trim()
+          ? preselectedItem.jobItemId
+          : null
       await enqueuePhoto({
         uri,
         tenant_id: user.tenant_id,
@@ -88,6 +96,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
         user_id: user.id,
         photo_type: selectedType === 'damage' ? 'issue' : selectedType,
         caption: caption.trim() || null,
+        checklist_item_id: checklistItemId,
         visible_to_client: visibleToClient,
       })
       const result = await flushQueue()

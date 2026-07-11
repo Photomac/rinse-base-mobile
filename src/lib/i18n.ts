@@ -247,6 +247,8 @@ export const translations = {
     photo_upload_failing_title: 'Upload failed — not a signal problem',
     photo_upload_failing_msg: "Your photo is safe on this phone, but the server rejected the upload ({{error}}). This isn't a coverage issue — please let the owner know so they can fix it. Your photo will upload automatically once it's resolved.",
     photo_pending_complete_failing_msg: "Your photos are safe on this phone, but the server is rejecting uploads ({{error}}). This isn't a signal problem — please let the owner know so they can fix it. Your photos will upload automatically once it's resolved, and nothing will be lost.",
+    lead_signoff_title: 'Lead sign-off',
+    lead_signoff_msg: 'Your lead signs off this clean — you can keep checking items and adding photos.',
     client_badge: 'Client',
     // Today
     please_take_after_photo: 'Please take at least one after photo before marking this job complete.',
@@ -544,6 +546,8 @@ export const translations = {
     photo_upload_failing_title: 'Error al subir — no es problema de señal',
     photo_upload_failing_msg: 'Tu foto está segura en este teléfono, pero el servidor rechazó la subida ({{error}}). No es un problema de cobertura — avísale al dueño para que lo arregle. Tu foto se subirá automáticamente en cuanto se resuelva.',
     photo_pending_complete_failing_msg: 'Tus fotos están seguras en este teléfono, pero el servidor está rechazando las subidas ({{error}}). No es un problema de señal — avísale al dueño para que lo arregle. Tus fotos se subirán automáticamente en cuanto se resuelva, y no se perderá nada.',
+    lead_signoff_title: 'Aprobación del líder',
+    lead_signoff_msg: 'Tu líder es quien finaliza esta limpieza — tú puedes seguir marcando tareas y agregando fotos.',
     client_badge: 'Cliente',
     // Today
     please_take_after_photo: 'Toma al menos una foto de "después" antes de marcar este trabajo como completado.',

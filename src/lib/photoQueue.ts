@@ -29,6 +29,10 @@ export interface PendingPhoto {
   user_id: string
   photo_type: string
   caption: string | null
+  // Canonical link to the checklist item this photo satisfies (the completion
+  // gate matches on it; caption-matching is the legacy fallback). Optional so
+  // entries queued by older bundles keep uploading.
+  checklist_item_id?: string | null
   visible_to_client: boolean
   created_at: number
   attempts?: number
@@ -71,7 +75,8 @@ async function ensureDir(): Promise<void> {
 // app restart while it waits for signal.
 export async function enqueuePhoto(p: {
   uri: string; tenant_id: string; job_id: string; user_id: string;
-  photo_type: string; caption: string | null; visible_to_client: boolean;
+  photo_type: string; caption: string | null; checklist_item_id?: string | null;
+  visible_to_client: boolean;
 }): Promise<void> {
   await ensureDir()
   const id = `${p.job_id}_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
@@ -93,6 +98,7 @@ export async function enqueuePhoto(p: {
     user_id: p.user_id,
     photo_type: p.photo_type,
     caption: p.caption,
+    checklist_item_id: p.checklist_item_id ?? null,
     visible_to_client: p.visible_to_client,
     created_at: Date.now(),
   }
@@ -160,6 +166,7 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
       photo_url: urlData.publicUrl,
       photo_type: entry.photo_type,
       caption: entry.caption,
+      checklist_item_id: entry.checklist_item_id ?? null,
       visible_to_client: entry.visible_to_client,
     })
     if (error) return { ok: false, kind: 'server', message: error.message }

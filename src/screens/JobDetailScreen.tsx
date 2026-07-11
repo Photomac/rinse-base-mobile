@@ -16,7 +16,7 @@ import { ti } from '../lib/i18n'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
-import { flushQueue, pendingCount, pendingStatus, PendingStatus } from '../lib/photoQueue'
+import { flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -373,10 +373,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
     setChecklist(items)
     setChecked(checkedMap)
-    const { data: photos } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
+    // A photo counts for an item via the canonical checklist_item_id link, or
+    // by the legacy caption == task-title match (photos from older bundles /
+    // web uploads before the link existed).
+    const { data: photos } = await supabase.from('job_photos').select('caption, checklist_item_id').eq('job_id', job.id)
     if (photos) {
       const counts: Record<string, number> = {}
-      items.forEach(item => { counts[item.id] = photos.filter(p => p.caption === item.title).length })
+      items.forEach(item => {
+        counts[item.id] = photos.filter(p =>
+          (item.jobItemId && p.checklist_item_id === item.jobItemId) ||
+          (!p.checklist_item_id && p.caption === item.title)
+        ).length
+      })
       setItemPhotos(counts)
     }
     setLoadingChecklist(false)
@@ -509,21 +517,48 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setSaving(false)
   }
 
+  // Lead-owned sign-off: only the job's flagged lead completes; owner/manager
+  // always can; solo crew or a roster with no lead flagged falls back to any
+  // assignee (a job must never be stuck waiting on a lead that was never set).
+  // Fails OPEN on lookup errors — flaky signal must not strand a crew, and the
+  // DB gate remains the source of truth for the photo requirements.
+  async function canSignOffAsViewer(): Promise<boolean> {
+    if (user?.role === 'owner' || user?.role === 'manager') return true
+    const { data: roster, error } = await supabase
+      .from('job_assignments')
+      .select('user_id, is_lead')
+      .eq('job_id', job.id)
+    if (error || !roster || roster.length === 0) return true
+    const mine = roster.find((a: any) => a.user_id === user?.id)
+    if (!mine) return true
+    const hasLead = roster.some((a: any) => a.is_lead)
+    if (!hasLead || roster.length === 1) return true
+    return !!mine.is_lead
+  }
+
   async function completeJob() {
-    // Enforce at least 1 after photo — cleans only; laundry runs have no
-    // property to photograph (their proof is the reconciliation form).
+    // Photo requirements — cleans only; laundry runs have no property to
+    // photograph (their proof is the reconciliation form).
     if (isTask) { await completeJobNoPhotoCheck(); return }
+
+    if (!(await canSignOffAsViewer())) {
+      Alert.alert(`🔒 ${t('lead_signoff_title')}`, t('lead_signoff_msg'))
+      return
+    }
+
     // Photos taken with no signal wait in the on-device queue; give them a
     // chance to land now so the gate below sees them.
     try { await flushQueue() } catch { /* offline — handled below */ }
-    const { data: afterPhotos } = await supabase
-      .from('job_photos')
-      .select('id')
-      .eq('job_id', job.id)
-      .in('photo_type', ['after', 'general'])
-      .limit(1)
 
-    if (!afterPhotos || afterPhotos.length === 0) {
+    // Canonical completion gate — the same job_completion_blockers() the web
+    // panel calls, so web and mobile can never disagree on what completion
+    // requires. RPC error → fail open: the status update below needs signal
+    // anyway, and the DB-side backstop enforces once it ships.
+    const { data: blockers, error: gateErr } = await supabase.rpc('job_completion_blockers', { p_job_id: job.id })
+    if (!gateErr && blockers && blockers.length > 0) {
+      // Queued-but-unuploaded photos would clear these blockers the moment
+      // they land — keep the offline-aware messaging instead of a dead-end
+      // "photo required" that reads as a bug.
       const queued = await pendingStatus(job.id).catch((): PendingStatus => ({ count: 0, serverRejected: 0, lastServerError: null }))
       if (queued.count > 0) {
         if (queued.serverRejected > 0) {
@@ -535,39 +570,38 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           )
           return
         }
-        // Photos exist but can't reach the server yet — completing needs
-        // signal too, so a dead-end "photo required" here reads as a bug.
         Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
         return
       }
-      Alert.alert(
-        `📸 ${t('photo_required_alert')}`,
-        t('add_after_photo_msg'),
-        [
-          { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(null); setShowPhotos(true) } },
-          { text: t('cancel'), style: 'cancel' }
-        ]
-      )
-      return
-    }
-    // Per-item photo requirements: every 📷-required checklist task needs a
-    // photo before the job can complete (the owner-side panel enforces the
-    // same rule, so completing here without them would just bounce later).
-    const required = checklist.filter((i: any) => i.requires_photo)
-    if (required.length > 0) {
-      const { data: photoRows } = await supabase.from('job_photos').select('caption').eq('job_id', job.id)
-      const missing = required.filter((i: any) => !(photoRows || []).some(p => p.caption === i.title))
-      if (missing.length > 0) {
-        const queued = await pendingCount(job.id).catch(() => 0)
-        if (queued > 0) {
-          Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
-          return
-        }
+
+      if (blockers.some((b: any) => b.code === 'no_after_photo')) {
         Alert.alert(
           `📸 ${t('photo_required_alert')}`,
-          `${t('item_photos_missing_msg')}\n\n• ${missing.map((i: any) => i.labelKey ? t(i.labelKey) : (i.label || i.title)).join('\n• ')}`,
+          t('add_after_photo_msg'),
           [
-            { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(missing[0]); setShowPhotos(true) } },
+            { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(null); setShowPhotos(true) } },
+            { text: t('cancel'), style: 'cancel' }
+          ]
+        )
+        return
+      }
+
+      const missingBlockers = blockers.filter((b: any) => b.code === 'missing_required_photo')
+      if (missingBlockers.length > 0) {
+        // Prefer the local checklist item for localized labels; fall back to
+        // the room/task the gate returned.
+        const missingItems = missingBlockers
+          .map((b: any) => checklist.find((i: any) => i.jobItemId === b.checklist_item_id))
+        const lines = missingBlockers.map((b: any, idx: number) => {
+          const item = missingItems[idx]
+          return item ? (item.labelKey ? t(item.labelKey) : (item.label || item.title)) : (b.room ? `${b.room} — ${b.task}` : b.task)
+        })
+        const firstItem = missingItems.find(Boolean)
+        Alert.alert(
+          `📸 ${t('photo_required_alert')}`,
+          `${t('item_photos_missing_msg')}\n\n• ${lines.join('\n• ')}`,
+          [
+            { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(firstItem ?? null); setShowPhotos(true) } },
             { text: t('cancel'), style: 'cancel' }
           ]
         )
@@ -595,7 +629,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         return
       }
     }
-    const { error: doneErr } = await supabase.from('jobs').update({ status: 'completed', internal_notes: notes.trim() || null }).eq('id', job.id)
+    const { error: doneErr } = await supabase.from('jobs').update({
+      status: 'completed',
+      internal_notes: notes.trim() || null,
+      // Sign-off attribution (distinct from per-item completed_by = last ticker).
+      ...(user?.id ? { completed_by_user_id: user.id } : {}),
+    }).eq('id', job.id)
     if (doneErr) {
       setSaving(false)
       Alert.alert(t('error'), doneErr.message)
