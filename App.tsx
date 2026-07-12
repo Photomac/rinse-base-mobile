@@ -15,6 +15,9 @@ import { SOSScreen } from './src/screens/SOSScreen'
 import { ChatListScreen, ChatScreen } from './src/screens/ChatScreens'
 import { registerPushToken } from './src/lib/notifications'
 import { startLocationTracking, stopLocationTracking } from './src/lib/locationTracker'
+// Side-effect import: registers the arrival-geofence TaskManager task at bundle
+// eval so headless OS launches (region crossings) find the handler.
+import './src/lib/arrivalGeofence'
 import { flushQueue } from './src/lib/photoQueue'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'

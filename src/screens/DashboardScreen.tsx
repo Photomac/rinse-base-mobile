@@ -6,6 +6,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
+import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
 
 function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -99,6 +100,11 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     setLoading(false)
     setRefreshing(false)
+
+    // Register OS arrival geofences for today's assigned jobs (GPS-verified
+    // time tracking). Region-based — no tracking, no location writes until an
+    // actual clock-in. No-op for daily-shift crews and non-granted phones.
+    refreshArrivalGeofences(user).catch(() => {})
   }, [user])
 
   useEffect(() => { load() }, [load])

@@ -16,6 +16,7 @@ import { ti } from '../lib/i18n'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
+import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
 import { flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
@@ -446,17 +447,50 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   async function handleClockIn() {
     setSaving(true)
+    // GPS-verified time tracking: if the arrival geofence recorded a fence
+    // entry for this job, backdate the punch to that instant (QB Time
+    // pattern — human confirms, no minutes lost), floored at 30min before the
+    // scheduled start so early sitting-in-the-car isn't billable. Otherwise a
+    // best-effort quick GPS fix stamps the manual punch. Neither may block or
+    // fail the punch itself.
+    const arrival = await getPendingArrival(job.id)
+    let clockedInAt = new Date()
+    let stamp: { lat: number; lng: number } | null = null
+    if (arrival) {
+      const floor = new Date(new Date(job.scheduled_start).getTime() - 30 * 60000)
+      const arrivedAt = new Date(arrival.at)
+      clockedInAt = arrivedAt > floor ? arrivedAt : floor
+      if (clockedInAt > new Date()) clockedInAt = new Date() // never in the future
+      stamp = { lat: arrival.lat, lng: arrival.lng }
+    } else {
+      stamp = await quickGpsStamp()
+    }
+
     // Create time entry — this row IS the crew member's pay. If the insert
     // fails (dead spot, RLS hiccup) we must NOT mark the job in_progress:
     // that's exactly the "worked all day, no hours on payroll" failure.
     const { data: entry, error: entryErr } = await supabase.from('job_time_entries').insert({
       tenant_id: user.tenant_id, job_id: job.id, user_id: user.id,
-      clocked_in_at: new Date().toISOString(), entry_type: 'work',
+      clocked_in_at: clockedInAt.toISOString(), entry_type: 'work',
+      source: arrival ? 'prompted' : 'manual',
+      arrived_at: arrival?.at ?? null,
+      clock_in_lat: stamp?.lat ?? null,
+      clock_in_lng: stamp?.lng ?? null,
     }).select().single()
     if (entryErr || !entry) {
       setSaving(false)
       Alert.alert(t('error'), t('clock_in_failed'))
       return
+    }
+    if (arrival) {
+      clearPendingArrival(job.id)
+      // Tell them the backdate happened — the timer starting "in the past"
+      // without explanation reads as a bug.
+      if (Date.now() - clockedInAt.getTime() > 90_000) {
+        Alert.alert('📍', ti(t('clocked_in_from_arrival'), {
+          time: clockedInAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        }))
+      }
     }
     setActiveEntry(entry)
     setIsPaused(false)
@@ -644,9 +678,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (activeEntry) {
       const now = new Date()
       const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
+      // GPS-stamp the punch-out too (best-effort — never blocks the clock-out).
+      const outStamp = await quickGpsStamp()
       const { error: outErr } = await supabase.from('job_time_entries').update({
         clocked_out_at: now.toISOString(),
         duration_minutes: Math.round(mins),
+        clock_out_lat: outStamp?.lat ?? null,
+        clock_out_lng: outStamp?.lng ?? null,
       }).eq('id', activeEntry.id)
       if (outErr) {
         setSaving(false)
