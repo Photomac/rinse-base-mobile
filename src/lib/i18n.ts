@@ -253,6 +253,8 @@ export const translations = {
     arrival_prompt_body: "You're at {{property}} — tap to clock in. Your time will count from right now.",
     arrival_generic_property: 'the property',
     clocked_in_from_arrival: 'Clocked in from your arrival at {{time}} — GPS-verified.',
+    auto_clock_in_title: 'Clocked in automatically',
+    auto_clock_in_body: "You're on the clock at {{property}} since {{time}}. Open the app if this is wrong.",
     client_badge: 'Client',
     // Today
     please_take_after_photo: 'Please take at least one after photo before marking this job complete.',
@@ -556,6 +558,8 @@ export const translations = {
     arrival_prompt_body: 'Estás en {{property}} — toca para registrar tu entrada. Tu tiempo cuenta desde este momento.',
     arrival_generic_property: 'la propiedad',
     clocked_in_from_arrival: 'Entrada registrada desde tu llegada a las {{time}} — verificado por GPS.',
+    auto_clock_in_title: 'Entrada registrada automáticamente',
+    auto_clock_in_body: 'Estás en el reloj en {{property}} desde las {{time}}. Abre la app si esto es un error.',
     client_badge: 'Cliente',
     // Today
     please_take_after_photo: 'Toma al menos una foto de "después" antes de marcar este trabajo como completado.',

@@ -20,6 +20,7 @@ import { tStatic, ti } from './i18n'
 
 const ARRIVAL_TASK = 'arrival-geofence-task'
 const RADIUS_M = 150
+const AUTO_MAX_SPEED_MPS = 3 // ~7 mph — faster than a walk = still driving, not working
 const MAX_REGIONS = 18            // iOS caps 20 monitored regions per app; leave headroom
 const ARRIVAL_FRESH_MS = 12 * 60 * 60 * 1000
 const ARRIVAL_KEY = (jobId: string) => `arrival:${jobId}`
@@ -29,6 +30,14 @@ export interface PendingArrival {
   at: string   // ISO instant the fence was crossed
   lat: number
   lng: number
+}
+
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLng = (lng2 - lng1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
 // Register one enter-only region per still-active assigned job today.
@@ -150,6 +159,63 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
 
     const addr = (job as any).client_addresses
     const property = addr?.nickname || addr?.street || tStatic('arrival_generic_property')
+
+    // ── PHASE 2: tenant opt-in AUTO punch ──
+    // Only when the owner enabled it AND the arrival verifies as a genuine
+    // dwell: a fresh fix must land back inside the fence and not be moving at
+    // driving speed — by the time the fix resolves (seconds later), a drive-by
+    // is already outside the radius or still fast. Any doubt falls through to
+    // the prompt: a spurious notification is recoverable, a spurious time
+    // entry is somebody's pay.
+    try {
+      const { data: tenant } = await supabase.from('tenants')
+        .select('auto_clock_in, time_tracking_mode')
+        .eq('id', user.tenant_id).maybeSingle()
+      // No auto-punch before the window opens — an early arrival gets the
+      // prompt instead (backdate floor already handles early manual punches).
+      const windowOpen = Date.now() >= new Date((job as any).scheduled_start).getTime() - 30 * 60000
+      if (tenant?.auto_clock_in && tenant?.time_tracking_mode !== 'daily' && windowOpen) {
+        const fix = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          new Promise<null>(resolve => setTimeout(() => resolve(null), 8000)),
+        ]) as Location.LocationObject | null
+        const regionLat = (region as any).latitude
+        const regionLng = (region as any).longitude
+        const dist = fix && regionLat != null
+          ? haversineM(fix.coords.latitude, fix.coords.longitude, regionLat, regionLng)
+          : Infinity
+        const speed = fix?.coords.speed ?? -1 // unknown reads as -1 → passes
+        if (fix && dist <= RADIUS_M * 1.3 && speed < AUTO_MAX_SPEED_MPS) {
+          const { data: entry, error: insErr } = await supabase.from('job_time_entries').insert({
+            tenant_id: user.tenant_id, job_id: jobId, user_id: user.id,
+            clocked_in_at: arrival.at, entry_type: 'work',
+            source: 'auto', arrived_at: arrival.at,
+            clock_in_lat: fix.coords.latitude, clock_in_lng: fix.coords.longitude,
+          }).select('id').single()
+          if (!insErr && entry) {
+            await clearPendingArrival(jobId) // consumed — a manual punch must not double-enter
+            // Mirror manual clock-in: the job is being worked now. Status guard
+            // keeps a teammate's already-started job untouched.
+            await supabase.from('jobs').update({ status: 'in_progress' })
+              .eq('id', jobId).in('status', ['pending_approval', 'scheduled', 'en_route'])
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title: `⏱ ${tStatic('auto_clock_in_title')}`,
+                body: ti(tStatic('auto_clock_in_body'), {
+                  property,
+                  time: new Date(arrival.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                }),
+                sound: 'default',
+                data: { type: 'auto_clock_in', jobId },
+              },
+              trigger: null,
+            })
+            return // clocked in — no prompt needed
+          }
+        }
+      }
+    } catch { /* verification failed — fall through to the prompt */ }
+
     await Notifications.scheduleNotificationAsync({
       content: {
         title: `📍 ${tStatic('arrival_prompt_title')}`,
