@@ -113,7 +113,9 @@ export function LoginScreen() {
           <Text style={styles.formTitle}>{t('reset_title')}</Text>
           <Text style={styles.formSub}>{t('reset_code_sent')}</Text>
           <Text style={styles.label}>{t('reset_code_label')}</Text>
-          <TextInput style={[styles.input, styles.codeInput]} value={code} onChangeText={setCode} placeholder="123456" placeholderTextColor={TEXT_LIGHT} keyboardType="number-pad" maxLength={6} autoFocus />
+          {/* OTP length is a PROJECT SETTING (currently 8 digits) — never
+              hardcode it in the UI; a 6-cap truncated real codes on web once. */}
+          <TextInput style={[styles.input, styles.codeInput]} value={code} onChangeText={setCode} placeholder="········" placeholderTextColor={TEXT_LIGHT} keyboardType="number-pad" maxLength={12} autoFocus />
           <Text style={styles.label}>{t('reset_new_password')}</Text>
           <TextInput style={styles.input} value={newPassword} onChangeText={setNewPassword} placeholder={t('reset_password_hint')} placeholderTextColor={TEXT_LIGHT} secureTextEntry />
           <TouchableOpacity style={[styles.button, loading && { opacity: 0.6 }]} onPress={verifyAndReset} disabled={loading}>
