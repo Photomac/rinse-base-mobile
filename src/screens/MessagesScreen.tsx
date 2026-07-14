@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, Keyboard
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
-import { ti } from '../lib/i18n'
+import { ti, localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const TEAL = GOLD
@@ -70,14 +70,14 @@ export function MessagesScreen({ job, user, onBack }: Props) {
   }
 
   function fmtTime(iso: string) {
-    return new Date(iso).toLocaleTimeString(lang === 'es' ? 'es-MX' : 'en-US', { hour: 'numeric', minute: '2-digit' })
+    return new Date(iso).toLocaleTimeString(localeFor(lang), { hour: 'numeric', minute: '2-digit' })
   }
 
   function fmtDate(iso: string) {
     const d = new Date(iso)
     const today = new Date()
     if (d.toDateString() === today.toDateString()) return t('today')
-    return d.toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { month: 'short', day: 'numeric' })
+    return d.toLocaleDateString(localeFor(lang), { month: 'short', day: 'numeric' })
   }
 
   // Group messages by date

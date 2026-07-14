@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, ScrollVi
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD, ROLE_COLORS } from '../lib/theme'
 
 const ROLE_KEYS: Record<string, string> = {
@@ -314,14 +315,14 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
     setSending(false)
   }
 
-  function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString(lang === 'es' ? 'es-MX' : 'en-US', { hour: 'numeric', minute: '2-digit' }) }
+  function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString(localeFor(lang), { hour: 'numeric', minute: '2-digit' }) }
   function fmtDate(iso: string) {
     const d = new Date(iso)
     const today = new Date()
     if (d.toDateString() === today.toDateString()) return t('today')
     const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1)
     if (d.toDateString() === yesterday.toDateString()) return t('yesterday')
-    return d.toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { month: 'short', day: 'numeric' })
+    return d.toLocaleDateString(localeFor(lang), { month: 'short', day: 'numeric' })
   }
 
   const flatData: any[] = []

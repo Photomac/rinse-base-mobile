@@ -23,7 +23,8 @@ export function LangProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   function toggleLanguage() {
-    const newLang = lang === 'en' ? 'es' : 'en'
+    const order: Language[] = ['en', 'es', 'pt']
+    const newLang = order[(order.indexOf(lang) + 1) % order.length]
     setLangState(newLang)
     setLanguage(newLang).catch(e => console.warn('Failed to save language:', e))
   }

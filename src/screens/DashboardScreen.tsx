@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIn
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
-import { ti } from '../lib/i18n'
+import { ti, localeFor } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
@@ -185,7 +185,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           <View style={styles.headerTop}>
             <View>
               <Text style={styles.greeting}>{greeting}, {user.full_name?.split(' ')[0]} 👋</Text>
-              <Text style={styles.date}>{now.toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
+              <Text style={styles.date}>{now.toLocaleDateString(localeFor(lang), { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
             </View>
             <TouchableOpacity style={styles.sosBtn} onPress={onSOS} activeOpacity={0.8}>
               <Text style={styles.sosBtnText}>🆘</Text>

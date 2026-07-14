@@ -6,6 +6,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { ensureCamera, ensureMediaLibrary } from '../lib/permissions'
 import { Image } from 'react-native'
 import { useLang } from '../contexts/LangContext'
+import { localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const ROLE_KEYS: Record<string, string> = {
@@ -15,7 +16,7 @@ const ROLE_KEYS: Record<string, string> = {
 }
 
 export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpdate?: (url: string) => void }) {
-  const { lang, toggleLanguage, t } = useLang()
+  const { lang, setLang, t } = useLang()
   const initials = user.full_name?.split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase() || '?'
   const [avatarUrl, setAvatarUrl] = React.useState(user.avatar_url || null)
   const [uploading, setUploading] = React.useState(false)
@@ -77,7 +78,7 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
     st === 'approved' ? { color: '#047857', bg: '#ECFDF5', border: '#A7F3D0' }
     : st === 'denied' ? { color: '#B91C1C', bg: '#FEF2F2', border: '#FECACA' }
     : { color: '#B45309', bg: '#FFFBEB', border: '#FDE68A' }
-  const fmtToDate = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const fmtToDate = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString(localeFor(lang), { month: 'short', day: 'numeric', year: 'numeric' })
 
   async function saveContact() {
     setSavingContact(true)
@@ -265,9 +266,13 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
           )}
         </View>
 
-        <TouchableOpacity style={styles.langBtn} onPress={toggleLanguage}>
-          <Text style={styles.langBtnText}>{lang === 'en' ? '🇲🇽 Cambiar a Español' : '🇺🇸 Switch to English'}</Text>
-        </TouchableOpacity>
+        <View style={styles.langRow}>
+          {([['en', '🇺🇸 English'], ['es', '🇲🇽 Español'], ['pt', '🇧🇷 Português']] as const).map(([code, label]) => (
+            <TouchableOpacity key={code} style={[styles.langOpt, lang === code && styles.langOptActive]} onPress={() => setLang(code)}>
+              <Text style={[styles.langOptText, lang === code && styles.langOptTextActive]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
         <TouchableOpacity style={styles.signOutBtn} onPress={() => Alert.alert(t('sign_out'), t('sign_out_confirm'), [{ text: t('cancel'), style: 'cancel' }, { text: t('sign_out'), style: 'destructive', onPress: () => supabase.auth.signOut() }])}>
           <Text style={styles.signOutText}>{t('sign_out')}</Text>
         </TouchableOpacity>
@@ -296,8 +301,11 @@ const styles = StyleSheet.create({
   rowValue: { fontSize: 13, color: '#0F172A', fontWeight: '500' },
   input: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 14, color: '#0F172A', backgroundColor: '#fff', marginTop: 4 },
   contactBtn: { flex: 1, paddingVertical: 11, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  langBtn: { backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8, marginBottom: 8 },
-  langBtnText: { color: '#1D4ED8', fontSize: 15, fontWeight: '700' },
+  langRow: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 8 },
+  langOpt: { flex: 1, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  langOptActive: { backgroundColor: '#1D4ED8', borderColor: '#1D4ED8' },
+  langOptText: { color: '#1D4ED8', fontSize: 13, fontWeight: '700' },
+  langOptTextActive: { color: '#fff' },
   signOutBtn: { backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FECACA', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
   signOutText: { color: '#DC2626', fontSize: 15, fontWeight: '700' },
   toHint: { fontSize: 12, color: '#94A3B8', marginBottom: 12, lineHeight: 17 },
