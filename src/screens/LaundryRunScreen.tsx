@@ -144,6 +144,14 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
       ) : (
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          {/* Owner's note to the runner (e.g. which bags to take today) — read-only,
+              distinct from the runner's own note field at the bottom. */}
+          {!!String(job.internal_notes || '').trim() && (
+            <View style={[styles.card, { backgroundColor: '#FEF9C3', borderColor: '#FCD34D', borderWidth: 1 }]}>
+              <Text style={{ fontSize: 12, fontWeight: '800', color: '#854D0E', marginBottom: 4 }}>📝 {t('job_notes')}</Text>
+              <Text style={{ fontSize: 14, color: '#713F12', lineHeight: 20 }}>{String(job.internal_notes).trim()}</Text>
+            </View>
+          )}
           <Text style={styles.sectionTitle}>💵 {t('laundry_cash_section')}</Text>
           <View style={styles.card}>
             {moneyField('laundry_cash_given', 'cash_given')}
