@@ -179,6 +179,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const isLaundry = job.job_type === 'laundry_run'
   // Any internal task (laundry run, generic task): no property/checklist/photos.
   const isTask = !!job.job_type && job.job_type !== 'clean'
+  // The owner's note to crew. On a 📌 task the first line of internal_notes is
+  // the task's title (already shown in the header), so only the rest is the
+  // note; laundry runs and cleans use the whole field. Shown for ALL job
+  // types — the owner uses it to tell crew things like which bags to take.
+  const jobNote = (job.job_type === 'task'
+    ? String(job.internal_notes || '').split('\n').slice(1).join('\n')
+    : String(job.internal_notes || '')).trim()
   const dailyMode = user._timeMode === 'daily'
   const isClockedIn = !!activeEntry && !isPaused
   // In daily mode there's no per-job timer, so "started" tracks job status instead.
@@ -692,9 +699,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         return
       }
     }
+    // Append the crew's completion note to internal_notes instead of replacing
+    // it — the field also carries the owner's note to crew (and a task's title),
+    // which a plain overwrite used to erase.
+    const crewNote = notes.trim()
+    const mergedNotes = crewNote
+      ? (job.internal_notes ? `${job.internal_notes}\n— ${crewNote}` : crewNote)
+      : (job.internal_notes ?? null)
     const { error: doneErr } = await supabase.from('jobs').update({
       status: 'completed',
-      internal_notes: notes.trim() || null,
+      internal_notes: mergedNotes,
       // Sign-off attribution (distinct from per-item completed_by = last ticker).
       ...(user?.id ? { completed_by_user_id: user.id } : {}),
     }).eq('id', job.id)
@@ -837,10 +851,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('laundry_bags_label')}</Text><Text style={styles.infoValue}>{bagColor}</Text></View>
             </View>
           )}
-          {!isTask && job.internal_notes && (
+          {!!jobNote && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📝</Text>
-              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('job_notes')}</Text><Text style={styles.infoValue}>{job.internal_notes}</Text></View>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('job_notes')}</Text><Text style={styles.infoValue}>{jobNote}</Text></View>
             </View>
           )}
           {!isTask && crewOnJob.length > 0 && (
