@@ -278,6 +278,7 @@ export const translations = {
     messages_empty_sub: 'Owner, crew and client can all message here',
     type_message_placeholder: 'Type a message...',
     message_send_failed: 'Message failed to send. Try again.',
+    attach_photo: 'Attach photo', photo_label: 'Photo',
     // Login + chat alerts
     enter_email: 'Please enter your email address',
     enter_password: 'Please enter your password',
@@ -597,6 +598,7 @@ export const translations = {
     messages_empty_sub: 'Dueño, equipo y cliente pueden enviar mensajes aquí',
     type_message_placeholder: 'Escribe un mensaje...',
     message_send_failed: 'Error al enviar mensaje. Inténtalo de nuevo.',
+    attach_photo: 'Adjuntar foto', photo_label: 'Foto',
     // Login + chat alerts
     enter_email: 'Por favor ingresa tu correo electrónico',
     enter_password: 'Por favor ingresa tu contraseña',
@@ -916,6 +918,7 @@ export const translations = {
     messages_empty_sub: 'Dono, equipe e cliente podem enviar mensagens aqui',
     type_message_placeholder: 'Digite uma mensagem...',
     message_send_failed: 'Falha ao enviar a mensagem. Tente de novo.',
+    attach_photo: 'Anexar foto', photo_label: 'Foto',
     // Login + chat alerts
     enter_email: 'Digite seu e-mail',
     enter_password: 'Digite sua senha',

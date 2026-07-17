@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
+import { chooseAttachmentSource, pickAndUploadImage } from '../lib/chatAttachments'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const TEAL = GOLD
@@ -26,6 +27,7 @@ export function MessagesScreen({ job, user, onBack }: Props) {
   const [messages, setMessages] = useState<any[]>([])
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const [attaching, setAttaching] = useState(false)
   const [loading, setLoading] = useState(true)
   const flatListRef = useRef<FlatList>(null)
 
@@ -67,6 +69,36 @@ export function MessagesScreen({ job, user, onBack }: Props) {
     setText('')
     await loadMessages()
     setSending(false)
+  }
+
+  // Send a photo as its own message (empty text, attachment fields set) —
+  // no staged preview in v1; picking an image sends it immediately.
+  async function attachPhoto() {
+    if (sending || attaching) return
+    const source = await chooseAttachmentSource({
+      title: t('attach_photo'), camera: t('camera_btn'), library: t('photo_library'), cancel: t('cancel'),
+    })
+    if (!source) return
+    setAttaching(true)
+    try {
+      const url = await pickAndUploadImage(source, user.tenant_id, `${job.id}/messages`)
+      if (url) {
+        const { error } = await supabase.from('job_messages').insert({
+          tenant_id: user.tenant_id,
+          job_id: job.id,
+          sender_type: 'crew',
+          sender_name: senderName,
+          message: '',
+          attachment_url: url,
+          attachment_type: 'image',
+        })
+        if (error) throw error
+        await loadMessages()
+      }
+    } catch (err: any) {
+      Alert.alert(t('error'), err?.message || t('message_send_failed'))
+    }
+    setAttaching(false)
   }
 
   function fmtTime(iso: string) {
@@ -144,7 +176,10 @@ export function MessagesScreen({ job, user, onBack }: Props) {
                         <Text style={styles.senderType}> · {item.sender_type}</Text>
                       </Text>
                     )}
-                    <Text style={[styles.msgText, isMe && styles.msgTextMe]}>{item.message}</Text>
+                    {item.attachment_url && (
+                      <Image source={{ uri: item.attachment_url }} style={styles.msgImage} resizeMode="cover" />
+                    )}
+                    {!!item.message && <Text style={[styles.msgText, isMe && styles.msgTextMe]}>{item.message}</Text>}
                     <Text style={[styles.msgTime, isMe && styles.msgTimeMe]}>{fmtTime(item.created_at)}</Text>
                   </View>
                 </View>
@@ -162,6 +197,9 @@ export function MessagesScreen({ job, user, onBack }: Props) {
 
         {/* Input */}
         <View style={styles.inputRow}>
+          <TouchableOpacity style={styles.attachBtn} onPress={attachPhoto} disabled={attaching}>
+            {attaching ? <ActivityIndicator size="small" color={TEAL} /> : <Text style={{ fontSize: 20 }}>📷</Text>}
+          </TouchableOpacity>
           <TextInput
             style={styles.input}
             value={text}
@@ -222,4 +260,6 @@ const styles = StyleSheet.create({
   sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: TEAL, alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { backgroundColor: '#E5E7EB' },
   sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  attachBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  msgImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 4, backgroundColor: '#E5E7EB' },
 })

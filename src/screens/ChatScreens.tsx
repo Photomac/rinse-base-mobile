@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { localeFor } from '../lib/i18n'
+import { chooseAttachmentSource, pickAndUploadImage } from '../lib/chatAttachments'
 import { SLATE_DARK, GOLD, ROLE_COLORS } from '../lib/theme'
 
 const ROLE_KEYS: Record<string, string> = {
@@ -241,6 +242,7 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
   const [messages, setMessages] = useState<any[]>([])
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const [attaching, setAttaching] = useState(false)
   const [loading, setLoading] = useState(true)
   const flatListRef = useRef<FlatList>(null)
 
@@ -315,6 +317,43 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
     setSending(false)
   }
 
+  // Send a photo as its own message (empty body, attachment fields set) —
+  // no staged preview in v1; picking an image sends it immediately.
+  async function attachPhoto() {
+    if (sending || attaching) return
+    const source = await chooseAttachmentSource({
+      title: t('attach_photo'), camera: t('camera_btn'), library: t('photo_library'), cancel: t('cancel'),
+    })
+    if (!source) return
+    setAttaching(true)
+    try {
+      const url = await pickAndUploadImage(source, user.tenant_id, `chat/${channel.id}`)
+      if (url) {
+        const { data: freshUser } = await supabase.from('users').select('avatar_url').eq('id', user.id).maybeSingle()
+        const { error } = await supabase.from('chat_messages').insert({
+          tenant_id: user.tenant_id,
+          channel_id: channel.id,
+          sender_id: user.id,
+          sender_name: user.nickname?.trim() || user.full_name,
+          sender_role: user.role,
+          avatar_url: freshUser?.avatar_url || user.avatar_url || null,
+          body: '',
+          attachment_url: url,
+          attachment_type: 'image',
+        })
+        if (error) throw error
+        await supabase.from('message_channels').update({
+          last_message: `📷 ${t('photo_label')}`,
+          last_message_at: new Date().toISOString(),
+        }).eq('id', channel.id)
+        await loadMessages()
+      }
+    } catch (err: any) {
+      Alert.alert(t('error'), err?.message || t('message_send_failed'))
+    }
+    setAttaching(false)
+  }
+
   function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString(localeFor(lang), { hour: 'numeric', minute: '2-digit' }) }
   function fmtDate(iso: string) {
     const d = new Date(iso)
@@ -378,7 +417,10 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
                         {item.sender_name?.split(' ')[0]} <Text style={styles.senderRole}>{t((ROLE_KEYS[item.sender_role] || 'role_cleaner') as any)}</Text>
                       </Text>
                     )}
-                    <Text style={[styles.msgText, isMe && styles.msgTextMe]}>{item.body}</Text>
+                    {item.attachment_url && (
+                      <Image source={{ uri: item.attachment_url }} style={styles.msgImage} resizeMode="cover" />
+                    )}
+                    {!!item.body && <Text style={[styles.msgText, isMe && styles.msgTextMe]}>{item.body}</Text>}
                     <Text style={[styles.msgTime, isMe && styles.msgTimeMe]}>{fmtTime(item.created_at)}</Text>
                   </View>
                 </View>
@@ -395,6 +437,9 @@ export function ChatScreen({ channel, user, onBack }: { channel: any; user: any;
         )}
 
         <View style={styles.inputRow}>
+          <TouchableOpacity style={styles.attachBtn} onPress={attachPhoto} disabled={attaching}>
+            {attaching ? <ActivityIndicator size="small" color={GOLD} /> : <Text style={{ fontSize: 20 }}>📷</Text>}
+          </TouchableOpacity>
           <TextInput
             style={styles.input}
             value={text}
@@ -476,6 +521,8 @@ const styles = StyleSheet.create({
   inputRow: { flexDirection: 'row', padding: 12, paddingBottom: 24, gap: 8, borderTopWidth: 1, borderTopColor: '#E2E8F0', backgroundColor: '#fff', alignItems: 'flex-end' },
   input: { flex: 1, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, color: '#0F172A', maxHeight: 100, backgroundColor: '#F8FAFC' },
   sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center' },
+  attachBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  msgImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 4, backgroundColor: '#E2E8F0' },
   sendBtnDisabled: { backgroundColor: '#E2E8F0' },
   sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
 })
