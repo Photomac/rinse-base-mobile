@@ -6,6 +6,8 @@ import * as ImagePicker from 'expo-image-picker'
 import { supabase } from './supabase'
 import { ensureCamera, ensureMediaLibrary } from './permissions'
 
+const SUPABASE_URL = 'https://cbnbhwclbtowfbjylnph.supabase.co'
+
 export type AttachmentSource = 'camera' | 'library'
 
 // Ask camera vs library via a native alert; resolves null on cancel/dismiss.
@@ -34,12 +36,24 @@ export async function pickAndUploadImage(source: AttachmentSource, tenantId: str
   const extRaw = (asset.uri.split('.').pop() || 'jpg').toLowerCase()
   const ext = extRaw.length > 4 ? 'jpg' : extRaw
   const path = `${tenantId}/${folder}/${Date.now()}.${ext}`
-  const response = await fetch(asset.uri)
-  const blob = await response.blob()
-  const { error } = await supabase.storage.from('job-photos').upload(path, blob, {
-    contentType: asset.mimeType || (ext === 'jpg' ? 'image/jpeg' : `image/${ext}`),
-    upsert: true,
+  // Upload as FormData straight to the storage REST endpoint (same pattern as
+  // photoQueue.uploadOne). supabase-js .upload() with a fetched Blob writes a
+  // 0-byte object under React Native — RN blobs don't survive its body
+  // conversion, and storage accepts the empty payload without erroring.
+  const { data: { session } } = await supabase.auth.getSession()
+  const token = session?.access_token
+  if (!token) throw new Error('No signed-in session')
+  const form = new FormData()
+  form.append('file', {
+    uri: asset.uri,
+    name: path.split('/').pop(),
+    type: asset.mimeType || (ext === 'jpg' ? 'image/jpeg' : `image/${ext}`),
+  } as any)
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/job-photos/${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'x-upsert': 'true' },
+    body: form,
   })
-  if (error) throw error
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`)
   return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl
 }
