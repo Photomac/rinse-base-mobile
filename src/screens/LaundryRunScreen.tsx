@@ -110,21 +110,6 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
     </View>
   )
 
-  const bagStepper = (labelKey: string, value: number, setValue: (n: number) => void) => (
-    <View style={styles.fieldWrap}>
-      <Text style={styles.fieldLabel}>{t(labelKey as any)}</Text>
-      <View style={styles.stepperRow}>
-        <TouchableOpacity style={styles.stepBtn} onPress={() => setValue(Math.max(0, value - 1))}>
-          <Text style={styles.stepBtnText}>−</Text>
-        </TouchableOpacity>
-        <Text style={styles.stepValue}>{value}</Text>
-        <TouchableOpacity style={styles.stepBtn} onPress={() => setValue(value + 1)}>
-          <Text style={styles.stepBtnText}>+</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  )
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -174,13 +159,10 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
             )}
           </View>
 
-          <Text style={styles.sectionTitle}>👜 {t('laundry_bags_section')}</Text>
-          <View style={styles.card}>
-            {bagStepper('laundry_bags_home', bagsHome, setBagsHome)}
-            {bagStepper('laundry_bags_onsite', bagsOnsite, setBagsOnsite)}
-            {bagStepper('laundry_bags_office', bagsOffice, setBagsOffice)}
-            {bagStepper('laundry_bags_laundromat', bagsMat, setBagsMat)}
-          </View>
+          {/* Bag counts live on each clean (TakeHomeLaundryCard) — that's what
+              drives the bag bonus. Logging them again on the laundromat run
+              double-counted, so the section is gone (2026-07-20, Elle). Save
+              still round-trips whatever values the row already has. */}
 
           <Text style={styles.sectionTitle}>📝 {t('notes_optional')}</Text>
           <View style={styles.card}>
