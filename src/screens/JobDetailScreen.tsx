@@ -673,6 +673,26 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         )
         return
       }
+
+      // Laundry runs: cash reconciliation is required (and must tie out)
+      // before the run can be completed — offer to open the laundry form.
+      if (blockers.some((b: any) => b.code === 'laundry_cash_missing' || b.code === 'laundry_cash_mismatch')) {
+        const mismatch = blockers.some((b: any) => b.code === 'laundry_cash_mismatch')
+        Alert.alert(
+          `💵 ${t('laundry_cash_required_title')}`,
+          mismatch ? t('laundry_cash_mismatch_block_msg') : t('laundry_cash_required_msg'),
+          [
+            { text: t('laundry_open_form'), onPress: () => setShowLaundry(true) },
+            { text: t('cancel'), style: 'cancel' }
+          ]
+        )
+        return
+      }
+
+      // Any other blocker code (future gate rules): block instead of silently
+      // falling through — web and mobile must never disagree on completion.
+      Alert.alert(t('error'), t('completion_blocked_generic'))
+      return
     }
     await completeJobNoPhotoCheck()
   }
