@@ -84,9 +84,19 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       if (!j.scheduled_end) return s
       return s + (new Date(j.scheduled_end).getTime() - new Date(j.scheduled_start).getTime()) / 3600000
     }, 0)
+    // Earnings via the crew_pay_for_period RPC — the same canonical pay
+    // hierarchy the owner Payroll page uses (property crew rate → property
+    // default w/ pooled split + lead rate → turnover/per-job flat → hourly).
+    // The old hourly×hours / jobs×rate calc here showed $0 for
+    // property-flat-rate and mixed-pay crews. Falls back to 0 on error so an
+    // app update ahead of the DB migration can't crash the dashboard.
     let earnings = 0
-    if (user.pay_type === 'hourly') earnings = hours * Number(user.hourly_rate || 0)
-    else if (user.pay_type === 'per_job') earnings = myMonth.length * Number(user.per_job_rate || 0)
+    try {
+      const { data: pay } = await supabase.rpc('crew_pay_for_period', {
+        p_start: monthStart.toISOString(), p_end: now.toISOString(), p_user_id: user.id,
+      })
+      earnings = Number((pay as any[])?.[0]?.labor_total || 0)
+    } catch { /* keep 0 */ }
     setMonthStats({ completed: myMonth.length, hours: Math.round(hours * 10) / 10, earnings: Math.round(earnings * 100) / 100 })
 
     // Open shift (daily mode) — a job_time_entries row with no job and no clock-out.
