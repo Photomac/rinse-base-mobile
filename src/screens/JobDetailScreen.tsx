@@ -119,7 +119,20 @@ const DEFAULT_CHECKLIST: { id: string; labelKey: 'chk_kitchen' | 'chk_bathrooms'
   { id: '8', labelKey: 'chk_walkthrough',   room: 'General',  title: 'Walkthrough' },
 ]
 
-function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
+function fmtTime(v: string) {
+  // Accepts a full ISO timestamp (scheduled_start, jobs.checkout_time, clock
+  // entries…) or a bare Postgres time "HH:MM[:SS]" (a property's
+  // default_checkout_time / default_checkin_time). ISO strings contain a 'T'
+  // and take the unchanged path below; a bare wall-clock time is rendered in
+  // the device's local time.
+  if (typeof v === 'string' && !v.includes('T') && /^\d{1,2}:\d{2}/.test(v)) {
+    const [h, m] = v.split(':')
+    const d = new Date()
+    d.setHours(Number(h), Number(m), 0, 0)
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  }
+  return new Date(v).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
 function fmtDuration(minutes: number) {
   const h = Math.floor(minutes / 60)
   const m = Math.round(minutes % 60)
@@ -265,6 +278,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       const gc = (jr as any).property_reservations?.guest_count
       if (gc) setGuestCount(gc)
     }
+    // Did the job itself carry a reservation-specific checkout time? If so it
+    // always wins; if not we fall back to the property's standing defaults below.
+    const jobHasCheckout = !!(jr as any)?.checkout_time
 
     // Full crew roster for this job, lead first.
     const { data: crewRows } = await supabase
@@ -278,12 +294,28 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!addrId) return
     const { data } = await supabase
       .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color')
+      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color, default_checkin_time, default_checkout_time')
       .eq('id', addrId)
       .maybeSingle()
     if (data) {
       setPropMeta(data as any)
       setBagColor((data as any).laundry_bag_color ?? null)
+      // Gap-fill: a job only gets checkout_time/checkin_time when a sync
+      // function creates it from a reservation. Manually-created cleans (and
+      // date-only iCal jobs) have none, so the property's default check-in/out
+      // times — set by the owner in Property Details — never reached mobile
+      // (unlike codes/notes, which are read live from the property). Surface
+      // them here as the fallback. Only on cleans, never task/laundry runs; a
+      // real synced turnover time is left untouched. No window/urgency: we
+      // don't know the back-to-back gap without reservation data.
+      if (!jobHasCheckout && !isTask && (data as any).default_checkout_time) {
+        setTurnover({
+          checkout: (data as any).default_checkout_time,
+          checkin: (data as any).default_checkin_time ?? null,
+          window: null,
+          urgency: null,
+        })
+      }
     }
   }
 
