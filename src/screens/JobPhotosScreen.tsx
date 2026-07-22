@@ -144,7 +144,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
 
   // Create a real damage report the owner can see + send to the host. A tagged
   // damage photo alone lives only in job_photos, which the owner's Issues view and
-  // dashboard never read — they're built on job_damage_reports (same as LostFoundCard).
+  // dashboard never read — they're built on job_damage_reports (same as IncidentReportCard).
   async function submitDamageReport(captionText: string) {
     try {
       // The damage photo was saved as photo_type 'issue' — grab its URL for the report.
