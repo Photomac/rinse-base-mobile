@@ -159,7 +159,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
       const photoUrl = (latest as any)?.photo_url || null
 
       const addressId = job.client_addresses?.id || job.address_id || null
-      const title = captionText || 'Damage reported by crew'
+      const title = captionText || 'Incident reported by crew'
       const { error } = await supabase.from('job_damage_reports').insert({
         tenant_id: user.tenant_id,
         job_id: job.id,
