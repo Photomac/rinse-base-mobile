@@ -162,6 +162,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // One-tap "all laundry done on-site" flag — the lightweight cousin of the
   // bag-count card; payroll counts it per crew per period for on-site bonuses.
   const [laundryDoneOnsite, setLaundryDoneOnsite] = useState<boolean>(!!job.laundry_done_onsite)
+  // Owner-uploaded staging/reference photos (how the property should look when
+  // done) — crew view them here; tap to open the fullscreen viewer.
+  const [stagingPhotos, setStagingPhotos] = useState<{ url: string; caption?: string | null }[]>([])
+  const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null)
   // Pet flag — crew mark a clean as having pets → the property's pet_fee lands on
   // this clean's invoice (createJobInvoice / auto-invoice read jobs.pet_fee_applied).
   const [petFeeApplied, setPetFeeApplied] = useState<boolean>(!!job.pet_fee_applied)
@@ -289,12 +293,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!addrId) return
     const { data } = await supabase
       .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color, pet_friendly, pet_fee')
+      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
       .eq('id', addrId)
       .maybeSingle()
     if (data) {
       setPropMeta(data as any)
       setBagColor((data as any).laundry_bag_color ?? null)
+      setStagingPhotos(Array.isArray((data as any).staging_photos) ? (data as any).staging_photos : [])
       setPetFriendly(!!(data as any).pet_friendly)
       setPetFee(Number((data as any).pet_fee) || 0)
     }
@@ -885,6 +890,22 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('property_notes')}</Text><Text style={styles.infoValue}>{propMeta.crew_notes}</Text></View>
             </View>
           )}
+          {!isTask && stagingPhotos.length > 0 && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoIcon}>📸</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.infoLabel}>{t('staging_photos')}</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+                  {stagingPhotos.map((p, i) => (
+                    <TouchableOpacity key={i} onPress={() => setStagingViewerIndex(i)} style={{ marginRight: 8 }}>
+                      <Image source={{ uri: p.url }} style={{ width: 110, height: 110, borderRadius: 10 }} resizeMode="cover" />
+                      {!!p.caption && <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 3, width: 110 }} numberOfLines={2}>{p.caption}</Text>}
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            </View>
+          )}
           {!isTask && bagColor && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>🧺</Text>
@@ -1145,6 +1166,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         <PhotoViewer
           photos={[{ url: addr.photo_url, caption: propLabel || null, meta: t('property_photo') }]}
           onClose={() => setViewPropertyPhoto(false)}
+        />
+      )}
+
+      {stagingViewerIndex != null && stagingPhotos.length > 0 && (
+        <PhotoViewer
+          photos={stagingPhotos.map(p => ({ url: p.url, caption: p.caption || null, meta: t('staging_photos') }))}
+          startIndex={stagingViewerIndex}
+          onClose={() => setStagingViewerIndex(null)}
         />
       )}
 
