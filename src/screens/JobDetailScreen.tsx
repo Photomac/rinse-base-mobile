@@ -162,6 +162,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // One-tap "all laundry done on-site" flag — the lightweight cousin of the
   // bag-count card; payroll counts it per crew per period for on-site bonuses.
   const [laundryDoneOnsite, setLaundryDoneOnsite] = useState<boolean>(!!job.laundry_done_onsite)
+  // Pet flag — crew mark a clean as having pets → the property's pet_fee lands on
+  // this clean's invoice (createJobInvoice / auto-invoice read jobs.pet_fee_applied).
+  const [petFeeApplied, setPetFeeApplied] = useState<boolean>(!!job.pet_fee_applied)
+  const [petFriendly, setPetFriendly] = useState<boolean>(false)
+  const [petFee, setPetFee] = useState<number>(0)
   // Operto-parity turnover strip: checkout / next check-in / window live on the
   // job row (sync-ical keeps them fresh on drift); bag color lives on the property.
   const [turnover, setTurnover] = useState<{ checkout: string | null; checkin: string | null; window: number | null; urgency: string | null } | null>(null)
@@ -248,12 +253,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // payload — same for the laundry flag and the client's type.
     const { data: jr } = await supabase
       .from('jobs')
-      .select('seam_access_code, laundry_done_onsite, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count)')
+      .select('seam_access_code, laundry_done_onsite, pet_fee_applied, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count)')
       .eq('id', job.id)
       .maybeSingle()
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
     if (jr) {
       setLaundryDoneOnsite(!!(jr as any).laundry_done_onsite)
+      setPetFeeApplied(!!(jr as any).pet_fee_applied)
       const ct = (jr as any).clients?.client_type
       if (ct) setClientType(ct)
       if ((jr as any).checkout_time) setTurnover({
@@ -278,12 +284,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!addrId) return
     const { data } = await supabase
       .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color')
+      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color, pet_friendly, pet_fee')
       .eq('id', addrId)
       .maybeSingle()
     if (data) {
       setPropMeta(data as any)
       setBagColor((data as any).laundry_bag_color ?? null)
+      setPetFriendly(!!(data as any).pet_friendly)
+      setPetFee(Number((data as any).pet_fee) || 0)
     }
   }
 
@@ -292,6 +300,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setLaundryDoneOnsite(next)
     const { error } = await supabase.from('jobs').update({ laundry_done_onsite: next }).eq('id', job.id)
     if (error) { setLaundryDoneOnsite(!next); Alert.alert(t('error'), error.message) }
+  }
+
+  async function togglePetFee() {
+    const next = !petFeeApplied
+    setPetFeeApplied(next)
+    const { error } = await supabase.from('jobs').update({ pet_fee_applied: next }).eq('id', job.id)
+    if (error) { setPetFeeApplied(!next); Alert.alert(t('error'), error.message) }
   }
 
   // Live timer
@@ -1077,6 +1092,22 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View style={{ flex: 1 }}>
                 <Text style={styles.checkLabel}>🧺 {t('laundry_done_onsite')}</Text>
                 <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{t('laundry_done_onsite_hint')}</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Pets at this clean — one-tap flag; adds the property pet fee to the invoice.
+            Only shows when the property is pet-friendly or has a fee configured. */}
+        {isStarted && !isTask && (petFriendly || petFee > 0) && (
+          <View style={styles.card}>
+            <TouchableOpacity onPress={togglePetFee} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={[styles.checkbox, petFeeApplied && styles.checkboxDone]}>
+                {petFeeApplied && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.checkLabel}>🐾 {t('pet_at_clean')}{petFee > 0 ? ` — $${petFee}` : ''}</Text>
+                <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{t('pet_at_clean_hint')}</Text>
               </View>
             </TouchableOpacity>
           </View>
