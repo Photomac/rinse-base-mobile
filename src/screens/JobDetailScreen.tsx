@@ -179,6 +179,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const isLaundry = job.job_type === 'laundry_run'
   // Any internal task (laundry run, generic task): no property/checklist/photos.
   const isTask = !!job.job_type && job.job_type !== 'clean'
+  // A task pointed at a REAL property (e.g. a property inspection) — the owner
+  // attached a client_addresses row instead of the internal shell (whose street
+  // is the sentinel 'Internal task'). Show its address/lockbox/map/photo so the
+  // crew know where to go; still no checklist/photos/laundry UI.
+  const hasTaskLocation = isTask && !!addr?.street && addr.street !== 'Internal task'
   // The owner's note to crew. On a 📌 task the first line of internal_notes is
   // the task's title (already shown in the header), so only the rest is the
   // note; laundry runs and cleans use the whole field. Shown for ALL job
@@ -763,8 +768,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Property photo — not for laundry runs (internal shell property) */}
-        {isTask ? null : addr?.photo_url ? (
+        {/* Property photo — not for location-less tasks (internal shell property) */}
+        {(isTask && !hasTaskLocation) ? null : addr?.photo_url ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => setViewPropertyPhoto(true)}>
             <Image source={{ uri: addr.photo_url }} style={{ width: '100%', height: 180, borderRadius: 12, marginBottom: 12 }} resizeMode="cover" />
           </TouchableOpacity>
@@ -823,7 +828,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               )}
             </View>
           )}
-          {!isTask && (
+          {(!isTask || hasTaskLocation) && (
           <TouchableOpacity onPress={() => {
             const q = addr?.lat ? `${addr.lat},${addr.lng}` : `${addr?.street}, ${addr?.city}`
             Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(q)}`)
@@ -859,7 +864,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('arrival_instructions')}</Text><Text style={styles.infoValue}>{addr.arrival_instructions}</Text></View>
             </View>
           )}
-          {!isTask && propMeta?.crew_notes && (
+          {(!isTask || hasTaskLocation) && propMeta?.crew_notes && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📄</Text>
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('property_notes')}</Text><Text style={styles.infoValue}>{propMeta.crew_notes}</Text></View>
