@@ -166,6 +166,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // done) — crew view them here; tap to open the fullscreen viewer.
   const [stagingPhotos, setStagingPhotos] = useState<{ url: string; caption?: string | null }[]>([])
   const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null)
+  // Pet flag — crew mark a clean as having pets → the property's pet_fee lands on
+  // this clean's invoice (createJobInvoice / auto-invoice read jobs.pet_fee_applied).
+  const [petFeeApplied, setPetFeeApplied] = useState<boolean>(!!job.pet_fee_applied)
+  const [petFriendly, setPetFriendly] = useState<boolean>(false)
+  const [petFee, setPetFee] = useState<number>(0)
   // Operto-parity turnover strip: checkout / next check-in / window live on the
   // job row (sync-ical keeps them fresh on drift); bag color lives on the property.
   const [turnover, setTurnover] = useState<{ checkout: string | null; checkin: string | null; window: number | null; urgency: string | null } | null>(null)
@@ -183,6 +188,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const isLaundry = job.job_type === 'laundry_run'
   // Any internal task (laundry run, generic task): no property/checklist/photos.
   const isTask = !!job.job_type && job.job_type !== 'clean'
+  // A task pointed at a REAL property (e.g. a property inspection) — the owner
+  // attached a client_addresses row instead of the internal shell (whose street
+  // is the sentinel 'Internal task'). Show its address/lockbox/map/photo so the
+  // crew know where to go; still no checklist/photos/laundry UI.
+  const hasTaskLocation = isTask && !!addr?.street && addr.street !== 'Internal task'
   // The owner's note to crew. On a 📌 task the first line of internal_notes is
   // the task's title (already shown in the header), so only the rest is the
   // note; laundry runs and cleans use the whole field. Shown for ALL job
@@ -252,12 +262,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // payload — same for the laundry flag and the client's type.
     const { data: jr } = await supabase
       .from('jobs')
-      .select('seam_access_code, laundry_done_onsite, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count)')
+      .select('seam_access_code, laundry_done_onsite, pet_fee_applied, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count)')
       .eq('id', job.id)
       .maybeSingle()
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
     if (jr) {
       setLaundryDoneOnsite(!!(jr as any).laundry_done_onsite)
+      setPetFeeApplied(!!(jr as any).pet_fee_applied)
       const ct = (jr as any).clients?.client_type
       if (ct) setClientType(ct)
       if ((jr as any).checkout_time) setTurnover({
@@ -282,13 +293,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!addrId) return
     const { data } = await supabase
       .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color, staging_photos')
+      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
       .eq('id', addrId)
       .maybeSingle()
     if (data) {
       setPropMeta(data as any)
       setBagColor((data as any).laundry_bag_color ?? null)
       setStagingPhotos(Array.isArray((data as any).staging_photos) ? (data as any).staging_photos : [])
+      setPetFriendly(!!(data as any).pet_friendly)
+      setPetFee(Number((data as any).pet_fee) || 0)
     }
   }
 
@@ -297,6 +310,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setLaundryDoneOnsite(next)
     const { error } = await supabase.from('jobs').update({ laundry_done_onsite: next }).eq('id', job.id)
     if (error) { setLaundryDoneOnsite(!next); Alert.alert(t('error'), error.message) }
+  }
+
+  async function togglePetFee() {
+    const next = !petFeeApplied
+    setPetFeeApplied(next)
+    const { error } = await supabase.from('jobs').update({ pet_fee_applied: next }).eq('id', job.id)
+    if (error) { setPetFeeApplied(!next); Alert.alert(t('error'), error.message) }
   }
 
   // Live timer
@@ -768,8 +788,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Property photo — not for laundry runs (internal shell property) */}
-        {isTask ? null : addr?.photo_url ? (
+        {/* Property photo — not for location-less tasks (internal shell property) */}
+        {(isTask && !hasTaskLocation) ? null : addr?.photo_url ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => setViewPropertyPhoto(true)}>
             <Image source={{ uri: addr.photo_url }} style={{ width: '100%', height: 180, borderRadius: 12, marginBottom: 12 }} resizeMode="cover" />
           </TouchableOpacity>
@@ -828,7 +848,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               )}
             </View>
           )}
-          {!isTask && (
+          {(!isTask || hasTaskLocation) && (
           <TouchableOpacity onPress={() => {
             const q = addr?.lat ? `${addr.lat},${addr.lng}` : `${addr?.street}, ${addr?.city}`
             Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(q)}`)
@@ -864,7 +884,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('arrival_instructions')}</Text><Text style={styles.infoValue}>{addr.arrival_instructions}</Text></View>
             </View>
           )}
-          {!isTask && propMeta?.crew_notes && (
+          {(!isTask || hasTaskLocation) && propMeta?.crew_notes && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📄</Text>
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('property_notes')}</Text><Text style={styles.infoValue}>{propMeta.crew_notes}</Text></View>
@@ -1098,6 +1118,22 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View style={{ flex: 1 }}>
                 <Text style={styles.checkLabel}>🧺 {t('laundry_done_onsite')}</Text>
                 <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{t('laundry_done_onsite_hint')}</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Pets at this clean — one-tap flag; adds the property pet fee to the invoice.
+            Only shows when the property is pet-friendly or has a fee configured. */}
+        {isStarted && !isTask && (petFriendly || petFee > 0) && (
+          <View style={styles.card}>
+            <TouchableOpacity onPress={togglePetFee} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <View style={[styles.checkbox, petFeeApplied && styles.checkboxDone]}>
+                {petFeeApplied && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.checkLabel}>🐾 {t('pet_at_clean')}{petFee > 0 ? ` — $${petFee}` : ''}</Text>
+                <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{t('pet_at_clean_hint')}</Text>
               </View>
             </TouchableOpacity>
           </View>
