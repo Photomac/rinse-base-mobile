@@ -20,6 +20,7 @@ import { startLocationTracking, stopLocationTracking } from './src/lib/locationT
 import './src/lib/arrivalGeofence'
 import { flushQueue } from './src/lib/photoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
+import { clearDataCache } from './src/lib/dataCache'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
 import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
@@ -60,7 +61,7 @@ function AppInner() {
         // SIGNED_OUT is explicit sign-out or a server-invalidated session —
         // never a network blip (those are retried without an event) — so it's
         // safe to drop the offline profile copy here.
-        if (_event === 'SIGNED_OUT' && lastAuthId.current) clearCachedProfile(lastAuthId.current)
+        if (_event === 'SIGNED_OUT' && lastAuthId.current) { clearCachedProfile(lastAuthId.current); clearDataCache() }
         setUser(null); setLoading(false)
       }
     })

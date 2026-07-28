@@ -32,6 +32,7 @@ export const translations = {
     today: 'Today', yesterday: 'Yesterday', done_label: 'Done', remaining: 'Remaining', this_month: 'This month',
     active_job: 'Active job in progress', next_job: 'Next job',
     todays_jobs: "Today's jobs", see_all: 'See all', no_jobs_today: 'No jobs scheduled today',
+    offline_cached: "You're offline — showing last saved data",
     my_earnings: 'My earnings this month', schedule: 'Schedule', log_miles: 'Log miles', profile: 'Profile',
     // Today
     no_jobs: 'No jobs today', enjoy_day: 'Enjoy your day off!',
@@ -386,6 +387,7 @@ export const translations = {
     today: 'Hoy', yesterday: 'Ayer', done_label: 'Hechos', remaining: 'Pendientes', this_month: 'Este mes',
     active_job: 'Trabajo en progreso', next_job: 'Próximo trabajo',
     todays_jobs: 'Trabajos de hoy', see_all: 'Ver todos', no_jobs_today: 'Sin trabajos hoy',
+    offline_cached: 'Sin conexión — mostrando los últimos datos guardados',
     my_earnings: 'Mis ganancias este mes', schedule: 'Horario', log_miles: 'Registrar millas', profile: 'Perfil',
     // Today
     no_jobs: 'Sin trabajos hoy', enjoy_day: 'Disfruta tu día libre',
@@ -739,6 +741,7 @@ export const translations = {
     today: 'Hoje', yesterday: 'Ontem', done_label: 'Feitos', remaining: 'Restantes', this_month: 'Este mês',
     active_job: 'Serviço em andamento', next_job: 'Próximo serviço',
     todays_jobs: 'Serviços de hoje', see_all: 'Ver todos', no_jobs_today: 'Nenhum serviço hoje',
+    offline_cached: 'Sem conexão — mostrando os últimos dados salvos',
     my_earnings: 'Meus ganhos neste mês', schedule: 'Agenda', log_miles: 'Registrar milhas', profile: 'Perfil',
     // Today
     no_jobs: 'Nenhum serviço hoje', enjoy_day: 'Aproveite sua folga!',
