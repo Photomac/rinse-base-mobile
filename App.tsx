@@ -19,6 +19,7 @@ import { startLocationTracking, stopLocationTracking } from './src/lib/locationT
 // eval so headless OS launches (region crossings) find the handler.
 import './src/lib/arrivalGeofence'
 import { flushQueue } from './src/lib/photoQueue'
+import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
 import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
@@ -44,23 +45,30 @@ function AppInner() {
   const [showSOS, setShowSOS] = useState(false)
   const [activeChannel, setActiveChannel] = useState<any>(null)
   const navigationRef = useRef<any>(null)
+  const lastAuthId = useRef<string | null>(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
-      if (session) loadUser(session.user.id)
+      if (session) { lastAuthId.current = session.user.id; loadUser(session.user.id) }
       else setLoading(false)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
-      if (session) loadUser(session.user.id)
-      else { setUser(null); setLoading(false) }
+      if (session) { lastAuthId.current = session.user.id; loadUser(session.user.id) }
+      else {
+        // SIGNED_OUT is explicit sign-out or a server-invalidated session —
+        // never a network blip (those are retried without an event) — so it's
+        // safe to drop the offline profile copy here.
+        if (_event === 'SIGNED_OUT' && lastAuthId.current) clearCachedProfile(lastAuthId.current)
+        setUser(null); setLoading(false)
+      }
     })
     return () => subscription.unsubscribe()
   }, [])
 
   async function loadUser(authId: string) {
-    const { data } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
+    const { data, error } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
     if (data) {
       // Crew→client contact policy. Default: crew can't call the host directly
       // (the cleaning company owns that relationship) — they reach dispatch.
@@ -83,13 +91,24 @@ function AppInner() {
           Number(tenant?.laundry_takehome_bonus || 0), Number(tenant?.laundry_onsite_bonus || 0),
           Number(tenant?.laundry_office_bonus || 0), Number(tenant?.laundry_laundromat_bonus || 0))
       } catch (e) { data._contact = { crewCanContactClient: false, dispatchPhone: null }; data._timeMode = 'per_job'; data._laundryBonus = 0 }
+      saveCachedProfile(authId, data)
     }
-    setUser(data)
+    // Offline fallback: a fetch ERROR (no signal, server down) is not proof the
+    // profile is gone — use the last good copy so a crew member with a valid
+    // session isn't bounced to the login screen. Only a clean "no row" answer
+    // from the server means the profile really was removed → drop the cache
+    // and fall through to login.
+    let effective = data
+    if (!data) {
+      if (error) effective = await loadCachedProfile(authId)
+      else clearCachedProfile(authId)
+    }
+    setUser(effective)
     setLoading(false)
-    if (data) {
-      setErrorContext({ tenantId: data.tenant_id, email: data.email, role: data.role })
-      registerPushToken(data).catch(console.warn)
-      startLocationTracking(data).catch(console.warn)
+    if (effective) {
+      setErrorContext({ tenantId: effective.tenant_id, email: effective.email, role: effective.role })
+      registerPushToken(effective).catch(console.warn)
+      startLocationTracking(effective).catch(console.warn)
     }
   }
 
