@@ -21,6 +21,7 @@ import './src/lib/arrivalGeofence'
 import { flushQueue } from './src/lib/photoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
 import { clearDataCache } from './src/lib/dataCache'
+import { flushOutbox } from './src/lib/outbox'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
 import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
@@ -208,13 +209,16 @@ function AppInner() {
     }
   }
 
-  // Drain any photos captured offline — once on login, and every time the app
-  // returns to the foreground (e.g. crew regains signal and reopens the app).
+  // Drain offline work — once on login, and every time the app returns to the
+  // foreground (e.g. crew regains signal and reopens the app). Photos first,
+  // then the write outbox, so a queued completion never lands ahead of the
+  // photos that satisfy its checklist.
   useEffect(() => {
     if (!user) return
-    flushQueue().catch(() => {})
+    const drain = () => { flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}) }
+    drain()
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') flushQueue().catch(() => {})
+      if (state === 'active') drain()
     })
     return () => sub.remove()
   }, [user])

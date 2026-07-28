@@ -6,6 +6,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
+import { overlayPending } from '../lib/outbox'
 
 const STATUS_COLORS: Record<string, string> = {
   scheduled:   '#3B82F6',
@@ -60,7 +61,8 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const myJobs = isOwner
       ? (data ?? [])
       : (data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
-    setJobs(myJobs)
+    // Queued offline status changes overlay the cached/live rows.
+    setJobs(await overlayPending('jobs', myJobs))
     setLoading(false)
     setRefreshing(false)
   }

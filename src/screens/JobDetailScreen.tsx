@@ -19,6 +19,7 @@ import { startLocationTracking, maybeStopLocationTracking } from '../lib/locatio
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
 import { flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
 import { cachedQuery } from '../lib/dataCache'
+import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -207,6 +208,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const isStarted = timeEntries.length > 0 || !!activeEntry || (dailyMode && (job.status === 'in_progress' || job.status === 'completed'))
 
   useEffect(() => {
+    // Drain queued offline writes first chance we get (same trigger set as the
+    // photo queue: screen mount, app foreground, next write).
+    flushOutbox().catch(() => {})
     loadChecklist()
     loadTimeEntries()
     loadPropMeta()
@@ -309,14 +313,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   async function toggleLaundryDoneOnsite() {
     const next = !laundryDoneOnsite
     setLaundryDoneOnsite(next)
-    const { error } = await supabase.from('jobs').update({ laundry_done_onsite: next }).eq('id', job.id)
+    const { error } = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { laundry_done_onsite: next } })
     if (error) { setLaundryDoneOnsite(!next); Alert.alert(t('error'), error.message) }
   }
 
   async function togglePetFee() {
     const next = !petFeeApplied
     setPetFeeApplied(next)
-    const { error } = await supabase.from('jobs').update({ pet_fee_applied: next }).eq('id', job.id)
+    const { error } = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { pet_fee_applied: next } })
     if (error) { setPetFeeApplied(!next); Alert.alert(t('error'), error.message) }
   }
 
@@ -341,12 +345,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }, [isClockedIn, activeEntry, timeEntries])
 
   async function loadTimeEntries() {
-    const { data } = await cachedQuery(`time:${job.id}:${user.id}`, supabase
+    const { data: fetched } = await cachedQuery(`time:${job.id}:${user.id}`, supabase
       .from('job_time_entries')
       .select('*')
       .eq('job_id', job.id)
       .eq('user_id', user.id)
       .order('clocked_in_at'))
+    // Queued offline punches overlay the cached/live rows, so a relaunch in a
+    // dead zone still shows the running timer (and can pause/clock out).
+    const data = (await overlayPending('job_time_entries', fetched ?? [],
+      v => v.job_id === job.id && v.user_id === user.id))
+      .sort((a: any, b: any) => String(a.clocked_in_at).localeCompare(String(b.clocked_in_at)))
     if (data) {
       setTimeEntries(data)
       const active = data.find(e => !e.clocked_out_at)
@@ -405,7 +414,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         .order('room').order('sort_order')),
     ])
     const tmpl = tmplRes.data || []
-    const rows = rowsRes.data || []
+    // Queued offline ticks overlay the cached/live rows (rows are already
+    // scoped to this job, matching the ops' job_id filter).
+    const rows = await overlayPending('job_checklist_items', rowsRes.data || [],
+      v => v.job_id === job.id)
     let items: any[]
     const checkedMap: Record<string, boolean> = {}
     if (rows.length > 0 && tmpl.length > 0) {
@@ -450,27 +462,36 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   async function saveCheckItem(item: any, isChecked: boolean) {
-    // Ticks save optimistically — on failure, revert the box and tell the
-    // crew, or they walk away believing the checklist is done when it isn't.
+    // Ticks save optimistically. Offline they queue in the outbox (the box
+    // stays ticked); only a real server rejection reverts the box and tells
+    // the crew, or they walk away believing the checklist is done when it isn't.
     let error
     if (item.jobItemId) {
       // Seeded row — flip the same flag the owner dashboard reads. Never
       // delete: these rows ARE the owner's checklist.
-      ;({ error } = await supabase.from('job_checklist_items').update({
-        completed: isChecked,
-        completed_at: isChecked ? new Date().toISOString() : null,
-        completed_by: isChecked ? user.id : null,
-      }).eq('id', item.jobItemId))
+      ;({ error } = await writeThrough({
+        table: 'job_checklist_items', op: 'update', match: { id: item.jobItemId },
+        values: {
+          completed: isChecked,
+          completed_at: isChecked ? new Date().toISOString() : null,
+          completed_by: isChecked ? user.id : null,
+        },
+      }))
     } else if (isChecked) {
-      ;({ error } = await supabase.from('job_checklist_items').upsert({
-        tenant_id: user.tenant_id, job_id: job.id,
-        room: item.room, task: item.title, sort_order: 0,
-        completed: true, completed_at: new Date().toISOString(), completed_by: user.id,
-      }, { onConflict: 'job_id,task,room' }))
+      ;({ error } = await writeThrough({
+        table: 'job_checklist_items', op: 'upsert', onConflict: 'job_id,task,room',
+        values: {
+          tenant_id: user.tenant_id, job_id: job.id,
+          room: item.room, task: item.title, sort_order: 0,
+          completed: true, completed_at: new Date().toISOString(), completed_by: user.id,
+        },
+      }))
     } else {
-      ;({ error } = await supabase.from('job_checklist_items').update({
-        completed: false, completed_at: null, completed_by: null,
-      }).eq('job_id', job.id).eq('task', item.title).eq('room', item.room))
+      ;({ error } = await writeThrough({
+        table: 'job_checklist_items', op: 'update',
+        match: { job_id: job.id, task: item.title, room: item.room },
+        values: { completed: false, completed_at: null, completed_by: null },
+      }))
     }
     if (error) {
       setChecked(prev => ({ ...prev, [item.id]: !isChecked }))
@@ -499,22 +520,30 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       stamp = await quickGpsStamp()
     }
 
-    // Create time entry — this row IS the crew member's pay. If the insert
-    // fails (dead spot, RLS hiccup) we must NOT mark the job in_progress:
-    // that's exactly the "worked all day, no hours on payroll" failure.
-    const { data: entry, error: entryErr } = await supabase.from('job_time_entries').insert({
+    // Create time entry — this row IS the crew member's pay. The id is minted
+    // client-side so the write is an idempotent upsert: offline it queues in
+    // the outbox (dead spot ≠ lost hours), and a replay whose ack was lost
+    // can't double-insert. A real server rejection (RLS) still must NOT mark
+    // the job in_progress: that's the "worked all day, no hours on payroll"
+    // failure.
+    const entry = {
+      id: uuid4(),
       tenant_id: user.tenant_id, job_id: job.id, user_id: user.id,
       clocked_in_at: clockedInAt.toISOString(), entry_type: 'work',
       source: arrival ? 'prompted' : 'manual',
       arrived_at: arrival?.at ?? null,
       clock_in_lat: stamp?.lat ?? null,
       clock_in_lng: stamp?.lng ?? null,
-    }).select().single()
-    if (entryErr || !entry) {
+    }
+    const { error: entryErr, queued } = await writeThrough({
+      table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
+    })
+    if (entryErr) {
       setSaving(false)
       Alert.alert(t('error'), t('clock_in_failed'))
       return
     }
+    if (queued) Alert.alert('📡', t('queued_offline'))
     if (arrival) {
       clearPendingArrival(job.id)
       // Tell them the backdate happened — the timer starting "in the past"
@@ -533,7 +562,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // so tracking keeps working with the phone in their pocket.
     startLocationTracking(user, { requestBackground: true }).catch(() => {})
     // Update job status
-    await supabase.from('jobs').update({ status: 'in_progress' }).eq('id', job.id)
+    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { status: 'in_progress' } })
     onStatusChange(job, 'in_progress')
     loadTimeEntries()
     setSaving(false)
@@ -543,7 +572,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // time entry (hours come from the day's shift on the Dashboard).
   async function startJobDaily() {
     setSaving(true)
-    await supabase.from('jobs').update({ status: 'in_progress' }).eq('id', job.id)
+    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { status: 'in_progress' } })
     onStatusChange(job, 'in_progress')
     setSaving(false)
   }
@@ -557,7 +586,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Set en_route FIRST, then start tracking — location broadcasting is now
     // gated on being actively working (clocked in OR en_route/in_progress), so
     // the status must be committed before startLocationTracking checks it.
-    const { error } = await supabase.from('jobs').update({ status: 'en_route' }).eq('id', job.id)
+    const { error } = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { status: 'en_route' } })
     if (error) { setSaving(false); Alert.alert(t('error'), t('en_route_failed')); return }
     onStatusChange(job, 'en_route')
     startLocationTracking(user, { requestBackground: true }).catch(() => {})
@@ -573,11 +602,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setSaving(true)
     const now = new Date()
     const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
-    const { error: pauseErr } = await supabase.from('job_time_entries').update({
-      clocked_out_at: now.toISOString(),
-      pause_reason: pauseReason,
-      duration_minutes: Math.round(mins),
-    }).eq('id', activeEntry.id)
+    const { error: pauseErr } = await writeThrough({
+      table: 'job_time_entries', op: 'update', match: { id: activeEntry.id },
+      values: {
+        clocked_out_at: now.toISOString(),
+        pause_reason: pauseReason,
+        duration_minutes: Math.round(mins),
+      },
+    })
     if (pauseErr) {
       setSaving(false)
       Alert.alert(t('error'), t('clock_out_failed'))
@@ -593,11 +625,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   async function handleResume() {
     setSaving(true)
-    const { data: entry, error: resumeErr } = await supabase.from('job_time_entries').insert({
+    // Client-minted id, same as clock-in: offline the resume queues instead of
+    // failing, and replays idempotently.
+    const entry = {
+      id: uuid4(),
       tenant_id: user.tenant_id, job_id: job.id, user_id: user.id,
       clocked_in_at: new Date().toISOString(), entry_type: 'work',
-    }).select().single()
-    if (resumeErr || !entry) {
+    }
+    const { error: resumeErr } = await writeThrough({
+      table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
+    })
+    if (resumeErr) {
       setSaving(false)
       Alert.alert(t('error'), t('clock_in_failed'))
       return
@@ -725,25 +763,31 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   async function completeJobNoPhotoCheck() {
     setSaving(true)
-    // Clock out active entry — the clock-out IS the paid duration. If it
-    // fails, bail before marking complete: an open entry on a "completed"
-    // job would run forever and corrupt payroll.
+    let queuedOffline = false
+    // Clock out active entry — the clock-out IS the paid duration. Offline it
+    // queues (never lost); only a real server rejection bails before marking
+    // complete: an open entry on a "completed" job would run forever and
+    // corrupt payroll.
     if (activeEntry) {
       const now = new Date()
       const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
       // GPS-stamp the punch-out too (best-effort — never blocks the clock-out).
       const outStamp = await quickGpsStamp()
-      const { error: outErr } = await supabase.from('job_time_entries').update({
-        clocked_out_at: now.toISOString(),
-        duration_minutes: Math.round(mins),
-        clock_out_lat: outStamp?.lat ?? null,
-        clock_out_lng: outStamp?.lng ?? null,
-      }).eq('id', activeEntry.id)
+      const { error: outErr, queued: outQueued } = await writeThrough({
+        table: 'job_time_entries', op: 'update', match: { id: activeEntry.id },
+        values: {
+          clocked_out_at: now.toISOString(),
+          duration_minutes: Math.round(mins),
+          clock_out_lat: outStamp?.lat ?? null,
+          clock_out_lng: outStamp?.lng ?? null,
+        },
+      })
       if (outErr) {
         setSaving(false)
         Alert.alert(t('error'), t('clock_out_failed'))
         return
       }
+      if (outQueued) queuedOffline = true
     }
     // Append the crew's completion note to internal_notes instead of replacing
     // it — the field also carries the owner's note to crew (and a task's title),
@@ -752,17 +796,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     const mergedNotes = crewNote
       ? (job.internal_notes ? `${job.internal_notes}\n— ${crewNote}` : crewNote)
       : (job.internal_notes ?? null)
-    const { error: doneErr } = await supabase.from('jobs').update({
-      status: 'completed',
-      internal_notes: mergedNotes,
-      // Sign-off attribution (distinct from per-item completed_by = last ticker).
-      ...(user?.id ? { completed_by_user_id: user.id } : {}),
-    }).eq('id', job.id)
+    const { error: doneErr, queued: doneQueued } = await writeThrough({
+      table: 'jobs', op: 'update', match: { id: job.id },
+      values: {
+        status: 'completed',
+        internal_notes: mergedNotes,
+        // Sign-off attribution (distinct from per-item completed_by = last ticker).
+        ...(user?.id ? { completed_by_user_id: user.id } : {}),
+      },
+    })
     if (doneErr) {
       setSaving(false)
       Alert.alert(t('error'), doneErr.message)
       return
     }
+    if (queuedOffline || doneQueued) Alert.alert('📡', t('queued_offline'))
     // Done working? Stop GPS. (No-op if another entry/shift is still open or
     // more jobs remain today — daily-shift crews keep broadcasting.)
     maybeStopLocationTracking(user).catch(() => {})
