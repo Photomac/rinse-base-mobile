@@ -33,6 +33,10 @@ export interface PendingPhoto {
   // gate matches on it; caption-matching is the legacy fallback). Optional so
   // entries queued by older bundles keep uploading.
   checklist_item_id?: string | null
+  // Canonical link to the property_photo_requirements row this photo satisfies.
+  // The `missing_required_area_photo` gate matches on this ONLY — there is no
+  // caption fallback — so it must survive the offline queue intact.
+  photo_requirement_id?: string | null
   visible_to_client: boolean
   created_at: number
   attempts?: number
@@ -76,6 +80,7 @@ async function ensureDir(): Promise<void> {
 export async function enqueuePhoto(p: {
   uri: string; tenant_id: string; job_id: string; user_id: string;
   photo_type: string; caption: string | null; checklist_item_id?: string | null;
+  photo_requirement_id?: string | null;
   visible_to_client: boolean;
 }): Promise<void> {
   await ensureDir()
@@ -99,6 +104,7 @@ export async function enqueuePhoto(p: {
     photo_type: p.photo_type,
     caption: p.caption,
     checklist_item_id: p.checklist_item_id ?? null,
+    photo_requirement_id: p.photo_requirement_id ?? null,
     visible_to_client: p.visible_to_client,
     created_at: Date.now(),
   }
@@ -167,6 +173,7 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
       photo_type: entry.photo_type,
       caption: entry.caption,
       checklist_item_id: entry.checklist_item_id ?? null,
+      photo_requirement_id: entry.photo_requirement_id ?? null,
       visible_to_client: entry.visible_to_client,
     })
     if (error) return { ok: false, kind: 'server', message: error.message }
