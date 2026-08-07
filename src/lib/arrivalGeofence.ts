@@ -32,6 +32,27 @@ export interface PendingArrival {
   lng: number
 }
 
+// Is this address accurate enough to hang a 150m fence on?
+//
+// client_addresses.geocode_precision === 'approximate' is a ZIP/city centroid,
+// written when no geocoder could resolve the street address. It sits 1-3km
+// from the real building — 7-20x this radius. Fencing on one is wrong in both
+// directions: the crew arriving at the actual property never crosses the
+// fence (no prompt, no auto punch), while driving past the centroid — the
+// town centre, which is exactly where roads go — does cross it. The auto-punch
+// check below measures distance from the REGION centre, not the property, so a
+// crew member stopped at a light near the centroid passes both the distance
+// and speed tests and gets a time entry for a job they haven't reached.
+// "A spurious notification is recoverable, a spurious time entry is somebody's
+// pay" — so such addresses get no fence at all.
+//
+// A null precision is a legacy coordinate of unknown provenance and stays
+// trusted, exactly as before the column existed.
+// `!= null` rather than falsy: latitude 0 / longitude 0 are valid.
+function canFenceOn(addr: any): boolean {
+  return !!addr && addr.lat != null && addr.lng != null && addr.geocode_precision !== 'approximate'
+}
+
 function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000
   const dLat = (lat2 - lat1) * Math.PI / 180
@@ -57,7 +78,7 @@ export async function refreshArrivalGeofences(user: any) {
     const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
     const { data: jobs } = await supabase
       .from('jobs')
-      .select('id, scheduled_start, job_assignments!inner(user_id), client_addresses!jobs_address_id_fkey(lat, lng)')
+      .select('id, scheduled_start, job_assignments!inner(user_id), client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision)')
       .eq('job_assignments.user_id', user.id)
       .in('status', ['pending_approval', 'scheduled', 'en_route'])
       .gte('scheduled_start', dayStart.toISOString())
@@ -66,7 +87,7 @@ export async function refreshArrivalGeofences(user: any) {
       .limit(MAX_REGIONS)
 
     const regions = (jobs ?? [])
-      .filter((j: any) => j.client_addresses?.lat && j.client_addresses?.lng)
+      .filter((j: any) => canFenceOn(j.client_addresses))
       .map((j: any) => ({
         identifier: j.id,
         latitude: Number(j.client_addresses.lat),
@@ -137,11 +158,17 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
     // teammate, and this user isn't already on the clock for it.)
     const { data: job } = await supabase
       .from('jobs')
-      .select('id, status, scheduled_start, client_addresses!jobs_address_id_fkey(nickname, street)')
+      .select('id, status, scheduled_start, client_addresses!jobs_address_id_fkey(nickname, street, lat, lng, geocode_precision)')
       .eq('id', jobId)
       .in('status', ['pending_approval', 'scheduled', 'en_route'])
       .maybeSingle()
     if (!job) return
+    // Re-check precision at fire time, not just at registration. A region
+    // registered this morning can outlive the coordinate it was built from —
+    // the geocoder cron re-runs every 20 minutes and may have downgraded the
+    // address since. This path can insert a time entry, so it verifies rather
+    // than trusting the stale region.
+    if (!canFenceOn((job as any).client_addresses)) return
     const { data: openEntry } = await supabase
       .from('job_time_entries').select('id')
       .eq('job_id', jobId).eq('user_id', user.id).is('clocked_out_at', null).limit(1)
