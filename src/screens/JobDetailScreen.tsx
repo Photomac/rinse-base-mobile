@@ -324,6 +324,39 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (error) { setPetFeeApplied(!next); Alert.alert(t('error'), error.message) }
   }
 
+  /**
+   * Ask, at completion, whether the stay that just ended had pets.
+   *
+   * pet_friendly on a property means pets are ALLOWED there — not that this
+   * guest brought one, and nothing in the booking tells us (property_reservations
+   * carries guest_count but no pet data from any PMS today). So the crew who just
+   * cleaned the place is the only source of that fact, and until now the only way
+   * to record it was a checkbox they had to notice mid-clean. On a fee this size
+   * that is revenue leaking through an unprompted control.
+   *
+   * Deliberately NOT a gate: both answers complete the clean. A crew member who
+   * cannot finish a job because of a billing question will learn to work around
+   * the prompt, and a forced answer is worth less than an honest one.
+   */
+  function askPetFee(): Promise<'yes' | 'no'> {
+    return new Promise(resolve => {
+      Alert.alert(
+        `🐾 ${t('pet_prompt_title')}`,
+        t('pet_prompt_msg'),
+        [
+          { text: t('pet_prompt_no'), onPress: () => resolve('no') },
+          {
+            text: petFee > 0 ? ti(t('pet_prompt_yes_fee'), { fee: `$${petFee}` }) : t('pet_prompt_yes'),
+            onPress: () => resolve('yes'),
+          },
+        ],
+        // Not dismissable: on Android a tap outside would resolve nothing and
+        // leave completion hanging forever on an unresolved promise.
+        { cancelable: false },
+      )
+    })
+  }
+
   // Live timer
   useEffect(() => {
     if (isClockedIn && activeEntry) {
@@ -775,6 +808,32 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       Alert.alert(t('error'), t('completion_blocked_generic'))
       return
     }
+
+    // Pets — asked last, once every blocker has cleared, so nobody answers a
+    // billing question on a clean they are about to be sent back to finish.
+    // Skipped when they already ticked the toggle mid-clean: they have answered.
+    if (!petFeeApplied && (petFriendly || petFee > 0)) {
+      if (await askPetFee() === 'yes') {
+        setPetFeeApplied(true)
+        // ORDER MATTERS. auto-invoice fires from a DB trigger on the status
+        // change to 'completed' and reads jobs.pet_fee_applied at that moment,
+        // so this write has to land first or the fee misses the invoice
+        // entirely. Offline the outbox replays strictly FIFO, which preserves
+        // the same ordering on reconnect.
+        const { error } = await writeThrough({
+          table: 'jobs', op: 'update', match: { id: job.id }, values: { pet_fee_applied: true },
+        })
+        if (error) {
+          setPetFeeApplied(false)
+          // Don't complete on a failed pet write: completing now would bill the
+          // clean without the fee, and the fee cannot be added afterwards
+          // without editing an already-issued invoice.
+          Alert.alert(t('error'), error.message)
+          return
+        }
+      }
+    }
+
     await completeJobNoPhotoCheck()
   }
 
