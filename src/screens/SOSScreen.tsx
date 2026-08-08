@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { sendSOSNotification } from '../lib/notifications'
 import { ensureForegroundLocation } from '../lib/permissions'
+import { startSOSTrail, stopSOSTrail, findMyOpenAlertId } from '../lib/sosTracker'
 
 const HOLD_DURATION = 3000
 
@@ -106,6 +107,10 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     // Supabase query builders return a PromiseLike — await in try/catch
     // rather than chain .then/.catch, which crashes at runtime.
     try {
+      // Bare insert, unchanged. The trail needs the new row's id, but this
+      // write stays exactly as it was — nothing about following the crew
+      // member afterwards is allowed to alter the path that delivers the
+      // alert. The id is looked up separately below.
       await supabase.from('sos_alerts').insert({
         tenant_id: user.tenant_id,
         user_id: user.id,
@@ -118,10 +123,23 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     } catch (e: any) {
       console.warn('SOS insert error:', e)
     }
+    // Start the location trail. Strictly best-effort and strictly after the
+    // alert + push have gone out — a crew member in trouble gets the alert
+    // delivered whether or not we can follow them afterwards.
+    try {
+      const alertId = await findMyOpenAlertId(user.id)
+      if (alertId) await startSOSTrail(alertId)
+    } catch (e) {
+      console.warn('SOS trail start failed:', e)
+    }
   }
 
   async function markOK() {
     setResponding(true)
+    // Stop trailing first and unconditionally. If the status update below
+    // fails (no signal), the location trail must still stop — "I'm OK" has to
+    // mean the phone stops broadcasting, network or no network.
+    try { await stopSOSTrail() } catch { /* best-effort */ }
     try {
       await supabase.from('sos_alerts')
         .update({ status: 'false_alarm', resolved_at: new Date().toISOString() })

@@ -16,6 +16,21 @@ const PING_INTERVAL = 5 * 60 * 1000 // 5 minutes
 const GEOFENCE_RADIUS = 300 // meters — trigger alert if crew is farther than this
 const GEOFENCE_DISMISS_DURATION = 15 * 60 * 1000 // 15 minutes after "Still working"
 
+// Is this address accurate enough to fence on?
+//
+// client_addresses.geocode_precision === 'approximate' is a ZIP/city centroid
+// written when no geocoder could resolve the street address — 1-3km from the
+// real building, i.e. 3-10x GEOFENCE_RADIUS. A crew member standing inside the
+// property would read as "left the job site" on every single ping, pushing a
+// "Still clocked in!" notification every 15 minutes and logging each one.
+//
+// A null precision is a legacy coordinate of unknown provenance and stays
+// trusted, exactly as before the column existed.
+// `!= null` rather than falsy: latitude 0 / longitude 0 are valid.
+function canFenceOn(addr: any): boolean {
+  return !!addr && addr.lat != null && addr.lng != null && addr.geocode_precision !== 'approximate'
+}
+
 let pingTimer: any = null
 let currentUser: any = null
 let geofenceDismissedUntil: Record<string, number> = {} // jobId → timestamp
@@ -247,7 +262,7 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
     if (myJobIds.length > 0) {
       const { data } = await supabase
         .from('jobs')
-        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, nickname, street)')
+        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)')
         .in('id', myJobIds)
         .eq('status', 'in_progress')
         .gte('scheduled_start', todayStart.toISOString())
@@ -271,7 +286,7 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
     // Geofence check
     if (activeJob?.client_addresses) {
       const addr = activeJob.client_addresses as any
-      if (addr.lat && addr.lng) {
+      if (canFenceOn(addr)) {
         const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
         await hydrateDismissals()
         const dismissed = geofenceDismissedUntil[activeJob.id] || 0
@@ -320,7 +335,7 @@ async function pingLocation(user: any) {
     if (myJobIds.length > 0) {
       const { data } = await supabase
         .from('jobs')
-        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, nickname, street)')
+        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)')
         .in('id', myJobIds)
         .eq('status', 'in_progress')
         .gte('scheduled_start', todayStart.toISOString())
@@ -347,7 +362,7 @@ async function pingLocation(user: any) {
     // If crew is clocked into a job, check if they've left the property
     if (activeJob && activeJob.client_addresses) {
       const addr = activeJob.client_addresses as any
-      if (addr.lat && addr.lng) {
+      if (canFenceOn(addr)) {
         const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
         await hydrateDismissals()
         const dismissed = geofenceDismissedUntil[activeJob.id] || 0
