@@ -15,6 +15,9 @@ import { SOSScreen } from './src/screens/SOSScreen'
 import { ChatListScreen, ChatScreen } from './src/screens/ChatScreens'
 import { registerPushToken } from './src/lib/notifications'
 import { startLocationTracking, stopLocationTracking } from './src/lib/locationTracker'
+// Side-effect import also registers the SOS ping TaskManager task at bundle
+// eval, so a headless OS relaunch mid-emergency finds the handler.
+import { resumeSOSTrailIfOpen } from './src/lib/sosTracker'
 // Side-effect import: registers the arrival-geofence TaskManager task at bundle
 // eval so headless OS launches (region crossings) find the handler.
 import './src/lib/arrivalGeofence'
@@ -110,6 +113,11 @@ function AppInner() {
       setErrorContext({ tenantId: effective.tenant_id, email: effective.email, role: effective.role })
       registerPushToken(effective).catch(console.warn)
       startLocationTracking(effective).catch(console.warn)
+      // An SOS that outlived the process (app killed, phone rebooted) keeps
+      // trailing; one resolved while we were dead clears itself instead.
+      // Runs on a cached profile too: a crew member who reopened the app in a
+      // dead zone is exactly who should still have a live trail resuming.
+      resumeSOSTrailIfOpen().catch(console.warn)
     }
   }
 

@@ -700,6 +700,23 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         return
       }
 
+      // Named property shots (Photos screen → Required photos). Listed by area
+      // so the crew knows which rooms to go back to, and the button drops them
+      // straight into the shot list rather than a generic photo screen.
+      const missingAreas = blockers.filter((b: any) => b.code === 'missing_required_area_photo')
+      if (missingAreas.length > 0) {
+        const lines = missingAreas.map((b: any) => (b.room ? `${b.room} — ${b.task}` : b.task))
+        Alert.alert(
+          `📸 ${t('photo_required_alert')}`,
+          `${t('required_area_photos_missing_msg')}\n\n• ${lines.join('\n• ')}`,
+          [
+            { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(null); setShowPhotos(true) } },
+            { text: t('cancel'), style: 'cancel' }
+          ]
+        )
+        return
+      }
+
       // Laundry runs: cash reconciliation is required (and must tie out)
       // before the run can be completed — offer to open the laundry form.
       if (blockers.some((b: any) => b.code === 'laundry_cash_missing' || b.code === 'laundry_cash_mismatch')) {
