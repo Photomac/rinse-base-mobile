@@ -8,6 +8,7 @@ import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
 import { cachedQuery } from '../lib/dataCache'
+import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 
 function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -35,6 +36,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
 
   const load = useCallback(async () => {
+    // Drain queued offline writes first chance we get (pull-to-refresh after
+    // driving back into signal is a natural sync moment).
+    flushOutbox().catch(() => {})
     const now = new Date()
     const todayStart = new Date(now); todayStart.setHours(0,0,0,0)
     const todayEnd = new Date(now); todayEnd.setHours(23,59,59,999)
@@ -77,10 +81,12 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       const ts = new Date(j.scheduled_start).getTime()
       return ts >= todayStart.getTime() && ts <= todayEnd.getTime()
     }
-    const myTodayAll = (isOwner
+    // Queued offline status changes (en_route/in_progress/completed) overlay
+    // the cached/live rows so the day reads right after a relaunch.
+    const myTodayAll = await overlayPending('jobs', (isOwner
       ? (todayRes.data ?? [])
       : (todayRes.data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
-    ).filter(inToday)
+    ).filter(inToday))
     // Cancelled jobs used to be filtered out server-side, so a cancellation
     // silently vanished from the crew's day — show explicit "cancelled" cards
     // instead, so nobody drives to a dead job or wonders where it went.
@@ -118,7 +124,12 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         .select('id, clocked_in_at')
         .eq('user_id', user.id).is('job_id', null).eq('entry_type', 'shift').is('clocked_out_at', null)
         .order('clocked_in_at', { ascending: false }).limit(1).maybeSingle())
-      setActiveShift(shift || null)
+      // Overlay queued shift punches (start/end made offline) so a relaunch in
+      // a dead zone still shows the running shift — or its queued end.
+      const shiftRows = await overlayPending('job_time_entries', shift ? [shift] : [],
+        v => v.user_id === user.id && v.entry_type === 'shift' && !v.job_id)
+      const open = shiftRows.filter((r: any) => !r.clocked_out_at)
+      setActiveShift(open.length ? open[open.length - 1] : null)
     }
 
     setLoading(false)
@@ -147,13 +158,20 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
   async function handleStartDay() {
     setShiftBusy(true)
-    const { data, error } = await supabase.from('job_time_entries').insert({
+    // Client-minted id: offline the punch queues in the outbox (a shift IS the
+    // day's pay) and replays idempotently when signal returns.
+    const entry = {
+      id: uuid4(),
       tenant_id: user.tenant_id, user_id: user.id, job_id: null,
       entry_type: 'shift', clocked_in_at: new Date().toISOString(),
-    }).select('id, clocked_in_at').single()
+    }
+    const { error, queued } = await writeThrough({
+      table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
+    })
     setShiftBusy(false)
     if (error) { Alert.alert('Error', error.message); return }
-    setActiveShift(data)
+    if (queued) Alert.alert('📡', t('queued_offline'))
+    setActiveShift(entry)
     // Start broadcasting location for the day so the crew shows live on
     // dispatch. Start-of-day is a user-initiated moment, so escalate to the
     // "Always" location prompt for pocket-tracking through the shift.
@@ -168,9 +186,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         setShiftBusy(true)
         const out = new Date()
         const mins = Math.round((out.getTime() - new Date(activeShift.clocked_in_at).getTime()) / 60000)
-        const { error } = await supabase.from('job_time_entries')
-          .update({ clocked_out_at: out.toISOString(), duration_minutes: mins })
-          .eq('id', activeShift.id)
+        const { error } = await writeThrough({
+          table: 'job_time_entries', op: 'update', match: { id: activeShift.id },
+          values: { clocked_out_at: out.toISOString(), duration_minutes: mins },
+        })
         setShiftBusy(false)
         if (error) { Alert.alert('Error', error.message); return }
         setActiveShift(null)

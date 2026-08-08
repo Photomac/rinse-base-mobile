@@ -33,6 +33,7 @@ export const translations = {
     active_job: 'Active job in progress', next_job: 'Next job',
     todays_jobs: "Today's jobs", see_all: 'See all', no_jobs_today: 'No jobs scheduled today',
     offline_cached: "You're offline — showing last saved data",
+    queued_offline: 'Saved on your phone — will sync when you have signal again',
     my_earnings: 'My earnings this month', schedule: 'Schedule', log_miles: 'Log miles', profile: 'Profile',
     // Today
     no_jobs: 'No jobs today', enjoy_day: 'Enjoy your day off!',
@@ -393,6 +394,7 @@ export const translations = {
     active_job: 'Trabajo en progreso', next_job: 'Próximo trabajo',
     todays_jobs: 'Trabajos de hoy', see_all: 'Ver todos', no_jobs_today: 'Sin trabajos hoy',
     offline_cached: 'Sin conexión — mostrando los últimos datos guardados',
+    queued_offline: 'Guardado en tu teléfono — se sincronizará cuando vuelva la señal',
     my_earnings: 'Mis ganancias este mes', schedule: 'Horario', log_miles: 'Registrar millas', profile: 'Perfil',
     // Today
     no_jobs: 'Sin trabajos hoy', enjoy_day: 'Disfruta tu día libre',
@@ -752,6 +754,7 @@ export const translations = {
     active_job: 'Serviço em andamento', next_job: 'Próximo serviço',
     todays_jobs: 'Serviços de hoje', see_all: 'Ver todos', no_jobs_today: 'Nenhum serviço hoje',
     offline_cached: 'Sem conexão — mostrando os últimos dados salvos',
+    queued_offline: 'Salvo no seu telefone — será sincronizado quando o sinal voltar',
     my_earnings: 'Meus ganhos neste mês', schedule: 'Agenda', log_miles: 'Registrar milhas', profile: 'Perfil',
     // Today
     no_jobs: 'Nenhum serviço hoje', enjoy_day: 'Aproveite sua folga!',
