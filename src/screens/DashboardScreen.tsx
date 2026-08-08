@@ -7,6 +7,7 @@ import { ti, localeFor } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
+import { cachedQuery } from '../lib/dataCache'
 
 function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -21,6 +22,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [monthStats, setMonthStats] = useState({ completed: 0, hours: 0, earnings: 0 })
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [offline, setOffline] = useState(false)
   const sosTimer = useRef<any>(null)
   const sosInterval = useRef<any>(null)
   // Day-long shift clock-in (only when tenant uses 'daily' time tracking)
@@ -40,18 +42,20 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
 
+    // Reads go through cachedQuery: last good result survives in AsyncStorage,
+    // so a crew member who loaded their day online keeps it when signal drops.
     const [todayRes, monthRes] = await Promise.all([
-      supabase.from('jobs')
+      cachedQuery(`dash:today:${user.id}`, supabase.from('jobs')
         .select('id, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
         .eq('tenant_id', user.tenant_id)
         .gte('scheduled_start', todayStart.toISOString())
         .lte('scheduled_start', todayEnd.toISOString())
-        .order('scheduled_start'),
+        .order('scheduled_start')),
       // Monthly stats. For crew, filter to THEIR jobs server-side (inner join)
       // — the old fetch-everything-then-filter pulled every tenant job of the
       // month, which silently truncates at PostgREST's 1,000-row cap on a busy
       // tenant and understates the crew member's own hours/earnings.
-      isOwner
+      cachedQuery(`dash:month:${user.id}`, isOwner
         ? supabase.from('jobs')
             .select('id, status, scheduled_start, scheduled_end')
             .eq('tenant_id', user.tenant_id)
@@ -62,19 +66,28 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             .eq('tenant_id', user.tenant_id)
             .eq('job_assignments.user_id', user.id)
             .eq('status', 'completed')
-            .gte('scheduled_start', monthStart.toISOString()),
+            .gte('scheduled_start', monthStart.toISOString())),
     ])
+    setOffline(todayRes.fromCache)
 
-    const myTodayAll = isOwner
+    // Cached rows can be from an EARLIER day — re-filter to the current window
+    // client-side so yesterday's cache never renders as today's jobs. No-op on
+    // live data (the server already filtered).
+    const inToday = (j: any) => {
+      const ts = new Date(j.scheduled_start).getTime()
+      return ts >= todayStart.getTime() && ts <= todayEnd.getTime()
+    }
+    const myTodayAll = (isOwner
       ? (todayRes.data ?? [])
       : (todayRes.data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
+    ).filter(inToday)
     // Cancelled jobs used to be filtered out server-side, so a cancellation
     // silently vanished from the crew's day — show explicit "cancelled" cards
     // instead, so nobody drives to a dead job or wonders where it went.
     const myToday = myTodayAll.filter((j: any) => j.status !== 'cancelled')
     setCancelledToday(myTodayAll.filter((j: any) => j.status === 'cancelled'))
 
-    const myMonth = monthRes.data ?? []
+    const myMonth = (monthRes.data ?? []).filter((j: any) => new Date(j.scheduled_start) >= monthStart)
 
     setTodayJobs(myToday)
     setActiveJob(myToday.find((j: any) => j.status === 'in_progress') || null)
@@ -92,19 +105,19 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // app update ahead of the DB migration can't crash the dashboard.
     let earnings = 0
     try {
-      const { data: pay } = await supabase.rpc('crew_pay_for_period', {
+      const { data: pay } = await cachedQuery(`dash:pay:${user.id}`, supabase.rpc('crew_pay_for_period', {
         p_start: monthStart.toISOString(), p_end: now.toISOString(), p_user_id: user.id,
-      })
+      }))
       earnings = Number((pay as any[])?.[0]?.labor_total || 0)
     } catch { /* keep 0 */ }
     setMonthStats({ completed: myMonth.length, hours: Math.round(hours * 10) / 10, earnings: Math.round(earnings * 100) / 100 })
 
     // Open shift (daily mode) — a job_time_entries row with no job and no clock-out.
     if (user._timeMode === 'daily') {
-      const { data: shift } = await supabase.from('job_time_entries')
+      const { data: shift } = await cachedQuery(`dash:shift:${user.id}`, supabase.from('job_time_entries')
         .select('id, clocked_in_at')
         .eq('user_id', user.id).is('job_id', null).eq('entry_type', 'shift').is('clocked_out_at', null)
-        .order('clocked_in_at', { ascending: false }).limit(1).maybeSingle()
+        .order('clocked_in_at', { ascending: false }).limit(1).maybeSingle())
       setActiveShift(shift || null)
     }
 
@@ -226,6 +239,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             </View>
           </View>
         </View>
+
+        {/* Offline: rendering from the on-device cache — saved data, not live */}
+        {offline && (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineBannerText}>📡 {t('offline_cached')}</Text>
+          </View>
+        )}
 
         {/* Day-long shift clock-in (daily mode) */}
         {dailyMode && (
@@ -379,7 +399,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
   scroll: { paddingBottom: 40 },
-  startDayBtn: { marginHorizontal: 16, marginTop: 16, backgroundColor: GOLD, borderRadius: 14, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' },
+  offlineBanner: { marginHorizontal: 16, marginTop: 12, backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1, borderRadius: 10, padding: 10 },
+  offlineBannerText: { color: '#92400E', fontSize: 12, fontWeight: '700', textAlign: 'center' },
+  startDayBtn:{ marginHorizontal: 16, marginTop: 16, backgroundColor: GOLD, borderRadius: 14, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' },
   startDayBtnText: { color: SLATE, fontSize: 17, fontWeight: '800' },
   shiftCardOn: { marginHorizontal: 16, marginTop: 16, backgroundColor: '#ECFDF5', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#A7F3D0' },
   shiftOnLabel: { color: '#065F46', fontSize: 14, fontWeight: '700' },

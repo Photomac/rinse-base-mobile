@@ -18,6 +18,7 @@ import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
 import { flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
+import { cachedQuery } from '../lib/dataCache'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -242,13 +243,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     const day = new Date(job.scheduled_start)
     const start = new Date(day); start.setHours(0, 0, 0, 0)
     const end = new Date(day); end.setHours(23, 59, 59, 999)
-    const { data } = await supabase.from('jobs')
+    const { data } = await cachedQuery(`route:${job.id}:${user.id}`, supabase.from('jobs')
       .select('id, route_order, job_assignments!inner(user_id)')
       .eq('tenant_id', user.tenant_id)
       .eq('job_assignments.user_id', user.id)
       .not('route_order', 'is', null)
       .gte('scheduled_start', start.toISOString())
-      .lte('scheduled_start', end.toISOString())
+      .lte('scheduled_start', end.toISOString()))
     if (!data || !data.length) { setRouteStop(null); return }
     const ordered = [...data].sort((a: any, b: any) => a.route_order - b.route_order)
     const idx = ordered.findIndex((j: any) => j.id === job.id)
@@ -260,11 +261,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   async function loadPropMeta() {
     // Time-boxed crew access code (smart lock) lives on the job, not the list
     // payload — same for the laundry flag and the client's type.
-    const { data: jr } = await supabase
+    const { data: jr } = await cachedQuery(`jobmeta:${job.id}`, supabase
       .from('jobs')
       .select('seam_access_code, laundry_done_onsite, pet_fee_applied, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count)')
       .eq('id', job.id)
-      .maybeSingle()
+      .maybeSingle())
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
     if (jr) {
       setLaundryDoneOnsite(!!(jr as any).laundry_done_onsite)
@@ -282,20 +283,20 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
 
     // Full crew roster for this job, lead first.
-    const { data: crewRows } = await supabase
+    const { data: crewRows } = await cachedQuery(`crew:${job.id}`, supabase
       .from('job_assignments')
       .select('is_lead, users!job_assignments_user_id_fkey(full_name)')
       .eq('job_id', job.id)
-      .order('is_lead', { ascending: false })
+      .order('is_lead', { ascending: false }))
     setCrewOnJob((crewRows ?? []).map((a: any) => ({ name: a.users?.full_name, isLead: !!a.is_lead })).filter((c: any) => c.name))
 
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId) return
-    const { data } = await supabase
+    const { data } = await cachedQuery(`propmeta:${addrId}`, supabase
       .from('client_addresses')
       .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
       .eq('id', addrId)
-      .maybeSingle()
+      .maybeSingle())
     if (data) {
       setPropMeta(data as any)
       setBagColor((data as any).laundry_bag_color ?? null)
@@ -340,12 +341,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }, [isClockedIn, activeEntry, timeEntries])
 
   async function loadTimeEntries() {
-    const { data } = await supabase
+    const { data } = await cachedQuery(`time:${job.id}:${user.id}`, supabase
       .from('job_time_entries')
       .select('*')
       .eq('job_id', job.id)
       .eq('user_id', user.id)
-      .order('clocked_in_at')
+      .order('clocked_in_at'))
     if (data) {
       setTimeEntries(data)
       const active = data.find(e => !e.clocked_out_at)
@@ -393,15 +394,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!quiet) setLoadingChecklist(true)
     const [tmplRes, rowsRes] = await Promise.all([
       addressId
-        ? supabase.from('address_checklist_templates')
+        ? cachedQuery(`tmpl:${addressId}`, supabase.from('address_checklist_templates')
             .select('id, room, title, sort_order, requires_photo')
             .eq('address_id', addressId)
-            .order('room').order('sort_order')
+            .order('room').order('sort_order'))
         : Promise.resolve({ data: [] as any[] }),
-      supabase.from('job_checklist_items')
+      cachedQuery(`chkrows:${job.id}`, supabase.from('job_checklist_items')
         .select('id, room, task, sort_order, completed, photo_required')
         .eq('job_id', job.id)
-        .order('room').order('sort_order'),
+        .order('room').order('sort_order')),
     ])
     const tmpl = tmplRes.data || []
     const rows = rowsRes.data || []
@@ -434,7 +435,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // A photo counts for an item via the canonical checklist_item_id link, or
     // by the legacy caption == task-title match (photos from older bundles /
     // web uploads before the link existed).
-    const { data: photos } = await supabase.from('job_photos').select('caption, checklist_item_id').eq('job_id', job.id)
+    const { data: photos } = await cachedQuery(`photos:${job.id}`, supabase.from('job_photos').select('caption, checklist_item_id').eq('job_id', job.id))
     if (photos) {
       const counts: Record<string, number> = {}
       items.forEach(item => {

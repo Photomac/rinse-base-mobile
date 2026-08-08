@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
+import { cachedQuery } from '../lib/dataCache'
 
 const STATUS_COLORS: Record<string, string> = {
   scheduled:   '#3B82F6',
@@ -31,6 +32,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const [jobs, setJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [offline, setOffline] = useState(false)
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [anchor, setAnchor] = useState(new Date())
   const [view, setView] = useState<ViewMode>('month')
@@ -44,13 +46,17 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const start = new Date(now); start.setMonth(now.getMonth() - 1); start.setHours(0,0,0,0)
     const end = new Date(now); end.setMonth(now.getMonth() + 2); end.setHours(23,59,59,999)
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
-    const { data } = await supabase.from('jobs')
+    // Cached read: an offline crew member still sees the schedule they loaded
+    // online. Cached rows carry scheduled_start, so day placement stays right
+    // even when the cache is a day or two old.
+    const { data, fromCache } = await cachedQuery(`sched:${user.id}`, supabase.from('jobs')
       .select('id, status, scheduled_start, scheduled_end, is_turnover, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id)')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', start.toISOString())
       .lte('scheduled_start', end.toISOString())
       .neq('status', 'cancelled')
-      .order('scheduled_start')
+      .order('scheduled_start'))
+    setOffline(fromCache)
     const myJobs = isOwner
       ? (data ?? [])
       : (data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
@@ -120,6 +126,12 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
 
       <ScrollView
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={GOLD} />}>
+        {/* Offline: rendering from the on-device cache — saved data, not live */}
+        {offline && (
+          <View style={styles.offlineBanner}>
+            <Text style={styles.offlineBannerText}>📡 {t('offline_cached')}</Text>
+          </View>
+        )}
         <View style={styles.dayNamesRow}>
           {DAY_NAMES.map(d => (
             <Text key={d} style={styles.dayName}>{d}</Text>
@@ -229,6 +241,8 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
+  offlineBanner: { marginHorizontal: 16, marginVertical: 8, backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1, borderRadius: 10, padding: 10 },
+  offlineBannerText: { color: '#92400E', fontSize: 12, fontWeight: '700', textAlign: 'center' },
   header: { backgroundColor: SLATE_DARK, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingBottom: 8 },
   navBtn: { color: '#fff', fontSize: 28, fontWeight: '300', paddingHorizontal: 8 },
   headerLabel: { color: '#fff', fontSize: 16, fontWeight: '700', textAlign: 'center' },
