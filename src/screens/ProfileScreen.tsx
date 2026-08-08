@@ -8,6 +8,10 @@ import { Image } from 'react-native'
 import { useLang } from '../contexts/LangContext'
 import { localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
+// JS API only — expo-updates is already in the native binary (it is what
+// delivers OTAs), so reading these adds no native dependency and this screen
+// stays OTA-shippable.
+import * as Updates from 'expo-updates'
 
 const ROLE_KEYS: Record<string, string> = {
   owner: 'role_owner', manager: 'role_manager', dispatcher: 'role_dispatcher',
@@ -25,6 +29,42 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
   const [contactEmail, setContactEmail] = useState(user.email || '')
   const [contactPhone, setContactPhone] = useState(user.phone || '')
   const [savingContact, setSavingContact] = useState(false)
+
+  // ── Build identity ────────────────────────────────────────────────────────
+  // One copyable line answering "which build is this?". Four parts, because any
+  // one alone is ambiguous:
+  //   version   — what the store installed
+  //   channel   — which release track it listens to
+  //   update    — WHICH over-the-air bundle is actually running, or "store
+  //               build" when running the one baked into the binary. Two phones
+  //               on the same store version can be on different updates; this
+  //               is the part that resolves that.
+  //   date      — when that bundle was published
+  // Everything is defensive: in a dev client these constants are null, and this
+  // line must never be the reason the profile screen fails to render.
+  const buildLine = React.useMemo(() => {
+    const parts: string[] = []
+    try {
+      parts.push(`v${Updates.runtimeVersion ?? '?'}`)
+      if (Updates.channel) parts.push(Updates.channel)
+      if (Updates.isEmbeddedLaunch || !Updates.updateId) {
+        parts.push(t('build_store'))
+      } else {
+        // Short form: enough to identify an update without a 36-char string on
+        // a phone screen. Full id stays selectable via the same text.
+        parts.push(`${Updates.updateId.slice(0, 8)}…${Updates.updateId.slice(-4)}`)
+      }
+      if (Updates.createdAt) {
+        parts.push(new Date(Updates.createdAt).toLocaleDateString(localeFor(lang), {
+          year: 'numeric', month: 'short', day: 'numeric',
+        }))
+      }
+    } catch {
+      // Dev client or a runtime without expo-updates wired up.
+      if (parts.length === 0) parts.push(t('build_unavailable'))
+    }
+    return parts.join(' · ')
+  }, [lang, t])
 
   // ── Time-off requests ─────────────────────────────────────────────────────
   const today = new Date().toISOString().split('T')[0]
@@ -276,6 +316,20 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
         <TouchableOpacity style={styles.signOutBtn} onPress={() => Alert.alert(t('sign_out'), t('sign_out_confirm'), [{ text: t('cancel'), style: 'cancel' }, { text: t('sign_out'), style: 'destructive', onPress: () => supabase.auth.signOut() }])}>
           <Text style={styles.signOutText}>{t('sign_out')}</Text>
         </TouchableOpacity>
+
+        {/* Build identity. Asked for by a customer running a controlled
+            evaluation: without it there is no way to say WHICH build a test
+            result belongs to, and "we tested the app" is not a reportable fact.
+            Support needs the same string whenever someone says "it does X" —
+            the store version alone can't tell you which OTA they are on.
+
+            selectable rather than a copy button: expo-clipboard is not
+            installed, and adding it would make this screen need a native
+            rebuild, which defeats the point of shipping it over the air. */}
+        <View style={styles.buildBox}>
+          <Text style={styles.buildLabel}>{t('build_info')}</Text>
+          <Text style={styles.buildText} selectable>{buildLine}</Text>
+        </View>
       </ScrollView>
     </SafeAreaView>
   )
@@ -308,6 +362,9 @@ const styles = StyleSheet.create({
   langOptTextActive: { color: '#fff' },
   signOutBtn: { backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FECACA', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
   signOutText: { color: '#DC2626', fontSize: 15, fontWeight: '700' },
+  buildBox: { marginTop: 20, alignItems: 'center' },
+  buildLabel: { color: '#94A3B8', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
+  buildText: { color: '#64748B', fontSize: 11, textAlign: 'center' },
   toHint: { fontSize: 12, color: '#94A3B8', marginBottom: 12, lineHeight: 17 },
   typeChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#fff' },
   typeChipActive: { backgroundColor: GOLD, borderColor: GOLD },
