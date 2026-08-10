@@ -142,6 +142,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [activePhotoItem, setActivePhotoItem] = useState<any>(null)
   const [viewPropertyPhoto, setViewPropertyPhoto] = useState(false)
 
+  // Required property shots, surfaced BEFORE the work instead of at completion.
+  // These live in property_photo_requirements and were previously visible only
+  // inside the Photos screen — so a crew member could clean for three hours and
+  // first hear about 19 required photos when they pressed Complete, by which
+  // point they had left. Counted here so the button can carry the obligation
+  // the whole time. Zero unless the tenant actually enforces (the rows are
+  // auto-seeded into every STR property, so an unenforced count is noise).
+  const [reqTotal, setReqTotal] = useState(0)
+  const [reqDone, setReqDone] = useState(0)
+  const [reqAnnounced, setReqAnnounced] = useState(false)
+
   // Time tracking
   const [timeEntries, setTimeEntries] = useState<any[]>([])
   const [activeEntry, setActiveEntry] = useState<any>(null)
@@ -215,6 +226,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     loadTimeEntries()
     loadPropMeta()
     loadRouteStop()
+    loadPhotoRequirements()
   }, [])
 
   // Live mirror of teammates' phones + the owner dashboard: stream checklist
@@ -408,6 +420,36 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
   }
 
+  /**
+   * How many named property shots this job still owes.
+   *
+   * Gated on tenants.enforce_photo_requirements: ~18 required rows are
+   * auto-seeded into every STR property, so counting them for a tenant that
+   * does not enforce would put a scary "0/19" on thousands of jobs that are
+   * free to complete. Mirrors the server gate, which joins the same flag.
+   */
+  async function loadPhotoRequirements() {
+    const addrId = job.client_addresses?.id || job.address_id
+    if (!addrId || isTask || isLaundry) { setReqTotal(0); return }
+    const { data: tenant } = await supabase
+      .from('tenants').select('enforce_photo_requirements')
+      .eq('id', user.tenant_id).maybeSingle()
+    if (!tenant?.enforce_photo_requirements) { setReqTotal(0); return }
+
+    const [{ count: total }, { data: shot }] = await Promise.all([
+      supabase.from('property_photo_requirements')
+        .select('id', { count: 'exact', head: true })
+        .eq('address_id', addrId).eq('required', true),
+      supabase.from('job_photos')
+        .select('photo_requirement_id')
+        .eq('job_id', job.id).not('photo_requirement_id', 'is', null),
+    ])
+    // Distinct requirements satisfied — two shots of the same area is still one.
+    const done = new Set((shot ?? []).map((p: any) => p.photo_requirement_id)).size
+    setReqTotal(total ?? 0)
+    setReqDone(done)
+  }
+
   // quiet = refresh in place (realtime teammate updates) — no spinner flash.
   async function loadChecklist(quiet = false) {
     const addrId = job.client_addresses?.id || job.address_id
@@ -599,6 +641,29 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     onStatusChange(job, 'in_progress')
     loadTimeEntries()
     setSaving(false)
+    announceRequiredPhotos()
+  }
+
+  /**
+   * Tell the crew what this property owes in photos, at the moment they start.
+   *
+   * Clock-in is the one instant we know they have arrived and not yet worked —
+   * the only time "19 photos are needed" is actionable. The same list used to
+   * appear only at completion, after the clean was done and the crew had often
+   * left, which is how jobs ended up stranded mid-clean for days.
+   * Fires once per screen mount so a pause/resume does not nag.
+   */
+  function announceRequiredPhotos() {
+    if (reqAnnounced || reqTotal === 0 || reqDone >= reqTotal) return
+    setReqAnnounced(true)
+    Alert.alert(
+      `📸 ${t('required_photos_title')}`,
+      ti(t('required_photos_on_start'), { n: String(reqTotal - reqDone) }),
+      [
+        { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(null); setShowPhotos(true) } },
+        { text: t('ok') },
+      ]
+    )
   }
 
   // Daily mode: start the clean for status + photo proof only — no per-job
@@ -608,6 +673,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { status: 'in_progress' } })
     onStatusChange(job, 'in_progress')
     setSaving(false)
+    announceRequiredPhotos()
   }
 
   // "On my way" — one tap tells dispatch (and the client portal, which already
@@ -902,7 +968,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   if (showMessages) return <MessagesScreen job={job} user={user} onBack={() => setShowMessages(false)} />
   if (showInventory) return <JobInventoryScreen job={job} user={user} onBack={() => setShowInventory(false)} />
   if (showLaundry) return <LaundryRunScreen job={job} user={user} onBack={() => setShowLaundry(false)} />
-  if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} onBack={() => { setShowPhotos(false); loadChecklist() }} />
+  if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -1071,8 +1137,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <Text style={[styles.suppliesBtnText, { color: TEAL }]}>🧺 {t('laundry_form')}</Text>
             </TouchableOpacity>
           ) : !isTask ? (<>
-          <TouchableOpacity style={styles.photosBtn} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
-            <Text style={styles.photosBtnText}>📸 {t('job_photos')}</Text>
+          {/* Carries the required-shot count so the obligation is visible for
+              the whole clean, not sprung at completion. Amber while outstanding. */}
+          <TouchableOpacity
+            style={[styles.photosBtn, reqTotal > 0 && reqDone < reqTotal && { borderColor: '#F59E0B' }]}
+            onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
+            <Text style={[styles.photosBtnText, reqTotal > 0 && reqDone < reqTotal && { color: '#B45309' }]}>
+              📸 {t('job_photos')}{reqTotal > 0 ? ` (${reqDone}/${reqTotal})` : ''}
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.suppliesBtn} onPress={() => setShowInventory(true)}>
             <Text style={styles.suppliesBtnText}>📦 {t('supplies')}</Text>
