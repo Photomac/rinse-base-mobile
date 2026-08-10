@@ -6,7 +6,8 @@ import * as ImagePicker from 'expo-image-picker'
 import { ensureCamera, ensureMediaLibrary } from '../lib/permissions'
 import { Image } from 'react-native'
 import { useLang } from '../contexts/LangContext'
-import { localeFor } from '../lib/i18n'
+import { localeFor, ti } from '../lib/i18n'
+import { pendingOpCount, rejectedOps, clearRejected, flushOutbox } from '../lib/outbox'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 // JS API only — expo-updates is already in the native binary (it is what
 // delivers OTAs), so reading these adds no native dependency and this screen
@@ -78,7 +79,17 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
   const [toNote, setToNote] = useState('')
   const [toSubmitting, setToSubmitting] = useState(false)
 
+  const [syncPending, setSyncPending] = useState(0)
+  const [syncRejected, setSyncRejected] = useState(0)
+
+  async function loadSyncStatus() {
+    setSyncPending(await pendingOpCount())
+    setSyncRejected((await rejectedOps()).length)
+  }
+
   React.useEffect(() => { loadTimeOff() }, [])
+  // Give the queue one more chance to drain before reporting it as stuck.
+  React.useEffect(() => { flushOutbox().catch(() => {}).then(loadSyncStatus) }, [])
 
   async function loadTimeOff() {
     setToLoading(true)
@@ -243,6 +254,39 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
           {user.hourly_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('hourly_rate')}</Text><Text style={styles.rowValue}>${Number(user.hourly_rate).toFixed(2)}/hr</Text></View>}
           {user.per_job_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('per_job_rate')}</Text><Text style={styles.rowValue}>${Number(user.per_job_rate).toFixed(2)}/job</Text></View>}
         </View>
+        {/* Sync health — rendered only when something needs attention. Rejected
+            ops are writes the crew was told were "queued" (possibly pay); they
+            must stay visible here until acknowledged, and dismissing warns to
+            tell the office first. */}
+        {(syncPending > 0 || syncRejected > 0) && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>{t('sync_issues')}</Text>
+            {syncRejected > 0 && (
+              <>
+                <Text style={{ color: '#B45309', fontSize: 13, lineHeight: 19, marginBottom: 10 }}>
+                  {ti(t('sync_rejected_note'), { n: String(syncRejected) })}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => Alert.alert(t('sync_dismiss'), t('sync_dismiss_confirm'), [
+                    { text: t('cancel'), style: 'cancel' },
+                    {
+                      text: t('sync_dismiss'), style: 'destructive',
+                      onPress: () => { clearRejected().then(loadSyncStatus) },
+                    },
+                  ])}
+                  style={{ alignSelf: 'flex-start', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#B45309', marginBottom: syncPending > 0 ? 10 : 0 }}>
+                  <Text style={{ color: '#B45309', fontSize: 12, fontWeight: '600' }}>{t('sync_dismiss')}</Text>
+                </TouchableOpacity>
+              </>
+            )}
+            {syncPending > 0 && (
+              <Text style={{ color: '#6B5E42', fontSize: 13 }}>
+                {ti(t('sync_pending_note'), { n: String(syncPending) })}
+              </Text>
+            )}
+          </View>
+        )}
+
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>{t('time_off')}</Text>
           <Text style={styles.toHint}>{t('time_off_hint')}</Text>

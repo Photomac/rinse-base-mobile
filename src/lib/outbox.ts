@@ -23,6 +23,7 @@
 //   account replays them.
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
+import { reportClientError } from './errorReporter'
 
 const QUEUE_KEY = 'writeOutbox'
 const REJECTED_KEY = 'writeOutboxRejected'
@@ -128,6 +129,15 @@ export async function flushOutbox(): Promise<void> {
       const cur = await readQueue()
       if (rejects >= MAX_REJECTS) {
         console.warn('outbox: dropping op after repeated server rejections', op.table, msg)
+        // A parked op may be somebody's pay, and the crew was told "queued" —
+        // it must not vanish into a list nothing reads. Report it to
+        // admin_error_log (admin System Health) and leave it visible on the
+        // crew's Profile screen via rejectedOps() until dismissed.
+        reportClientError(
+          `outbox: dropped ${op.op} on ${op.table} after ${rejects} rejections — ${msg}`,
+          JSON.stringify({ id: op.id, values: op.values, match: op.match }).slice(0, 2000),
+          'outbox',
+        )
         await appendRejected({ ...op, rejects, lastError: msg })
         await writeQueue(cur.filter(x => x.id !== op.id))
         continue
@@ -140,6 +150,17 @@ export async function flushOutbox(): Promise<void> {
 
 export async function pendingOpCount(): Promise<number> {
   return (await readQueue()).length
+}
+
+/** Ops dropped after MAX_REJECTS — surfaced on the Profile screen. */
+export async function rejectedOps(): Promise<OutboxOp[]> {
+  try { const raw = await AsyncStorage.getItem(REJECTED_KEY); return raw ? JSON.parse(raw) : [] }
+  catch { return [] }
+}
+
+/** Crew acknowledged the failures (after telling the office). */
+export async function clearRejected(): Promise<void> {
+  try { await AsyncStorage.removeItem(REJECTED_KEY) } catch { /* best effort */ }
 }
 
 /**
