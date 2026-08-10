@@ -12,6 +12,34 @@ Sentry.init({
   environment: 'production',
   tracesSampleRate: 0.1,
   sendDefaultPii: false,
+  ignoreErrors: [
+    // "Calling the 'getRegistrationInfoAsync' function has failed"
+    //
+    // Upstream noise, not ours. expo-notifications' DevicePushTokenAutoRegistration.fx
+    // module calls getRegistrationInfoAsync() at IMPORT time with a bare .then() and
+    // no .catch(), so any rejection is unhandled and lands here. It runs on every
+    // bundle load — including the headless background launches this app lives on
+    // (arrivalGeofence / locationTracker / mileageTracker / sosTracker all define
+    // TaskManager tasks, and arrivalGeofence imports expo-notifications).
+    //
+    // On iOS the native module reads the Keychain, and the registration-info item is
+    // written with kSecAttrAccessibleWhenUnlockedThisDeviceOnly — unlike the
+    // installation ID, which uses AfterFirstUnlock. So a crew phone locked in a
+    // pocket that crosses a property geofence wakes us headless, the Keychain read
+    // returns errSecInteractionNotAllowed (or errSecMissingEntitlement, the classic
+    // -34018 background-launch case), and the Swift side throws instead of returning
+    // nil. Android can hit the same line via a failed file read in noBackupFilesDir.
+    //
+    // Harmless: it's retrying EXPO's server-registration endpoint, which we don't use
+    // — our push tokens go straight to push_tokens in Supabase from registerPushToken(),
+    // which has its own try/catch and re-registers on the next foreground launch. No
+    // crash, nothing the crew member sees, no push lost.
+    //
+    // Note this is NOT the getExpoPushTokenAsync path guarded in notifications.ts (#38);
+    // that guard still stands and is unrelated. Revisit if expo-notifications ever
+    // adds the missing .catch() upstream (last checked on 0.32.16 / SDK 54).
+    /getRegistrationInfoAsync/,
+  ],
 })
 
 export { Sentry }
