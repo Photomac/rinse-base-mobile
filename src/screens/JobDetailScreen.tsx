@@ -1242,7 +1242,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                       { text: t('complete_job'), onPress: completeJob }
                     ])
                   }} disabled={saving}>
-                    <Text style={styles.clockBtnText}>✓ Complete</Text>
+                    <Text style={styles.clockBtnText}>✓ {t('complete_job')}</Text>
                   </TouchableOpacity>
                 </>
               )}
