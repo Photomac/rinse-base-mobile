@@ -17,7 +17,7 @@ import * as Updates from 'expo-updates'
 const ROLE_KEYS: Record<string, string> = {
   owner: 'role_owner', manager: 'role_manager', dispatcher: 'role_dispatcher',
   lead_cleaner: 'role_lead_cleaner', cleaner: 'role_cleaner', trainee: 'role_trainee',
-  laundry_runner: 'role_laundry_runner',
+  laundry_runner: 'role_laundry_runner', inspector: 'role_inspector',
 }
 
 export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpdate?: (url: string) => void }) {
