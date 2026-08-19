@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, Linking, ActivityIndicator, Modal, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
-import { ensureCamera } from '../lib/permissions'
+import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
@@ -991,7 +991,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               try {
                 // Gate on camera permission — launchCameraAsync throws
                 // "Missing camera or camera roll permission" if it isn't granted.
-                if (await ensureCamera() !== 'granted') return
+                if (await ensureCameraCapture() !== 'granted') return
                 const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.8 })
                 if (result.canceled || !result.assets?.[0]) return
                 const asset = result.assets[0]

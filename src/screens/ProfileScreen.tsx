@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, TextInput 
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import * as ImagePicker from 'expo-image-picker'
-import { ensureCamera, ensureMediaLibrary } from '../lib/permissions'
+import { ensureCameraCapture, ensureMediaLibrary } from '../lib/permissions'
 import { Image } from 'react-native'
 import { useLang } from '../contexts/LangContext'
 import { localeFor, ti } from '../lib/i18n'
@@ -151,7 +151,7 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
   }
 
   async function takePhoto() {
-    if (await ensureCamera() !== 'granted') return
+    if (await ensureCameraCapture() !== 'granted') return
     try {
       const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1,1], quality: 0.7 })
       if (result.canceled) return
