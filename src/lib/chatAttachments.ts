@@ -4,7 +4,7 @@
 import { Alert } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from './supabase'
-import { ensureCamera, ensureMediaLibrary } from './permissions'
+import { ensureCameraCapture, ensureMediaLibrary } from './permissions'
 
 const SUPABASE_URL = 'https://cbnbhwclbtowfbjylnph.supabase.co'
 
@@ -25,12 +25,19 @@ export function chooseAttachmentSource(labels: { title: string; camera: string; 
 // cancelled / denied permission. Throws on upload failure so callers can
 // surface the error. ImagePicker MUST be gated on the ensure* helpers.
 export async function pickAndUploadImage(source: AttachmentSource, tenantId: string, folder: string): Promise<string | null> {
-  const perm = source === 'camera' ? await ensureCamera() : await ensureMediaLibrary()
+  const perm = source === 'camera' ? await ensureCameraCapture() : await ensureMediaLibrary()
   if (perm !== 'granted') return null
   const opts = { mediaTypes: 'images' as const, quality: 0.7 }
-  const result = source === 'camera'
-    ? await ImagePicker.launchCameraAsync(opts)
-    : await ImagePicker.launchImageLibraryAsync(opts)
+  // Belt and braces: even gated, the picker can throw (permission revoked
+  // mid-flow, camera unavailable). Treat that as a cancel, never a crash.
+  let result
+  try {
+    result = source === 'camera'
+      ? await ImagePicker.launchCameraAsync(opts)
+      : await ImagePicker.launchImageLibraryAsync(opts)
+  } catch {
+    return null
+  }
   if (result.canceled || !result.assets?.[0]) return null
   const asset = result.assets[0]
   const extRaw = (asset.uri.split('.').pop() || 'jpg').toLowerCase()

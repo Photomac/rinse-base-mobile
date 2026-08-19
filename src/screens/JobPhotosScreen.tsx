@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Alert, ActivityIndicator, TextInput } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
-import { ensureCamera } from '../lib/permissions'
+import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 import { enqueuePhoto, flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
 import { useLang } from '../contexts/LangContext'
@@ -86,7 +86,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   // only thing the gate accepts) and typed 'after' so one capture also clears
   // the baseline after-photo rule.
   async function takeRequiredPhoto(req: any) {
-    if (await ensureCamera() !== 'granted') return
+    if (await ensureCameraCapture() !== 'granted') return
     try {
       const result = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false })
       if (result.canceled) return
@@ -117,9 +117,10 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
 
 
   async function takePhoto() {
-    // ensureCamera prompts, or shows a Settings deep-link if blocked, and
-    // returns non-granted rather than letting launchCameraAsync throw.
-    if (await ensureCamera() !== 'granted') return
+    // ensureCameraCapture prompts (camera + iOS photo roll), or shows a
+    // Settings deep-link if blocked, and returns non-granted rather than
+    // letting launchCameraAsync throw.
+    if (await ensureCameraCapture() !== 'granted') return
     try {
       const result = await ImagePicker.launchCameraAsync({
         quality: 0.7,

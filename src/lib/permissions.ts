@@ -126,6 +126,21 @@ export async function ensureCamera(opts?: { silent?: boolean }): Promise<Status>
   return 'denied'
 }
 
+// ── Camera capture (camera + iOS photo roll) ──────────────────────
+// Call this BEFORE ImagePicker.launchCameraAsync instead of bare
+// ensureCamera(). On iOS the picker needs BOTH the camera permission and
+// photo-library access — its error is literally "Missing camera or camera
+// roll permission" — so a user who granted Camera but denied Photos still
+// crashed through the ensureCamera-only gate (Sentry RINSEBASE-MOBILE-1
+// regression, 2026-08-18: MLC owner on release 1.1.4 (22)). Android's
+// camera capture doesn't touch the media library, so it isn't prompted.
+export async function ensureCameraCapture(opts?: { silent?: boolean }): Promise<Status> {
+  const cam = await ensureCamera(opts)
+  if (cam !== 'granted') return cam
+  if (Platform.OS !== 'ios') return 'granted'
+  return ensureMediaLibrary(opts)
+}
+
 // ── Media library (photo roll) ────────────────────────────────────
 // Call this BEFORE ImagePicker.launchImageLibraryAsync.
 export async function ensureMediaLibrary(opts?: { silent?: boolean }): Promise<Status> {
