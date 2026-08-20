@@ -27,7 +27,6 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Activi
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
-import { ti } from '../lib/i18n'
 import type { TranslationKey } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
@@ -82,8 +81,8 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   const [rec, setRec] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  // The visit's flat rate, but ONLY when nobody has clocked in — see load().
-  const [unpaid, setUnpaid] = useState<number | null>(null)
+  // True when filing this visit would pay nothing at all — see load().
+  const [noPay, setNoPay] = useState(false)
 
   const [layer, setLayer] = useState('supervisor')
   const [result, setResult] = useState('')
@@ -100,13 +99,14 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
       supabase.from('jobs').select('task_pay').eq('id', job.id).maybeSingle(),
       supabase.from('job_time_entries').select('id', { count: 'exact', head: true }).eq('job_id', job.id),
     ])
-    // The rate rides on the job, but crew_pay_for_period_core builds every line
-    // from job_time_entries — a visit nobody clocked into produces NO pay row at
-    // all, not even a $0 one. Filing without clocking in works silently and pays
-    // nothing, so say so. Checked at load, which is after any clock-in on the
-    // job screen; clocking out happens later, in doFile().
+    // A FLAT rate now pays on filing (crew_pay_for_period_core's
+    // unclocked_inspections branch), so a priced visit needs no warning even
+    // unclocked. The unpaid case is the other one: no rate means hourly on
+    // clocked time, and zero clocked time is zero pay — with no payroll line at
+    // all rather than a $0 one anyone would spot. Checked at load, which is
+    // after any clock-in on the job screen; clock-out happens later in doFile().
     const pay = Number((jobRow as any)?.task_pay ?? 0)
-    setUnpaid(pay > 0 && (entryCount ?? 0) === 0 ? pay : null)
+    setNoPay(pay === 0 && (entryCount ?? 0) === 0)
     if (data) {
       setRec(data)
       setLayer(data.layer ?? 'supervisor')
@@ -161,8 +161,8 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
     const problem = validate()
     if (problem) { Alert.alert(t('error'), problem); return }
 
-    const msg = unpaid != null
-      ? `${t('insp_confirm_msg')}\n\n${ti(t('insp_unpaid_confirm'), { amount: String(unpaid) })}`
+    const msg = noPay
+      ? `${t('insp_confirm_msg')}\n\n${t('insp_unpaid_confirm')}`
       : t('insp_confirm_msg')
     Alert.alert(t('insp_confirm_title'), msg, [
       { text: t('cancel'), style: 'cancel' },
@@ -237,11 +237,9 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
           </View>
         ) : (<>
 
-          {unpaid != null && (
+          {noPay && (
             <View style={styles.unpaidCard}>
-              <Text style={styles.unpaidText}>
-                {ti(t('insp_unpaid_banner'), { amount: String(unpaid) })}
-              </Text>
+              <Text style={styles.unpaidText}>{t('insp_unpaid_banner')}</Text>
             </View>
           )}
 
