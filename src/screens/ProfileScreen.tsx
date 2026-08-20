@@ -30,6 +30,45 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
   const [contactEmail, setContactEmail] = useState(user.email || '')
   const [contactPhone, setContactPhone] = useState(user.phone || '')
   const [savingContact, setSavingContact] = useState(false)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+
+  // ── Manual update check ───────────────────────────────────────────────────
+  // app.json sets fallbackToCacheTimeout: 0, so the app NEVER waits for an
+  // update at launch — it boots from cache and downloads in the background. A
+  // phone that is only opened briefly can therefore run a months-old bundle
+  // forever with nothing on screen saying so. Todd's own device sat 12 days and
+  // three updates behind on 2026-08-20, which is how this button came to exist.
+  //
+  // JS-only: expo-updates is already in the binary (it is what delivers OTAs),
+  // so this whole screen stays OTA-shippable.
+  async function checkForUpdate() {
+    if (__DEV__ || !Updates.isEnabled) {
+      Alert.alert(t('upd_title'), t('upd_unavailable'))
+      return
+    }
+    setCheckingUpdate(true)
+    try {
+      const res = await Updates.checkForUpdateAsync()
+      if (!res.isAvailable) {
+        setCheckingUpdate(false)
+        Alert.alert(t('upd_title'), t('upd_current'))
+        return
+      }
+      // Download before offering the restart — reloading with nothing fetched
+      // would just relaunch the same bundle and look broken.
+      await Updates.fetchUpdateAsync()
+      setCheckingUpdate(false)
+      Alert.alert(t('upd_ready_title'), t('upd_ready_msg'), [
+        { text: t('upd_later'), style: 'cancel' },
+        { text: t('upd_restart'), onPress: () => { Updates.reloadAsync().catch(() => {}) } },
+      ])
+    } catch (e: any) {
+      setCheckingUpdate(false)
+      // Say WHY. A silent failure here is the exact problem this button exists
+      // to end, so a failed check must be as visible as a successful one.
+      Alert.alert(t('upd_failed_title'), ti(t('upd_failed_msg'), { error: String(e?.message || e) }))
+    }
+  }
 
   // ── Build identity ────────────────────────────────────────────────────────
   // One copyable line answering "which build is this?". Four parts, because any
@@ -373,6 +412,12 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
         <View style={styles.buildBox}>
           <Text style={styles.buildLabel}>{t('build_info')}</Text>
           <Text style={styles.buildText} selectable>{buildLine}</Text>
+          <TouchableOpacity onPress={checkForUpdate} disabled={checkingUpdate}
+            style={[styles.updateBtn, checkingUpdate && { opacity: 0.5 }]}>
+            <Text style={styles.updateBtnText}>
+              {checkingUpdate ? t('upd_checking') : `⟳ ${t('upd_check')}`}
+            </Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -409,6 +454,11 @@ const styles = StyleSheet.create({
   buildBox: { marginTop: 20, alignItems: 'center' },
   buildLabel: { color: '#94A3B8', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
   buildText: { color: '#64748B', fontSize: 11, textAlign: 'center' },
+  updateBtn: {
+    marginTop: 10, alignSelf: 'center', paddingHorizontal: 16, paddingVertical: 8,
+    borderRadius: 8, borderWidth: 1, borderColor: '#CBD5E1', backgroundColor: '#fff',
+  },
+  updateBtnText: { color: SLATE_DARK, fontSize: 12, fontWeight: '700' },
   toHint: { fontSize: 12, color: '#94A3B8', marginBottom: 12, lineHeight: 17 },
   typeChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#fff' },
   typeChipActive: { backgroundColor: GOLD, borderColor: GOLD },

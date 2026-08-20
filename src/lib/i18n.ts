@@ -425,6 +425,18 @@ export const translations = {
     insp_result_first: 'Record the inspection result first',
     insp_result_first_msg: 'Open the Inspection form and file your result — that closes this visit.',
     insp_open_form: 'Open inspection',
+    // Manual OTA check — see the note in ProfileScreen.checkForUpdate
+    upd_check: 'Check for updates',
+    upd_checking: 'Checking…',
+    upd_title: 'App updates',
+    upd_current: "You're on the latest version.",
+    upd_unavailable: 'Updates are not available in this build.',
+    upd_ready_title: 'Update ready',
+    upd_ready_msg: 'A new version has downloaded. Restart the app to use it.',
+    upd_restart: 'Restart now',
+    upd_later: 'Later',
+    upd_failed_title: "Couldn't check for updates",
+    upd_failed_msg: 'Check your connection and try again. ({{error}})',
   },
   es: {
     // Common
@@ -847,6 +859,18 @@ export const translations = {
     insp_result_first: 'Registra primero el resultado',
     insp_result_first_msg: 'Abre el formulario de Inspección y registra tu resultado — eso cierra esta visita.',
     insp_open_form: 'Abrir inspección',
+    // Comprobación manual de OTA
+    upd_check: 'Buscar actualizaciones',
+    upd_checking: 'Buscando…',
+    upd_title: 'Actualizaciones',
+    upd_current: 'Ya tienes la última versión.',
+    upd_unavailable: 'Las actualizaciones no están disponibles en esta versión.',
+    upd_ready_title: 'Actualización lista',
+    upd_ready_msg: 'Se descargó una nueva versión. Reinicia la app para usarla.',
+    upd_restart: 'Reiniciar ahora',
+    upd_later: 'Más tarde',
+    upd_failed_title: 'No se pudo buscar actualizaciones',
+    upd_failed_msg: 'Revisa tu conexión e inténtalo de nuevo. ({{error}})',
   },
   pt: {
     // Common
@@ -1269,6 +1293,18 @@ export const translations = {
     insp_result_first: 'Registre primeiro o resultado',
     insp_result_first_msg: 'Abra o formulário de Inspeção e registre seu resultado — isso fecha esta visita.',
     insp_open_form: 'Abrir inspeção',
+    // Verificação manual de OTA
+    upd_check: 'Buscar atualizações',
+    upd_checking: 'Buscando…',
+    upd_title: 'Atualizações',
+    upd_current: 'Você já está na versão mais recente.',
+    upd_unavailable: 'As atualizações não estão disponíveis nesta versão.',
+    upd_ready_title: 'Atualização pronta',
+    upd_ready_msg: 'Uma nova versão foi baixada. Reinicie o app para usá-la.',
+    upd_restart: 'Reiniciar agora',
+    upd_later: 'Depois',
+    upd_failed_title: 'Não foi possível buscar atualizações',
+    upd_failed_msg: 'Verifique sua conexão e tente novamente. ({{error}})',
   }
 }
 
