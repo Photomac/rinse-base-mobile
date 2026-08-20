@@ -437,8 +437,8 @@ export const translations = {
     upd_later: 'Later',
     upd_failed_title: "Couldn't check for updates",
     upd_failed_msg: 'Check your connection and try again. ({{error}})',
-    insp_unpaid_banner: 'Nobody has clocked in on this visit. It pays ${{amount}}, but pay is worked out from clocked time — filing it now pays you nothing. Clock in on the job screen first.',
-    insp_unpaid_confirm: 'Nobody clocked in, so this ${{amount}} visit will pay nothing.'
+    insp_unpaid_banner: 'This visit will pay nothing. Nobody clocked in, and the property has no inspection rate, so it is paid hourly on zero minutes. Clock in on the job screen first, or ask your manager to set a rate for this property.',
+    insp_unpaid_confirm: 'Heads up: nobody clocked in and there is no rate, so this visit pays nothing.'
   },
   es: {
     // Common
@@ -873,8 +873,8 @@ export const translations = {
     upd_later: 'Más tarde',
     upd_failed_title: 'No se pudo buscar actualizaciones',
     upd_failed_msg: 'Revisa tu conexión e inténtalo de nuevo. ({{error}})',
-    insp_unpaid_banner: 'Nadie ha marcado entrada en esta visita. Paga ${{amount}}, pero el pago se calcula con el tiempo marcado — si la registras ahora no cobrarás nada. Marca entrada primero en la pantalla del trabajo.',
-    insp_unpaid_confirm: 'Nadie marcó entrada, así que esta visita de ${{amount}} no pagará nada.'
+    insp_unpaid_banner: 'Esta visita no pagará nada. Nadie marcó entrada y la propiedad no tiene tarifa de inspección, así que se paga por hora sobre cero minutos. Marca entrada primero en la pantalla del trabajo, o pide a tu gerente que fije una tarifa para esta propiedad.',
+    insp_unpaid_confirm: 'Aviso: nadie marcó entrada y no hay tarifa, así que esta visita no pagará nada.'
   },
   pt: {
     // Common
@@ -1309,8 +1309,8 @@ export const translations = {
     upd_later: 'Depois',
     upd_failed_title: 'Não foi possível buscar atualizações',
     upd_failed_msg: 'Verifique sua conexão e tente novamente. ({{error}})',
-    insp_unpaid_banner: 'Ninguém bateu o ponto nesta visita. Ela paga ${{amount}}, mas o pagamento é calculado pelo tempo registrado — registrar agora não paga nada. Bata o ponto na tela do trabalho primeiro.',
-    insp_unpaid_confirm: 'Ninguém bateu o ponto, então esta visita de ${{amount}} não pagará nada.'
+    insp_unpaid_banner: 'Esta visita não pagará nada. Ninguém bateu o ponto e a propriedade não tem tarifa de inspeção, então é paga por hora sobre zero minutos. Bata o ponto na tela do trabalho primeiro, ou peça à sua gerente para definir uma tarifa para esta propriedade.',
+    insp_unpaid_confirm: 'Atenção: ninguém bateu o ponto e não há tarifa, então esta visita não pagará nada.'
   }
 }
 
