@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
 import { LaundryRunScreen } from './LaundryRunScreen'
+import { JobInspectionScreen } from './JobInspectionScreen'
 import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
 import { PhotoViewer } from '../components/PhotoViewer'
@@ -136,6 +137,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [showInventory, setShowInventory] = useState(false)
   const [showMessages, setShowMessages] = useState(false)
   const [showLaundry, setShowLaundry] = useState(false)
+  const [showInspection, setShowInspection] = useState(false)
   const [checklist, setChecklist] = useState(DEFAULT_CHECKLIST as any[])
   const [loadingChecklist, setLoadingChecklist] = useState(false)
   const [itemPhotos, setItemPhotos] = useState<Record<string, number>>({})
@@ -199,6 +201,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
   // the cash + bags reconciliation form replaces them.
   const isLaundry = job.job_type === 'laundry_run'
+  // A quality inspection (Ch.7 §7.8) — a separate visit that verifies somebody
+  // else's clean. It is an `isTask` job (no checklist, no supplies, no incident
+  // report) but it KEEPS photos: §7.10 makes photographic evidence part of the
+  // layer, and it is the only job type with an inspection form. Same tab set the
+  // web JobPanel gives it.
+  const isInspection = job.job_type === 'inspection'
   // Any internal task (laundry run, generic task): no property/checklist/photos.
   const isTask = !!job.job_type && job.job_type !== 'clean'
   // A task pointed at a REAL property (e.g. a property inspection) — the owner
@@ -766,6 +774,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   async function completeJob() {
+    // An inspection is closed by FILING ITS RESULT, not by a generic Complete.
+    // Marking it done with no result would produce a visit that counts for
+    // nothing: QualityReport only counts inspections with a recorded result, so
+    // it would vanish from first-pass yield instead of quietly passing.
+    if (isInspection) {
+      Alert.alert(t('insp_result_first'), t('insp_result_first_msg'), [
+        { text: t('cancel'), style: 'cancel' },
+        { text: t('insp_open_form'), onPress: () => setShowInspection(true) },
+      ])
+      return
+    }
     // Photo requirements — cleans only; laundry runs have no property to
     // photograph (their proof is the reconciliation form).
     if (isTask) { await completeJobNoPhotoCheck(); return }
@@ -903,34 +922,57 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     await completeJobNoPhotoCheck()
   }
 
+  // Clock out the active entry — the clock-out IS the paid duration. Offline it
+  // queues (never lost); only a real server rejection is fatal: an open entry on
+  // a "completed" job would run forever and corrupt payroll.
+  //
+  // Extracted from completeJobNoPhotoCheck so JobInspectionScreen can run it
+  // BEFORE it files a record — filing stamps job_inspections.completed_at, whose
+  // trigger completes the visit job, and that ordering is what keeps a completed
+  // job from ever carrying an open entry.
+  //
+  // Returns false only on a hard rejection (the alert is already shown);
+  // `queued` is reported through the ref so the caller can still say so.
+  const clockOutQueuedRef = useRef(false)
+  async function clockOutActive(): Promise<boolean> {
+    clockOutQueuedRef.current = false
+    if (!activeEntry) return true
+    const now = new Date()
+    const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
+    // GPS-stamp the punch-out too (best-effort — never blocks the clock-out).
+    const outStamp = await quickGpsStamp()
+    const { error: outErr, queued: outQueued } = await writeThrough({
+      table: 'job_time_entries', op: 'update', match: { id: activeEntry.id },
+      values: {
+        clocked_out_at: now.toISOString(),
+        duration_minutes: Math.round(mins),
+        clock_out_lat: outStamp?.lat ?? null,
+        clock_out_lng: outStamp?.lng ?? null,
+      },
+    })
+    if (outErr) {
+      Alert.alert(t('error'), t('clock_out_failed'))
+      return false
+    }
+    if (outQueued) clockOutQueuedRef.current = true
+    return true
+  }
+
+  // The inspection form already clocked out and filed the record; the DB trigger
+  // trg_complete_inspection_job has completed the visit job. Nothing left to
+  // write — just tear down and tell the list.
+  function finishFiledInspection() {
+    if (clockOutQueuedRef.current) Alert.alert('📡', t('queued_offline'))
+    maybeStopLocationTracking(user).catch(() => {})
+    onStatusChange(job, 'completed')
+    setShowInspection(false)
+    onBack()
+  }
+
   async function completeJobNoPhotoCheck() {
     setSaving(true)
-    let queuedOffline = false
-    // Clock out active entry — the clock-out IS the paid duration. Offline it
-    // queues (never lost); only a real server rejection bails before marking
-    // complete: an open entry on a "completed" job would run forever and
-    // corrupt payroll.
-    if (activeEntry) {
-      const now = new Date()
-      const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
-      // GPS-stamp the punch-out too (best-effort — never blocks the clock-out).
-      const outStamp = await quickGpsStamp()
-      const { error: outErr, queued: outQueued } = await writeThrough({
-        table: 'job_time_entries', op: 'update', match: { id: activeEntry.id },
-        values: {
-          clocked_out_at: now.toISOString(),
-          duration_minutes: Math.round(mins),
-          clock_out_lat: outStamp?.lat ?? null,
-          clock_out_lng: outStamp?.lng ?? null,
-        },
-      })
-      if (outErr) {
-        setSaving(false)
-        Alert.alert(t('error'), t('clock_out_failed'))
-        return
-      }
-      if (outQueued) queuedOffline = true
-    }
+    if (!(await clockOutActive())) { setSaving(false); return }
+    const queuedOffline = clockOutQueuedRef.current
     // Append the crew's completion note to internal_notes instead of replacing
     // it — the field also carries the owner's note to crew (and a task's title),
     // which a plain overwrite used to erase.
@@ -968,13 +1010,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   if (showMessages) return <MessagesScreen job={job} user={user} onBack={() => setShowMessages(false)} />
   if (showInventory) return <JobInventoryScreen job={job} user={user} onBack={() => setShowInventory(false)} />
   if (showLaundry) return <LaundryRunScreen job={job} user={user} onBack={() => setShowLaundry(false)} />
+  if (showInspection) return (
+    <JobInspectionScreen
+      job={job} user={user}
+      onBack={() => setShowInspection(false)}
+      clockOut={clockOutActive}
+      onFiled={finishFiledInspection}
+    />
+  )
   if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack} style={styles.backBtn}><Text style={styles.backText}>← {t('back')}</Text></TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (propLabel || t('job_detail'))}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{isLaundry ? `🧺 ${t('laundry_run')}` : isInspection ? `🔍 ${t('inspection')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (propLabel || t('job_detail'))}</Text>
         <View style={{ width: 60 }} />
       </View>
 
@@ -1013,7 +1063,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Job info card */}
         <View style={styles.card}>
-          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{propLabel}{job.is_turnover ? `  🏠 ${t('turnover')}` : ''}</>}</Text>
+          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : isInspection ? <>🔍 {t('inspection')} · {propLabel}</> : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{propLabel}{job.is_turnover ? `  🏠 ${t('turnover')}` : ''}</>}</Text>
           {routeStop && (
             <View style={styles.routeStopBadge}>
               <Text style={styles.routeStopText}>🧭 {ti(t('route_stop_of'), { k: String(routeStop.k), m: String(routeStop.m) })}</Text>
@@ -1136,7 +1186,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             <TouchableOpacity style={[styles.suppliesBtn, { borderColor: TEAL }]} onPress={() => setShowLaundry(true)}>
               <Text style={[styles.suppliesBtnText, { color: TEAL }]}>🧺 {t('laundry_form')}</Text>
             </TouchableOpacity>
-          ) : !isTask ? (<>
+          ) : isInspection ? (<>
+          <TouchableOpacity style={[styles.suppliesBtn, { borderColor: GOLD }]} onPress={() => setShowInspection(true)}>
+            <Text style={[styles.suppliesBtnText, { color: GOLD }]}>🔍 {t('insp_open')}</Text>
+          </TouchableOpacity>
+          {/* §7.10 — an inspection's evidence is photographic, so the crew needs
+              the camera here even though every other task type hides it. */}
+          <TouchableOpacity style={styles.photosBtn} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
+            <Text style={styles.photosBtnText}>📸 {t('job_photos')}</Text>
+          </TouchableOpacity>
+          </>) : !isTask ? (<>
           {/* Carries the required-shot count so the obligation is visible for
               the whole clean, not sprung at completion. Amber while outstanding. */}
           <TouchableOpacity
@@ -1212,12 +1271,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#10B981' }]} onPress={() => {
+                  // An inspection is closed by filing its result — go straight
+                  // to the form rather than stacking a confirm on top of it.
+                  if (isInspection) { setShowInspection(true); return }
                   Alert.alert(t('complete_job_confirm'), '', [
                     { text: t('cancel'), style: 'cancel' },
                     { text: t('complete_job'), onPress: completeJob },
                   ])
                 }} disabled={saving}>
-                  <Text style={styles.clockBtnText}>✓ {t('complete_job')}</Text>
+                  <Text style={styles.clockBtnText}>✓ {isInspection ? t('insp_complete') : t('complete_job')}</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -1237,12 +1299,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                     <Text style={styles.clockBtnText}>⏸ {t('pause')}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#10B981', flex: 1 }]} onPress={() => {
+                    if (isInspection) { setShowInspection(true); return }
                     Alert.alert(t('complete_job_confirm'), `${t('total_time')}: ${fmtDuration(elapsedMinutes)}`, [
                       { text: t('cancel'), style: 'cancel' },
                       { text: t('complete_job'), onPress: completeJob }
                     ])
                   }} disabled={saving}>
-                    <Text style={styles.clockBtnText}>✓ {t('complete_job')}</Text>
+                    <Text style={styles.clockBtnText}>✓ {isInspection ? t('insp_complete') : t('complete_job')}</Text>
                   </TouchableOpacity>
                 </>
               )}

@@ -227,8 +227,8 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       <Text style={[styles.statusText, { color }]}>{t((STATUS_LABEL_KEYS[job.status] || 'status_scheduled') as any)}</Text>
                     </View>
                   </View>
-                  <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}</Text>
-                  {(!job.job_type || job.job_type === 'clean') && <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>}
+                  <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}</Text>
+                  {(!job.job_type || job.job_type === 'clean' || job.job_type === 'inspection') && <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>}
                   {job.is_turnover && <Text style={styles.turnoverTag}>🏠 {t('turnover')}{job.window_minutes != null ? `  ·  ↔ ${t('back_to_back')}` : ''}</Text>}
                 </View>
                 <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
