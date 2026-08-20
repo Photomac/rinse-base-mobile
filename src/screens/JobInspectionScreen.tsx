@@ -27,6 +27,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Activi
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { ti } from '../lib/i18n'
 import type { TranslationKey } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
@@ -81,6 +82,8 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   const [rec, setRec] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  // The visit's flat rate, but ONLY when nobody has clocked in — see load().
+  const [unpaid, setUnpaid] = useState<number | null>(null)
 
   const [layer, setLayer] = useState('supervisor')
   const [result, setResult] = useState('')
@@ -92,8 +95,18 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('job_inspections')
-      .select('*').eq('job_id', job.id).maybeSingle()
+    const [{ data }, { data: jobRow }, { count: entryCount }] = await Promise.all([
+      supabase.from('job_inspections').select('*').eq('job_id', job.id).maybeSingle(),
+      supabase.from('jobs').select('task_pay').eq('id', job.id).maybeSingle(),
+      supabase.from('job_time_entries').select('id', { count: 'exact', head: true }).eq('job_id', job.id),
+    ])
+    // The rate rides on the job, but crew_pay_for_period_core builds every line
+    // from job_time_entries — a visit nobody clocked into produces NO pay row at
+    // all, not even a $0 one. Filing without clocking in works silently and pays
+    // nothing, so say so. Checked at load, which is after any clock-in on the
+    // job screen; clocking out happens later, in doFile().
+    const pay = Number((jobRow as any)?.task_pay ?? 0)
+    setUnpaid(pay > 0 && (entryCount ?? 0) === 0 ? pay : null)
     if (data) {
       setRec(data)
       setLayer(data.layer ?? 'supervisor')
@@ -148,7 +161,10 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
     const problem = validate()
     if (problem) { Alert.alert(t('error'), problem); return }
 
-    Alert.alert(t('insp_confirm_title'), t('insp_confirm_msg'), [
+    const msg = unpaid != null
+      ? `${t('insp_confirm_msg')}\n\n${ti(t('insp_unpaid_confirm'), { amount: String(unpaid) })}`
+      : t('insp_confirm_msg')
+    Alert.alert(t('insp_confirm_title'), msg, [
       { text: t('cancel'), style: 'cancel' },
       { text: t('insp_complete'), onPress: doFile },
     ])
@@ -220,6 +236,14 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
             {!!rec.notes && <Text style={styles.filedNotes}>{rec.notes}</Text>}
           </View>
         ) : (<>
+
+          {unpaid != null && (
+            <View style={styles.unpaidCard}>
+              <Text style={styles.unpaidText}>
+                {ti(t('insp_unpaid_banner'), { amount: String(unpaid) })}
+              </Text>
+            </View>
+          )}
 
           <Text style={styles.label}>{t('insp_layer_label')}</Text>
           <Text style={styles.hint}>{t('insp_layer_hint')}</Text>
@@ -383,6 +407,12 @@ const styles = StyleSheet.create({
     fontSize: 14, color: NAVY, minHeight: 84, backgroundColor: '#fff',
     textAlignVertical: 'top',
   },
+
+  unpaidCard: {
+    marginBottom: 16, padding: 12, borderRadius: 10,
+    backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FCD34D',
+  },
+  unpaidText: { color: '#92400E', fontSize: 13, fontWeight: '600', lineHeight: 18 },
 
   failCard: {
     marginTop: 12, padding: 12, borderRadius: 10,
