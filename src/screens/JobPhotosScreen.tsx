@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Alert, ActivityIndicator, TextInput } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Alert, ActivityIndicator, TextInput, Modal, KeyboardAvoidingView, Platform } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { ensureCameraCapture } from '../lib/permissions'
@@ -37,6 +37,14 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   const [visibleToClient, setVisibleToClient] = useState(true)
   const [pending, setPending] = useState<PendingStatus>({ count: 0, serverRejected: 0, lastServerError: null })
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
+  // Editing a note on a photo that already exists. The capture-time caption
+  // field cannot serve this: it is consumed and cleared by uploadPhoto, so a
+  // note typed after the shot silently applied to the NEXT one, or to nothing
+  // at all. Reported by Cleanfix Squad 2026-08-21 — the crew asked the office a
+  // question through it and the text was never saved.
+  const [noteFor, setNoteFor] = useState<any | null>(null)
+  const [noteText, setNoteText] = useState('')
+  const [savingNote, setSavingNote] = useState(false)
   // The owner's named shot list for this property + which shots are already in.
   const [reqs, setReqs] = useState<any[]>([])
   const [shotByReq, setShotByReq] = useState<Record<string, string>>({})
@@ -245,6 +253,29 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
     }
   }
 
+  function openPhotoOptions(photo: any) {
+    Alert.alert(t('photo_options'), photo.caption || undefined, [
+      { text: t('cancel'), style: 'cancel' },
+      {
+        text: photo.caption ? t('photo_edit_note') : t('photo_add_note'),
+        onPress: () => { setNoteFor(photo); setNoteText(photo.caption || '') },
+      },
+      { text: t('delete_btn'), style: 'destructive', onPress: () => deletePhoto(photo) },
+    ])
+  }
+
+  async function saveNote() {
+    if (!noteFor) return
+    setSavingNote(true)
+    const next = noteText.trim() || null
+    const { error } = await supabase.from('job_photos').update({ caption: next }).eq('id', noteFor.id)
+    setSavingNote(false)
+    if (error) { Alert.alert(t('could_not_save'), error.message); return }
+    setNoteFor(null)
+    setNoteText('')
+    loadPhotos()
+  }
+
   async function deletePhoto(photo: any) {
     Alert.alert(t('delete_photo'), t('delete_confirm'), [
       { text: t('cancel'), style: 'cancel' },
@@ -446,7 +477,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
                       key={photo.id}
                       style={styles.photoWrapper}
                       onPress={() => setViewerIndex(galleryPhotos.findIndex(p => p.id === photo.id))}
-                      onLongPress={() => deletePhoto(photo)}
+                      onLongPress={() => openPhotoOptions(photo)}
                     >
                       <Image source={{ uri: photo.photo_url }} style={styles.photo} />
                       {photo.caption && (
@@ -471,12 +502,54 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
       {viewerIndex !== null && viewerIndex >= 0 && (
         <PhotoViewer photos={galleryItems} startIndex={viewerIndex} onClose={() => setViewerIndex(null)} />
       )}
+
+      {/* Note editor for an EXISTING photo. A plain Modal rather than
+          Alert.prompt, which is iOS-only — the crews reporting this are on
+          Android. Shows the photo so it is obvious which one is being annotated. */}
+      <Modal visible={noteFor !== null} transparent animationType="fade" onRequestClose={() => setNoteFor(null)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.noteBackdrop}
+        >
+          <View style={styles.noteCard}>
+            <Text style={styles.noteTitle}>{t('photo_note_title')}</Text>
+            {noteFor?.photo_url && <Image source={{ uri: noteFor.photo_url }} style={styles.noteThumb} />}
+            <TextInput
+              style={styles.noteInput}
+              value={noteText}
+              onChangeText={setNoteText}
+              placeholder={t('photo_note_placeholder')}
+              placeholderTextColor="#9CA3AF"
+              multiline
+              autoFocus
+            />
+            <View style={styles.noteBtnRow}>
+              <TouchableOpacity style={styles.noteCancelBtn} onPress={() => setNoteFor(null)} disabled={savingNote}>
+                <Text style={styles.noteCancelText}>{t('cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.noteSaveBtn, savingNote && { opacity: 0.6 }]} onPress={saveNote} disabled={savingNote}>
+                <Text style={styles.noteSaveText}>{savingNote ? t('saving') : t('save')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8F9FA' },
+  noteBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 24 },
+  noteCard: { backgroundColor: '#fff', borderRadius: 16, padding: 18 },
+  noteTitle: { fontSize: 15, fontWeight: '800', color: '#111827', marginBottom: 12 },
+  noteThumb: { width: '100%', height: 150, borderRadius: 10, marginBottom: 12, backgroundColor: '#E5E7EB' },
+  noteInput: { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, padding: 12, fontSize: 14, color: '#111827', minHeight: 80, textAlignVertical: 'top' },
+  noteBtnRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  noteCancelBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center' },
+  noteCancelText: { fontSize: 14, fontWeight: '700', color: '#6B7280' },
+  noteSaveBtn: { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: NAVY, alignItems: 'center' },
+  noteSaveText: { fontSize: 14, fontWeight: '700', color: '#fff' },
   header: { backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16 },
   backBtn: { padding: 4 },
   backText: { color: TEAL, fontSize: 14, fontWeight: '600' },
