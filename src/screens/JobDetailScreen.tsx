@@ -142,6 +142,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [loadingChecklist, setLoadingChecklist] = useState(false)
   const [itemPhotos, setItemPhotos] = useState<Record<string, number>>({})
   const [activePhotoItem, setActivePhotoItem] = useState<any>(null)
+  // Turnover rooms (phase 2): the checklist renders as a room accordion.
+  // roomsMeta comes from property_rooms; items carry room_id/item_kind/level/
+  // result from the seeded job rows. signoffs = job_room_signoffs for this job.
+  const [roomsMeta, setRoomsMeta] = useState<any[]>([])
+  const [signoffs, setSignoffs] = useState<Record<string, string>>({})
+  const [reqByRoom, setReqByRoom] = useState<Record<string, { total: number; done: number }>>({})
+  const [openRooms, setOpenRooms] = useState<Record<string, boolean>>({})
+  const [defaultMode, setDefaultMode] = useState<'detailed' | 'room_complete'>('detailed')
+  const [issueForId, setIssueForId] = useState<string | null>(null)
+  const [issueText, setIssueText] = useState('')
   const [viewPropertyPhoto, setViewPropertyPhoto] = useState(false)
 
   // Required property shots, surfaced BEFORE the work instead of at completion.
@@ -492,7 +502,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             .order('room').order('sort_order'))
         : Promise.resolve({ data: [] as any[] }),
       cachedQuery(`chkrows:${job.id}`, supabase.from('job_checklist_items')
-        .select('id, room, task, sort_order, completed, photo_required')
+        .select('id, room, task, sort_order, completed, photo_required, room_id, item_kind, level, result, issue_note')
         .eq('job_id', job.id)
         .order('room').order('sort_order')),
     ])
@@ -504,7 +514,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     let items: any[]
     const checkedMap: Record<string, boolean> = {}
     if (rows.length > 0 && tmpl.length > 0) {
-      items = rows.map(r => ({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false }))
+      items = rows.map(r => ({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false, room_uid: r.room_id, item_kind: r.item_kind || 'task', level: r.level || 'guidance', result: r.result ?? null, issue_note: r.issue_note ?? null }))
       rows.forEach(r => { if (r.completed) checkedMap[r.id] = true })
     } else if (tmpl.length > 0) {
       // Template exists but this job was never seeded — ticks upsert rows.
@@ -527,6 +537,44 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
     setChecklist(items)
     setChecked(checkedMap)
+    // Rooms, sign-offs, mode and per-room photo counts — best-effort; an error
+    // just leaves the flat 'Other' grouping.
+    if (addressId) {
+      try {
+        const [roomsRes, signRes, addrRes, tenRes, reqRes, shotRes] = await Promise.all([
+          cachedQuery(`rooms:${addressId}`, supabase.from('property_rooms')
+            .select('id, room_type, instance_no, name, sort_order, execution_mode')
+            .eq('address_id', addressId).is('archived_at', null).order('sort_order')),
+          cachedQuery(`signoffs:${job.id}`, supabase.from('job_room_signoffs')
+            .select('id, room_id, completed_at, job_id').eq('job_id', job.id)),
+          cachedQuery(`addrmode:${addressId}`, supabase.from('client_addresses')
+            .select('checklist_execution_mode').eq('id', addressId)),
+          cachedQuery(`tenmode:${user.tenant_id}`, supabase.from('tenants')
+            .select('checklist_execution_mode').eq('id', user.tenant_id)),
+          cachedQuery(`preq:${addressId}`, supabase.from('property_photo_requirements')
+            .select('id, room_id, required').eq('address_id', addressId).eq('required', true)),
+          cachedQuery(`pshot:${job.id}`, supabase.from('job_photos')
+            .select('photo_requirement_id').eq('job_id', job.id).not('photo_requirement_id', 'is', null)),
+        ])
+        setRoomsMeta(roomsRes.data || [])
+        const signRows = await overlayPending('job_room_signoffs', signRes.data || [], v => v.job_id === job.id)
+        const sMap: Record<string, string> = {}
+        for (const r of signRows) if (r.room_id) sMap[r.room_id] = r.completed_at
+        setSignoffs(sMap)
+        const addrMode = (addrRes.data as any[])?.[0]?.checklist_execution_mode
+        const tenMode = (tenRes.data as any[])?.[0]?.checklist_execution_mode
+        setDefaultMode((addrMode || tenMode || 'detailed') as any)
+        const shotSet = new Set(((shotRes.data as any[]) || []).map(pp => pp.photo_requirement_id))
+        const rb: Record<string, { total: number; done: number }> = {}
+        for (const rq of ((reqRes.data as any[]) || [])) {
+          const k = rq.room_id || '__other__'
+          rb[k] = rb[k] || { total: 0, done: 0 }
+          rb[k].total += 1
+          if (shotSet.has(rq.id)) rb[k].done += 1
+        }
+        setReqByRoom(rb)
+      } catch { /* accordion still renders from item.room text */ }
+    }
     // A photo counts for an item via the canonical checklist_item_id link, or
     // by the legacy caption == task-title match (photos from older bundles /
     // web uploads before the link existed).
@@ -542,6 +590,36 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       setItemPhotos(counts)
     }
     setLoadingChecklist(false)
+  }
+
+  // VERIFY answer (phase 2). result: 'ok' | 'issue' | 'na' | null. The DB
+  // trigger syncs `completed` from result, so we don't write it here.
+  async function saveVerify(item: any, result: 'ok' | 'issue' | 'na' | null, note?: string) {
+    if (!item.jobItemId) return
+    const { error } = await writeThrough({
+      table: 'job_checklist_items', op: 'update', match: { id: item.jobItemId },
+      values: {
+        result,
+        issue_note: result === 'issue' ? (note || '').trim() || null : null,
+        completed_at: result ? new Date().toISOString() : null,
+        completed_by: result ? user.id : null,
+      },
+    })
+    if (error) { Alert.alert(t('error'), t('could_not_save')); return }
+    setChecklist(prev => prev.map(i => i.id === item.id ? { ...i, result, issue_note: result === 'issue' ? note || null : null } : i))
+    setChecked(prev => ({ ...prev, [item.id]: result === 'ok' || result === 'na' }))
+    setIssueForId(null); setIssueText('')
+  }
+
+  // "Complete room" — one honest sign-off row, never bulk ticks. Photos for the
+  // room must exist first; the button says how many are left.
+  async function signOffRoom(roomId: string) {
+    const { error } = await writeThrough({
+      table: 'job_room_signoffs', op: 'upsert', onConflict: 'job_id,room_id',
+      values: { tenant_id: user.tenant_id, job_id: job.id, room_id: roomId, completed_at: new Date().toISOString(), completed_by: user.id },
+    })
+    if (error) { Alert.alert(t('error'), t('could_not_save')); return }
+    setSignoffs(prev => ({ ...prev, [roomId]: new Date().toISOString() }))
   }
 
   async function saveCheckItem(item: any, isChecked: boolean) {
@@ -1318,49 +1396,204 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           )}
         </View>
 
-        {/* Checklist — cleans only; laundry runs use the reconciliation form */}
+        {/* Turnover checklist — cleans only; laundry runs use the reconciliation
+            form. Phase 2: rooms accordion in the order the cleaner walks the
+            house; DO ☐ / VERIFY ◇ / photos per room. Items with no room (old
+            jobs, template-less properties) group under "Other". */}
         {isStarted && !isTask && (
           <View style={styles.card}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <Text style={styles.sectionTitle}>{t('cleaning_checklist')}</Text>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: TEAL }}>{completedCount}/{checklist.length}</Text>
-            </View>
-            <View style={styles.progressBg}><View style={[styles.progressFill, { width: `${progressPct}%` as any }]} /></View>
-            {loadingChecklist ? (
-              <ActivityIndicator color={TEAL} style={{ marginVertical: 20 }} />
-            ) : checklist.map((item: any) => (
-              <View key={item.id} style={styles.checkItem}>
-                <TouchableOpacity onPress={() => {
-                  const newVal = !checked[item.id]
-                  if (newVal && item.requires_photo && !itemPhotos[item.id]) {
-                    // Photo-required task: proof first, then the tick.
-                    Alert.alert(`📸 ${t('photo_required_alert')}`, t('item_photo_before_check_msg'), [
-                      { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(item); setShowPhotos(true) } },
-                      { text: t('cancel'), style: 'cancel' },
-                    ])
-                    return
-                  }
-                  setChecked(prev => ({ ...prev, [item.id]: newVal }))
-                  saveCheckItem(item, newVal)
-                }} style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 }}>
-                  <View style={[styles.checkbox, checked[item.id] && styles.checkboxDone]}>
-                    {checked[item.id] && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
+            {(() => {
+              const groups: any[] = []
+              const byId = new Map<string, any>()
+              for (const rm of roomsMeta) {
+                const name = (rm.name || '').trim() || (
+                  rm.room_type === 'bedroom' ? (rm.instance_no === 1 ? 'Primary Bedroom' : `Bedroom ${rm.instance_no}`)
+                  : rm.room_type === 'bathroom' ? `Bathroom ${rm.instance_no}`
+                  : rm.room_type === 'final' ? 'Final Guest-Ready Check'
+                  : rm.room_type === 'living' ? 'Living Room'
+                  : rm.room_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) + (rm.instance_no > 1 ? ` ${rm.instance_no}` : ''))
+                const g = { key: rm.id, name, mode: rm.execution_mode || defaultMode, items: [] as any[] }
+                byId.set(rm.id, g); groups.push(g)
+              }
+              const other = { key: '__other__', name: 'Other', mode: 'detailed', items: [] as any[] }
+              for (const item of checklist) {
+                const g = item.room_uid ? byId.get(item.room_uid) : null
+                ;(g || other).items.push(item)
+              }
+              if (other.items.length > 0) groups.push(other)
+              const shown = groups.filter(g => g.items.length > 0 || (reqByRoom[g.key]?.total ?? 0) > 0)
+
+              const stateOf = (g: any) => {
+                const tasks = g.items.filter((i: any) => i.item_kind !== 'verify')
+                const verifies = g.items.filter((i: any) => i.item_kind === 'verify')
+                const doneTasks = tasks.filter((i: any) => checked[i.id]).length
+                const answered = verifies.filter((i: any) => i.result != null || checked[i.id]).length
+                const issues = verifies.filter((i: any) => i.result === 'issue').length
+                const req = reqByRoom[g.key] || { total: 0, done: 0 }
+                const signed = !!signoffs[g.key]
+                const workDone = g.mode === 'room_complete'
+                  ? signed
+                  : doneTasks === tasks.length && answered === verifies.length
+                return { tasks, verifies, doneTasks, answered, issues, req, signed,
+                  complete: g.items.length > 0 && workDone && req.done >= req.total }
+              }
+
+              const firstOpen = (shown.find(g => !stateOf(g).complete) || shown[0])?.key
+              const roomsDone = shown.filter(g => stateOf(g).complete).length
+
+              return (
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <Text style={styles.sectionTitle}>{t('cleaning_checklist')}</Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: TEAL }}>
+                      {shown.length > 1 ? `${t('turnover_rooms_done')} ${roomsDone}/${shown.length}` : `${completedCount}/${checklist.length}`}
+                    </Text>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.labelKey ? t(item.labelKey) : item.label}</Text>
-                    {item.requires_photo && !itemPhotos[item.id] && (
-                      <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>{t('photo_required_short')}</Text>
-                    )}
-                  </View>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.itemPhotoBtn, itemPhotos[item.id] > 0 && styles.itemPhotoBtnDone, item.requires_photo && !itemPhotos[item.id] && { borderColor: TEAL, borderWidth: 1.5 }]}
-                  onPress={() => { setActivePhotoItem(item); setShowPhotos(true) }}
-                >
-                  <Text style={styles.itemPhotoBtnText}>{itemPhotos[item.id] > 0 ? `📷 ${itemPhotos[item.id]}` : item.requires_photo ? '📷!' : '📷'}</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
+                  <View style={styles.progressBg}><View style={[styles.progressFill, { width: `${progressPct}%` as any }]} /></View>
+                  {loadingChecklist ? (
+                    <ActivityIndicator color={TEAL} style={{ marginVertical: 20 }} />
+                  ) : shown.map(g => {
+                    const st = stateOf(g)
+                    const isOpen = openRooms[g.key] ?? (g.key === firstOpen)
+                    return (
+                      <View key={g.key} style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, marginBottom: 6, overflow: 'hidden' }}>
+                        <TouchableOpacity onPress={() => setOpenRooms(prev => ({ ...prev, [g.key]: !isOpen }))}
+                          style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, backgroundColor: st.complete ? '#ECFDF5' : '#F9FAFB' }}>
+                          <Text style={{ flex: 1, fontSize: 14, fontWeight: '800', color: '#111827' }} numberOfLines={1}>
+                            {st.complete ? '✓ ' : ''}{g.name}
+                          </Text>
+                          {st.issues > 0 && <Text style={{ fontSize: 11, fontWeight: '800', color: '#DC2626' }}>⚠ {st.issues}</Text>}
+                          <Text style={{ fontSize: 11, color: '#6B7280' }}>
+                            {g.mode === 'room_complete'
+                              ? (st.signed ? '✓' : '…')
+                              : `${st.doneTasks + st.answered}/${g.items.length}`}
+                            {st.req.total > 0 ? `  📷 ${st.req.done}/${st.req.total}` : ''}
+                          </Text>
+                          <Text style={{ color: '#9CA3AF' }}>{isOpen ? '▾' : '▸'}</Text>
+                        </TouchableOpacity>
+                        {isOpen && (
+                          <View style={{ padding: 10, paddingTop: 4 }}>
+                            {g.mode === 'room_complete' && (
+                              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 6 }}>{t('room_standards_hint')}</Text>
+                            )}
+                            {g.items.map((item: any) => {
+                              if (item.item_kind === 'verify' && item.jobItemId) {
+                                return (
+                                  <View key={item.id} style={{ paddingVertical: 5 }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                      <Text style={{ color: '#B45309', width: 16, textAlign: 'center' }}>◇</Text>
+                                      <View style={{ flex: 1 }}>
+                                        <Text style={styles.checkLabel}>{item.title}</Text>
+                                        {item.result === 'issue' && item.issue_note && issueForId !== item.id && (
+                                          <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>⚠ {item.issue_note}</Text>
+                                        )}
+                                      </View>
+                                      {(['ok', 'issue', 'na'] as const).map(v => {
+                                        const on = item.result === v
+                                        const col = v === 'ok' ? '#16A34A' : v === 'issue' ? '#DC2626' : '#9CA3AF'
+                                        return (
+                                          <TouchableOpacity key={v}
+                                            onPress={() => {
+                                              if (v === 'issue' && !on) { setIssueForId(item.id); setIssueText(item.issue_note || ''); return }
+                                              saveVerify(item, on ? null : v)
+                                            }}
+                                            style={{ paddingVertical: 3, paddingHorizontal: 8, borderRadius: 10, borderWidth: 1,
+                                              borderColor: on ? col : '#E5E7EB', backgroundColor: on ? col : '#fff' }}>
+                                            <Text style={{ fontSize: 10, fontWeight: '800', color: on ? '#fff' : '#6B7280' }}>
+                                              {v === 'ok' ? `✓ ${t('verify_ok')}` : v === 'issue' ? `⚠ ${t('verify_issue')}` : t('verify_na')}
+                                            </Text>
+                                          </TouchableOpacity>
+                                        )
+                                      })}
+                                    </View>
+                                    {issueForId === item.id && (
+                                      <View style={{ flexDirection: 'row', gap: 6, marginTop: 5, marginLeft: 24 }}>
+                                        <TextInput value={issueText} onChangeText={setIssueText} placeholder={t('issue_note_ph')} autoFocus
+                                          style={{ flex: 1, borderWidth: 1, borderColor: '#FECACA', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, fontSize: 12 }} />
+                                        <TouchableOpacity disabled={!issueText.trim()} onPress={() => saveVerify(item, 'issue', issueText)}
+                                          style={{ backgroundColor: issueText.trim() ? '#DC2626' : '#FCA5A5', borderRadius: 8, paddingHorizontal: 12, justifyContent: 'center' }}>
+                                          <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{t('report_issue_btn')}</Text>
+                                        </TouchableOpacity>
+                                      </View>
+                                    )}
+                                  </View>
+                                )
+                              }
+                              // task row (also verify rows on unseeded legacy jobs)
+                              if (g.mode === 'room_complete') {
+                                return (
+                                  <View key={item.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}>
+                                    <Text style={{ color: '#9CA3AF', width: 16, textAlign: 'center' }}>•</Text>
+                                    <Text style={[styles.checkLabel, { flex: 1 }]}>{item.labelKey ? t(item.labelKey) : item.title}</Text>
+                                  </View>
+                                )
+                              }
+                              return (
+                                <View key={item.id} style={styles.checkItem}>
+                                  <TouchableOpacity onPress={() => {
+                                    const newVal = !checked[item.id]
+                                    if (newVal && item.requires_photo && !itemPhotos[item.id]) {
+                                      Alert.alert(`📸 ${t('photo_required_alert')}`, t('item_photo_before_check_msg'), [
+                                        { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(item); setShowPhotos(true) } },
+                                        { text: t('cancel'), style: 'cancel' },
+                                      ])
+                                      return
+                                    }
+                                    setChecked(prev => ({ ...prev, [item.id]: newVal }))
+                                    saveCheckItem(item, newVal)
+                                  }} style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 }}>
+                                    <View style={[styles.checkbox, checked[item.id] && styles.checkboxDone]}>
+                                      {checked[item.id] && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                      <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.labelKey ? t(item.labelKey) : item.title}</Text>
+                                      {item.requires_photo && !itemPhotos[item.id] && (
+                                        <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>{t('photo_required_short')}</Text>
+                                      )}
+                                    </View>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    style={[styles.itemPhotoBtn, itemPhotos[item.id] > 0 && styles.itemPhotoBtnDone, item.requires_photo && !itemPhotos[item.id] && { borderColor: TEAL, borderWidth: 1.5 }]}
+                                    onPress={() => { setActivePhotoItem(item); setShowPhotos(true) }}
+                                  >
+                                    <Text style={styles.itemPhotoBtnText}>{itemPhotos[item.id] > 0 ? `📷 ${itemPhotos[item.id]}` : item.requires_photo ? '📷!' : '📷'}</Text>
+                                  </TouchableOpacity>
+                                </View>
+                              )
+                            })}
+                            {st.req.total > 0 && st.req.done < st.req.total && (
+                              <TouchableOpacity onPress={() => setShowPhotos(true)} style={{ marginTop: 4 }}>
+                                <Text style={{ fontSize: 11, color: '#7C3AED', fontWeight: '700' }}>
+                                  📷 {ti(t('room_photos_to_go'), { n: String(st.req.total - st.req.done) })} →
+                                </Text>
+                              </TouchableOpacity>
+                            )}
+                            {g.mode === 'room_complete' && g.key !== '__other__' && (
+                              st.signed ? (
+                                <Text style={{ fontSize: 12, color: '#059669', fontWeight: '800', marginTop: 6 }}>✓ {t('room_signed_off')}</Text>
+                              ) : (
+                                <TouchableOpacity disabled={st.req.done < st.req.total} onPress={() => signOffRoom(g.key)}
+                                  style={{ marginTop: 6, borderRadius: 10, paddingVertical: 9, alignItems: 'center',
+                                    backgroundColor: st.req.done < st.req.total ? '#E5E7EB' : '#10B981' }}>
+                                  <Text style={{ color: st.req.done < st.req.total ? '#6B7280' : '#fff', fontSize: 13, fontWeight: '800' }}>
+                                    {st.req.done < st.req.total
+                                      ? `📷 ${ti(t('room_photos_to_go'), { n: String(st.req.total - st.req.done) })}`
+                                      : `✓ ${t('complete_room_btn')}`}
+                                  </Text>
+                                </TouchableOpacity>
+                              )
+                            )}
+                          </View>
+                        )}
+                      </View>
+                    )
+                  })}
+                  {checklist.some((i: any) => i.result === 'issue') && (
+                    <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 4 }}>{t('issue_blocks_note')}</Text>
+                  )}
+                </View>
+              )
+            })()}
           </View>
         )}
 
