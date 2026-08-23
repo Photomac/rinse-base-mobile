@@ -65,6 +65,18 @@ export const translations = {
     complete_job: 'Complete', job_completed: 'Job completed', total_time: 'Total time',
     time_tracker: 'Time tracker', active_since: 'Active since', paused: 'Paused', session: 'Session',
     cleaning_checklist: 'Cleaning checklist', notes_optional: 'Notes (optional)',
+    turnover_rooms_done: 'Rooms',
+    verify_ok: 'OK',
+    verify_issue: 'Issue',
+    verify_na: 'N/A',
+    verify_hint: 'Checks — confirm each one works',
+    issue_note_ph: "What's wrong? e.g. No hot water",
+    report_issue_btn: 'Report',
+    issue_blocks_note: 'Issues are sent to the office — they hold guest-ready, not your completion.',
+    complete_room_btn: 'Complete room',
+    room_signed_off: 'Room signed off',
+    room_photos_to_go: '{n} photo(s) to go in this room',
+    room_standards_hint: 'Work to the standard below, then sign the room off.',
     notes_placeholder: 'Any issues or observations...', job_photos: 'Job Photos',
     complete_job_confirm: 'Complete job?', checklist_incomplete: 'Checklist incomplete',
     checklist_incomplete_msg: 'Complete all items before marking done.',
@@ -505,6 +517,18 @@ export const translations = {
     complete_job: 'Completar', job_completed: 'Trabajo completado', total_time: 'Tiempo total',
     time_tracker: 'Control de tiempo', active_since: 'Activo desde', paused: 'Pausado', session: 'Sesión',
     cleaning_checklist: 'Lista de limpieza', notes_optional: 'Notas (opcional)',
+    turnover_rooms_done: 'Habitaciones',
+    verify_ok: 'OK',
+    verify_issue: 'Problema',
+    verify_na: 'N/A',
+    verify_hint: 'Verificaciones — confirma que cada una funciona',
+    issue_note_ph: '¿Qué pasa? p. ej. No hay agua caliente',
+    report_issue_btn: 'Reportar',
+    issue_blocks_note: 'Los problemas se envían a la oficina — detienen el "listo para huéspedes", no tu trabajo.',
+    complete_room_btn: 'Completar habitación',
+    room_signed_off: 'Habitación completada',
+    room_photos_to_go: 'Falta(n) {n} foto(s) en esta habitación',
+    room_standards_hint: 'Trabaja según el estándar de abajo y luego confirma la habitación.',
     notes_placeholder: 'Problemas u observaciones...', job_photos: 'Fotos del trabajo',
     complete_job_confirm: 'Completar trabajo?', checklist_incomplete: 'Lista incompleta',
     checklist_incomplete_msg: 'Completa todos los elementos antes de terminar.',
@@ -944,6 +968,18 @@ export const translations = {
     complete_job: 'Concluir', job_completed: 'Serviço concluído', total_time: 'Tempo total',
     time_tracker: 'Controle de tempo', active_since: 'Ativo desde', paused: 'Pausado', session: 'Sessão',
     cleaning_checklist: 'Checklist de limpeza', notes_optional: 'Notas (opcional)',
+    turnover_rooms_done: 'Cômodos',
+    verify_ok: 'OK',
+    verify_issue: 'Problema',
+    verify_na: 'N/A',
+    verify_hint: 'Verificações — confirme que cada uma funciona',
+    issue_note_ph: 'O que houve? ex.: Sem água quente',
+    report_issue_btn: 'Reportar',
+    issue_blocks_note: 'Problemas vão para o escritório — seguram o "pronto para hóspedes", não a sua conclusão.',
+    complete_room_btn: 'Concluir cômodo',
+    room_signed_off: 'Cômodo concluído',
+    room_photos_to_go: 'Falta(m) {n} foto(s) neste cômodo',
+    room_standards_hint: 'Trabalhe conforme o padrão abaixo e depois confirme o cômodo.',
     notes_placeholder: 'Problemas ou observações...', job_photos: 'Fotos do serviço',
     complete_job_confirm: 'Concluir serviço?', checklist_incomplete: 'Checklist incompleto',
     checklist_incomplete_msg: 'Complete todos os itens antes de finalizar.',
@@ -1327,7 +1363,12 @@ export type TranslationKey = keyof typeof translations.en
 
 // Supports {{variable}} interpolation: ti(t(lang, 'save_trip_title'), { miles: '3.2' })
 export function ti(template: string, vars: Record<string, string>): string {
-  return Object.entries(vars).reduce((str, [k, v]) => str.replace(`{{${k}}}`, v), template)
+  // Accept both {{var}} and {var} — several shipped strings use single braces.
+  let out = template
+  for (const [k, v] of Object.entries(vars)) {
+    out = out.split('{{' + k + '}}').join(v).split('{' + k + '}').join(v)
+  }
+  return out
 }
 
 export function t(lang: Language, key: TranslationKey): string {
