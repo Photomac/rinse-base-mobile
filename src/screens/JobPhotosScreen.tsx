@@ -45,9 +45,6 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
   const [noteFor, setNoteFor] = useState<any | null>(null)
   const [noteText, setNoteText] = useState('')
   const [savingNote, setSavingNote] = useState(false)
-  // The owner's named shot list for this property + which shots are already in.
-  const [reqs, setReqs] = useState<any[]>([])
-  const [shotByReq, setShotByReq] = useState<Record<string, string>>({})
 
   const addr = job.client_addresses as any
   const client = job.clients as any
@@ -55,21 +52,10 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
 
   useEffect(() => {
     loadPhotos()
-    loadRequirements()
     // Opening the screen in coverage drains any photos captured earlier offline.
     flushQueue().then(({ uploaded }) => { if (uploaded > 0) loadPhotos() }).catch(() => {})
       .finally(() => { pendingStatus().then(setPending).catch(() => {}) })
   }, [])
-
-  async function loadRequirements() {
-    if (!addressId) return
-    const { data } = await supabase
-      .from('property_photo_requirements')
-      .select('id, area_name, section, required, sort_order')
-      .eq('address_id', addressId)
-      .order('sort_order')
-    setReqs(data ?? [])
-  }
 
   async function loadPhotos() {
     setLoading(true)
@@ -78,51 +64,13 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
       .select('*')
       .eq('job_id', job.id)
       .order('created_at', { ascending: false })
-    const rows = data ?? []
-    setPhotos(rows)
-    // Newest-first ordering above means the first hit per requirement is the
-    // latest shot — a retake replaces the thumbnail.
-    const map: Record<string, string> = {}
-    for (const p of rows as any[]) {
-      if (p.photo_requirement_id && !map[p.photo_requirement_id]) map[p.photo_requirement_id] = p.photo_url
-    }
-    setShotByReq(map)
+    setPhotos(data ?? [])
     setLoading(false)
   }
 
-  // Shoot against a named requirement. Tagged with photo_requirement_id (the
-  // only thing the gate accepts) and typed 'after' so one capture also clears
-  // the baseline after-photo rule.
-  async function takeRequiredPhoto(req: any) {
-    if (await ensureCameraCapture() !== 'granted') return
-    try {
-      const result = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false })
-      if (result.canceled) return
-      setUploading(true)
-      try {
-        await enqueuePhoto({
-          uri: result.assets[0].uri,
-          tenant_id: user.tenant_id,
-          job_id: job.id,
-          user_id: user.id,
-          photo_type: 'after',
-          caption: req.area_name,
-          photo_requirement_id: req.id,
-          visible_to_client: true,
-        })
-        const flushed = await flushQueue()
-        setPending({ count: flushed.remaining, serverRejected: flushed.serverRejected, lastServerError: flushed.lastServerError })
-        loadPhotos()
-        if (flushed.remaining > 0 && flushed.serverRejected === 0) {
-          Alert.alert(`📥 ${t('photo_saved_offline_title')}`, t('photo_saved_offline_msg'))
-        }
-      } catch (e: any) {
-        Alert.alert(t('upload_failed'), e.message || t('could_not_upload'))
-      }
-      setUploading(false)
-    } catch { /* permission race / camera unavailable — no crash */ }
-  }
-
+  // Required-shot capture LEFT this screen 2026-08-24 — evidence is taken
+  // inside its room on the Turnover checklist (JobDetailScreen), one home not
+  // two. This screen is job-level photos only: before/after/general/damage.
 
   async function takePhoto() {
     // ensureCameraCapture prompts (camera + iOS photo roll), or shows a
@@ -288,23 +236,6 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
     ])
   }
 
-  // Required-shot progress. Optional shots are shown but never counted against
-  // the crew — only `required` rows gate completion.
-  const requiredReqs = reqs.filter(r => r.required)
-  const requiredTotal = requiredReqs.length
-  const requiredDone = requiredReqs.filter(r => shotByReq[r.id]).length
-  const requiredRemaining = requiredTotal - requiredDone
-
-  // Group by the owner's section, preserving sort_order within each. Manual
-  // "+ Add area" rows have section=null and fall under General.
-  const reqSections: { name: string; items: any[] }[] = []
-  for (const r of reqs) {
-    const name = r.section || 'General'
-    let s = reqSections.find(x => x.name === name)
-    if (!s) { s = { name, items: [] }; reqSections.push(s) }
-    s.items.push(r)
-  }
-
   const beforePhotos  = photos.filter(p => p.photo_type === 'before')
   const afterPhotos   = photos.filter(p => p.photo_type === 'after')
   const damagePhotos  = photos.filter(p => p.photo_type === 'issue' || p.photo_type === 'damage')
@@ -358,54 +289,6 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
             <Text style={{ fontSize: 11, fontWeight: '700', color: pending.serverRejected > 0 ? '#991B1B' : '#854D0E' }}>↻</Text>
           </TouchableOpacity>
         )}
-        {/* Required shots — the owner's named list for this property. Sits above
-            free-form capture because it's the work the crew is actually
-            accountable for; free-form before/after stays available below. */}
-        {reqs.length > 0 && (
-          <View style={styles.reqCard}>
-            <View style={styles.reqHeader}>
-              <Text style={styles.reqTitle}>📋 {t('required_photos')}</Text>
-              <Text style={[styles.reqCount, requiredRemaining === 0 && { color: '#166534' }]}>
-                {requiredRemaining === 0
-                  ? `✓ ${t('all_required_done')}`
-                  : ti(t('required_photos_left'), { done: String(requiredDone), total: String(requiredTotal) })}
-              </Text>
-            </View>
-            {reqSections.map(section => (
-              <View key={section.name} style={{ marginTop: 8 }}>
-                <Text style={styles.reqSectionLabel}>{section.name}</Text>
-                {section.items.map((req: any) => {
-                  const shot = shotByReq[req.id]
-                  const missing = req.required && !shot
-                  return (
-                    <TouchableOpacity
-                      key={req.id}
-                      onPress={() => takeRequiredPhoto(req)}
-                      disabled={uploading}
-                      style={[
-                        styles.reqRow,
-                        shot ? styles.reqRowDone : missing ? styles.reqRowMissing : null,
-                      ]}>
-                      {shot
-                        ? <Image source={{ uri: shot }} style={styles.reqThumb} />
-                        : <View style={[styles.reqThumb, styles.reqThumbEmpty]}><Text style={{ fontSize: 13, opacity: 0.5 }}>📷</Text></View>}
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.reqName}>
-                          {req.area_name}
-                          {!req.required && <Text style={styles.reqOptional}> · {t('optional_photo')}</Text>}
-                        </Text>
-                      </View>
-                      <Text style={[styles.reqAction, shot && { color: '#6B7280' }]}>
-                        {shot ? t('retake_photo') : t('take_photo')}
-                      </Text>
-                    </TouchableOpacity>
-                  )
-                })}
-              </View>
-            ))}
-          </View>
-        )}
-
         {/* Photo type selector */}
         <View style={styles.typeRow}>
           {PHOTO_TYPES.map(pt => (
