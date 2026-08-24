@@ -14,6 +14,8 @@ interface Props {
   job: any
   user: any
   onBack: () => void
+  /** Opened from a room's Restock task — that room's section renders first. */
+  focusRoomId?: string
 }
 
 interface Item {
@@ -22,6 +24,17 @@ interface Item {
   category: string | null
   par_level: number | null
   unit: string | null
+  room_id: string | null
+}
+
+// Same display-name derivation as the JobDetailScreen room accordion.
+function roomLabel(rm: any): string {
+  return (rm.name || '').trim() || (
+    rm.room_type === 'bedroom' ? (rm.instance_no === 1 ? 'Primary Bedroom' : `Bedroom ${rm.instance_no}`)
+    : rm.room_type === 'bathroom' ? `Bathroom ${rm.instance_no}`
+    : rm.room_type === 'final' ? 'Final Guest-Ready Check'
+    : rm.room_type === 'living' ? 'Living Room'
+    : rm.room_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) + (rm.instance_no > 1 ? ` ${rm.instance_no}` : ''))
 }
 
 // qty_remaining is the cycle-count value entered at end of clean. NULL means
@@ -30,7 +43,7 @@ interface Item {
 // below par, so crew don't need to mark it themselves on counted items.
 type LogState = Record<string, { qty_used: number; qty_remaining: string; needs_restock: boolean; notes: string }>
 
-export function JobInventoryScreen({ job, user, onBack }: Props) {
+export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   const { t } = useLang()
   const addrId = (job.client_addresses as any)?.id || job.address_id
   // Prefer the logged-in crew's tenant_id — the dashboard query doesn't
@@ -40,6 +53,7 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
   const tenantId = user?.tenant_id || job.tenant_id
 
   const [items, setItems] = useState<Item[]>([])
+  const [rooms, setRooms] = useState<any[]>([])
   const [log, setLog] = useState<LogState>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -49,17 +63,23 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
 
   async function load() {
     setLoading(true)
-    const [invRes, logRes] = await Promise.all([
+    const [invRes, logRes, roomsRes] = await Promise.all([
       supabase.from('address_inventory')
-        .select('id, item_name, category, par_level, unit')
+        .select('id, item_name, category, par_level, unit, room_id')
         .eq('address_id', addrId)
         .order('category', { nullsFirst: false })
         .order('item_name'),
       supabase.from('job_inventory_log')
         .select('inventory_id, qty_used, qty_remaining, needs_restock, notes')
         .eq('job_id', job.id),
+      supabase.from('property_rooms')
+        .select('id, room_type, instance_no, name, sort_order')
+        .eq('address_id', addrId)
+        .is('archived_at', null)
+        .order('sort_order'),
     ])
     setItems(invRes.data ?? [])
+    setRooms(roomsRes.data ?? [])
     const map: LogState = {}
     ;(logRes.data ?? []).forEach((l: any) => {
       map[l.inventory_id] = {
@@ -126,12 +146,32 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
     setTimeout(() => setSaved(false), 2200)
   }
 
-  const grouped = items.reduce<Record<string, Item[]>>((acc, it) => {
+  // Room-scoped items group under their room (like the checklist accordion);
+  // an item pointing at an archived/missing room falls back to whole-property.
+  // Linens keep their own packed section regardless of room assignment.
+  const roomIdSet = new Set(rooms.map((r: any) => r.id))
+  const roomOf = (i: Item) => (i.room_id && roomIdSet.has(i.room_id) ? i.room_id : null)
+  const roomSectionsRaw = rooms
+    .map((rm: any) => ({ key: rm.id as string, title: roomLabel(rm), isLinen: false, items: items.filter(i => i.category !== 'Linens' && roomOf(i) === rm.id) }))
+    .filter(s => s.items.length > 0)
+  // Opened from a room's Restock task → that room's section renders first.
+  const roomSections = focusRoomId
+    ? [...roomSectionsRaw.filter(s => s.key === focusRoomId), ...roomSectionsRaw.filter(s => s.key !== focusRoomId)]
+    : roomSectionsRaw
+  const catItems = items.filter(i => i.category === 'Linens' || roomOf(i) === null)
+  const grouped = catItems.reduce<Record<string, Item[]>>((acc, it) => {
     const key = it.category || 'Other'
     if (!acc[key]) acc[key] = []
     acc[key].push(it)
     return acc
   }, {})
+  const catSections = Object.entries(grouped).map(([cat, rows]) => ({
+    key: `cat:${cat}`,
+    title: roomSections.length > 0 && cat !== 'Linens' ? `${t('whole_property')} · ${cat}` : cat,
+    isLinen: cat === 'Linens',
+    items: rows,
+  }))
+  const sections = [...roomSections, ...catSections]
   // Mirror the DB trigger logic so the banner is accurate before save:
   // count anything manually flagged OR cycle-counted below par.
   function isBelowPar(item: Item, row: { qty_remaining: string }): boolean {
@@ -171,16 +211,17 @@ export function JobInventoryScreen({ job, user, onBack }: Props) {
             </View>
           )}
 
-          {Object.entries(grouped).map(([cat, rows]) => {
+          {sections.map(sec => {
             // Linens are tracked as PACKED (par + packed count) rather than the
             // supplies count-left/used/low — mirrors the web job panel.
-            const isLinen = cat === 'Linens'
+            const isLinen = sec.isLinen
+            const rows = sec.items
             const linenPar = isLinen ? rows.filter(r => (r.par_level ?? 0) > 0) : []
             const linenPacked = linenPar.filter(r => (log[r.id]?.qty_used || 0) >= (r.par_level ?? 0)).length
             return (
-            <View key={cat} style={styles.categoryCard}>
+            <View key={sec.key} style={styles.categoryCard}>
               <Text style={styles.categoryHeader}>
-                {isLinen ? `🧺 ${t('linens')}` : cat}
+                {isLinen ? `🧺 ${t('linens')}` : sec.title}
                 {isLinen && linenPar.length > 0 ? `   ${ti(t('packed_tally'), { n: String(linenPacked), m: String(linenPar.length) })}` : ''}
               </Text>
               {rows.map(item => {

@@ -135,7 +135,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [showPhotos, setShowPhotos] = useState(false)
-  const [showInventory, setShowInventory] = useState(false)
+  // true = plain open; { roomId } = opened from a room's Restock task, the
+  // supplies screen fronts that room's section.
+  const [showInventory, setShowInventory] = useState<boolean | { roomId: string }>(false)
   const [showMessages, setShowMessages] = useState(false)
   const [showLaundry, setShowLaundry] = useState(false)
   const [showInspection, setShowInspection] = useState(false)
@@ -1128,7 +1130,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const progressPct = Math.round((completedCount / checklist.length) * 100)
 
   if (showMessages) return <MessagesScreen job={job} user={user} onBack={() => setShowMessages(false)} />
-  if (showInventory) return <JobInventoryScreen job={job} user={user} onBack={() => setShowInventory(false)} />
+  if (showInventory) return <JobInventoryScreen job={job} user={user} focusRoomId={typeof showInventory === 'object' ? showInventory.roomId : undefined} onBack={() => setShowInventory(false)} />
   if (showLaundry) return <LaundryRunScreen job={job} user={user} onBack={() => setShowLaundry(false)} />
   if (showInspection) return (
     <JobInspectionScreen
@@ -1603,6 +1605,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                                       )}
                                     </View>
                                   </TouchableOpacity>
+                                  {/* Generated "Restock…" tasks jump to this room's supplies */}
+                                  {/^restock/i.test((item.title || '').trim()) && item.room_uid && (
+                                    <TouchableOpacity style={styles.itemPhotoBtn} onPress={() => setShowInventory({ roomId: item.room_uid })}>
+                                      <Text style={styles.itemPhotoBtnText}>📦</Text>
+                                    </TouchableOpacity>
+                                  )}
                                   <TouchableOpacity
                                     style={[styles.itemPhotoBtn, itemPhotos[item.id] > 0 && styles.itemPhotoBtnDone, item.requires_photo && !itemPhotos[item.id] && { borderColor: TEAL, borderWidth: 1.5 }]}
                                     onPress={() => { setActivePhotoItem(item); setShowPhotos(true) }}
