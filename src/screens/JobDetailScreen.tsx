@@ -14,6 +14,7 @@ import { PhotoViewer } from '../components/PhotoViewer'
 import { IncidentReportCard } from '../components/IncidentReportCard'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
+import { captureRequiredPhoto } from '../lib/requiredPhotoCapture'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
@@ -147,7 +148,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // result from the seeded job rows. signoffs = job_room_signoffs for this job.
   const [roomsMeta, setRoomsMeta] = useState<any[]>([])
   const [signoffs, setSignoffs] = useState<Record<string, string>>({})
-  const [reqByRoom, setReqByRoom] = useState<Record<string, { total: number; done: number }>>({})
+  // Full evidence rows (property_photo_requirements + latest shot per req) —
+  // rendered inside their rooms; required-only counts derive from this.
+  const [evidence, setEvidence] = useState<any[]>([])
   const [openRooms, setOpenRooms] = useState<Record<string, boolean>>({})
   const [defaultMode, setDefaultMode] = useState<'detailed' | 'room_complete'>('detailed')
   const [issueForId, setIssueForId] = useState<string | null>(null)
@@ -552,9 +555,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           cachedQuery(`tenmode:${user.tenant_id}`, supabase.from('tenants')
             .select('checklist_execution_mode').eq('id', user.tenant_id)),
           cachedQuery(`preq:${addressId}`, supabase.from('property_photo_requirements')
-            .select('id, room_id, required').eq('address_id', addressId).eq('required', true)),
+            .select('id, room_id, required, area_name, sort_order')
+            .eq('address_id', addressId).order('sort_order')),
           cachedQuery(`pshot:${job.id}`, supabase.from('job_photos')
-            .select('photo_requirement_id').eq('job_id', job.id).not('photo_requirement_id', 'is', null)),
+            .select('photo_requirement_id, photo_url, created_at')
+            .eq('job_id', job.id).not('photo_requirement_id', 'is', null)
+            .order('created_at', { ascending: false })),
         ])
         setRoomsMeta(roomsRes.data || [])
         const signRows = await overlayPending('job_room_signoffs', signRes.data || [], v => v.job_id === job.id)
@@ -564,15 +570,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         const addrMode = (addrRes.data as any[])?.[0]?.checklist_execution_mode
         const tenMode = (tenRes.data as any[])?.[0]?.checklist_execution_mode
         setDefaultMode((addrMode || tenMode || 'detailed') as any)
-        const shotSet = new Set(((shotRes.data as any[]) || []).map(pp => pp.photo_requirement_id))
-        const rb: Record<string, { total: number; done: number }> = {}
-        for (const rq of ((reqRes.data as any[]) || [])) {
-          const k = rq.room_id || '__other__'
-          rb[k] = rb[k] || { total: 0, done: 0 }
-          rb[k].total += 1
-          if (shotSet.has(rq.id)) rb[k].done += 1
+        // Newest-first, so the first hit per requirement is the latest shot —
+        // a retake replaces the thumbnail.
+        const latestShot: Record<string, string> = {}
+        for (const pp of ((shotRes.data as any[]) || [])) {
+          if (!latestShot[pp.photo_requirement_id]) latestShot[pp.photo_requirement_id] = pp.photo_url
         }
-        setReqByRoom(rb)
+        setEvidence((((reqRes.data as any[]) || [])).map(rq => ({ ...rq, photo_url: latestShot[rq.id] || null })))
       } catch { /* accordion still renders from item.room text */ }
     }
     // A photo counts for an item via the canonical checklist_item_id link, or
@@ -620,6 +624,24 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     })
     if (error) { Alert.alert(t('error'), t('could_not_save')); return }
     setSignoffs(prev => ({ ...prev, [roomId]: new Date().toISOString() }))
+  }
+
+  // Evidence capture inside the room — shared path with the (former) Photos-
+  // screen shot list. Optimistic thumbnail from the local uri, so offline the
+  // room reads done immediately; the queue uploads when signal returns.
+  const [shootingId, setShootingId] = useState<string | null>(null)
+  async function shootEvidence(e: any) {
+    setShootingId(e.id)
+    const res = await captureRequiredPhoto(
+      { id: e.id, area_name: e.area_name },
+      { tenantId: user.tenant_id, jobId: job.id, userId: user.id },
+      t,
+    )
+    setShootingId(null)
+    if (res.status === 'captured' && res.localUri) {
+      setEvidence(prev => prev.map((x: any) => x.id === e.id ? { ...x, photo_url: res.localUri } : x))
+      loadPhotoRequirements()
+    }
   }
 
   async function saveCheckItem(item: any, isChecked: boolean) {
@@ -745,10 +767,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     Alert.alert(
       `📸 ${t('required_photos_title')}`,
       ti(t('required_photos_on_start'), { n: String(reqTotal - reqDone) }),
-      [
-        { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(null); setShowPhotos(true) } },
-        { text: t('ok') },
-      ]
+      [{ text: t('ok') }]
     )
   }
 
@@ -943,10 +962,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         Alert.alert(
           `📸 ${t('photo_required_alert')}`,
           `${t('required_area_photos_missing_msg')}\n\n• ${lines.join('\n• ')}`,
-          [
-            { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(null); setShowPhotos(true) } },
-            { text: t('cancel'), style: 'cancel' }
-          ]
+          [{ text: t('ok'), onPress: () => {
+            const opens: Record<string, boolean> = {}
+            for (const b of missingAreas) {
+              const ev = evidence.find((x: any) => x.id === b.requirement_id)
+              if (ev) opens[ev.room_id || '__other__'] = true
+            }
+            setOpenRooms(prev => ({ ...prev, ...opens }))
+          } }]
         )
         return
       }
@@ -1296,10 +1319,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {/* Carries the required-shot count so the obligation is visible for
               the whole clean, not sprung at completion. Amber while outstanding. */}
           <TouchableOpacity
-            style={[styles.photosBtn, reqTotal > 0 && reqDone < reqTotal && { borderColor: '#F59E0B' }]}
+            style={styles.photosBtn}
             onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
-            <Text style={[styles.photosBtnText, reqTotal > 0 && reqDone < reqTotal && { color: '#B45309' }]}>
-              📸 {t('job_photos')}{reqTotal > 0 ? ` (${reqDone}/${reqTotal})` : ''}
+            <Text style={styles.photosBtnText}>
+              📸 {t('job_photos')}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.suppliesBtn} onPress={() => setShowInventory(true)}>
@@ -1440,7 +1463,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 ;(g || other).items.push(item)
               }
               if (other.items.length > 0) groups.push(other)
-              const shown = groups.filter(g => g.items.length > 0 || (reqByRoom[g.key]?.total ?? 0) > 0)
+              const shown = groups.filter(g => g.items.length > 0 || evidence.some((e: any) => (e.room_id || '__other__') === g.key))
 
               const stateOf = (g: any) => {
                 const tasks = g.items.filter((i: any) => i.item_kind !== 'verify')
@@ -1448,7 +1471,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 const doneTasks = tasks.filter((i: any) => checked[i.id]).length
                 const answered = verifies.filter((i: any) => i.result != null || checked[i.id]).length
                 const issues = verifies.filter((i: any) => i.result === 'issue').length
-                const req = reqByRoom[g.key] || { total: 0, done: 0 }
+                const evRows = evidence.filter((e: any) => (e.room_id || '__other__') === g.key)
+                const evReq = evRows.filter((e: any) => e.required)
+                const req = { total: evReq.length, done: evReq.filter((e: any) => e.photo_url).length }
                 const signed = !!signoffs[g.key]
                 const workDone = g.mode === 'room_complete'
                   ? signed
@@ -1580,13 +1605,29 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                                 </View>
                               )
                             })}
-                            {st.req.total > 0 && st.req.done < st.req.total && (
-                              <TouchableOpacity onPress={() => setShowPhotos(true)} style={{ marginTop: 4 }}>
-                                <Text style={{ fontSize: 11, color: '#7C3AED', fontWeight: '700' }}>
-                                  📷 {ti(t('room_photos_to_go'), { n: String(st.req.total - st.req.done) })} →
-                                </Text>
-                              </TouchableOpacity>
-                            )}
+                            {/* Evidence — captured HERE, in the room it proves.
+                                The Photos screen is job-level shots only now. */}
+                            {evidence.filter((e: any) => (e.room_id || '__other__') === g.key).map((e: any) => (
+                              <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}>
+                                {e.photo_url
+                                  ? <Image source={{ uri: e.photo_url }} style={{ width: 34, height: 34, borderRadius: 6, backgroundColor: '#F3F4F6' }} />
+                                  : <View style={{ width: 34, height: 34, borderRadius: 6, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}><Text style={{ opacity: 0.5 }}>📷</Text></View>}
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.checkLabel}>
+                                    {e.area_name}
+                                    {!e.required && <Text style={{ color: '#9CA3AF', fontStyle: 'italic', fontSize: 11 }}> · {t('optional_photo')}</Text>}
+                                  </Text>
+                                </View>
+                                <TouchableOpacity onPress={() => shootEvidence(e)} disabled={shootingId === e.id}
+                                  style={{ paddingVertical: 5, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1,
+                                    borderColor: e.photo_url ? '#E5E7EB' : '#8B5CF6',
+                                    backgroundColor: e.photo_url ? '#fff' : '#F5F3FF' }}>
+                                  <Text style={{ fontSize: 11, fontWeight: '800', color: e.photo_url ? '#6B7280' : '#7C3AED' }}>
+                                    {shootingId === e.id ? '…' : e.photo_url ? t('retake_photo') : t('take_photo')}
+                                  </Text>
+                                </TouchableOpacity>
+                              </View>
+                            ))}
                             {g.mode === 'room_complete' && g.key !== '__other__' && (
                               st.signed ? (
                                 <Text style={{ fontSize: 12, color: '#059669', fontWeight: '800', marginTop: 6 }}>✓ {t('room_signed_off')}</Text>
