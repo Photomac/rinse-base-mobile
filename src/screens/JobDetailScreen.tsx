@@ -1290,48 +1290,55 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               </View>
             </View>
           )}
-          {/* Direct host contact only if the owner allows it; otherwise crew
-              reach dispatch (the office), keeping the company as the single
-              point of contact with the host. */}
-          {user._contact?.crewCanContactClient && client?.phone ? (
-            <TouchableOpacity style={styles.callBtn} onPress={() => Linking.openURL(`tel:${client.phone}`)}>
-              <Text style={styles.callBtnText}>📞 {t('call_client')} {client.full_name?.split(' ')[0]}</Text>
-            </TouchableOpacity>
-          ) : user._contact?.dispatchPhone ? (
-            <TouchableOpacity style={styles.callBtn} onPress={() => Linking.openURL(`tel:${user._contact.dispatchPhone}`)}>
-              <Text style={styles.callBtnText}>📞 {t('call_dispatch')}</Text>
-            </TouchableOpacity>
-          ) : null}
-          {isLaundry ? (
+          {/* Job-type primary action keeps its full-width button — a laundry
+              run IS the form, an inspection IS the form. Everything else is a
+              compact chip row: four tall buttons used to sit between the crew
+              and the checklist, so the work started below the fold (Todd,
+              on-device 2026-08-24). Photos/Supplies are secondary by design
+              now — evidence is captured inside the rooms. */}
+          {isLaundry && (
             <TouchableOpacity style={[styles.suppliesBtn, { borderColor: TEAL }]} onPress={() => setShowLaundry(true)}>
               <Text style={[styles.suppliesBtnText, { color: TEAL }]}>🧺 {t('laundry_form')}</Text>
             </TouchableOpacity>
-          ) : isInspection ? (<>
-          <TouchableOpacity style={[styles.suppliesBtn, { borderColor: GOLD }]} onPress={() => setShowInspection(true)}>
-            <Text style={[styles.suppliesBtnText, { color: GOLD }]}>🔍 {t('insp_open')}</Text>
-          </TouchableOpacity>
-          {/* §7.10 — an inspection's evidence is photographic, so the crew needs
-              the camera here even though every other task type hides it. */}
-          <TouchableOpacity style={styles.photosBtn} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
-            <Text style={styles.photosBtnText}>📸 {t('job_photos')}</Text>
-          </TouchableOpacity>
-          </>) : !isTask ? (<>
-          {/* Carries the required-shot count so the obligation is visible for
-              the whole clean, not sprung at completion. Amber while outstanding. */}
-          <TouchableOpacity
-            style={styles.photosBtn}
-            onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
-            <Text style={styles.photosBtnText}>
-              📸 {t('job_photos')}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.suppliesBtn} onPress={() => setShowInventory(true)}>
-            <Text style={styles.suppliesBtnText}>📦 {t('supplies')}</Text>
-          </TouchableOpacity>
-          </>) : null}
-          <TouchableOpacity style={styles.messagesBtn} onPress={() => setShowMessages(true)}>
-            <Text style={styles.messagesBtnText}>💬 {t('messages')}</Text>
-          </TouchableOpacity>
+          )}
+          {isInspection && (
+            <TouchableOpacity style={[styles.suppliesBtn, { borderColor: GOLD }]} onPress={() => setShowInspection(true)}>
+              <Text style={[styles.suppliesBtnText, { color: GOLD }]}>🔍 {t('insp_open')}</Text>
+            </TouchableOpacity>
+          )}
+          <View style={styles.actionRow}>
+            {/* Direct host contact only if the owner allows it; otherwise crew
+                reach dispatch — the company stays the single point of contact. */}
+            {user._contact?.crewCanContactClient && client?.phone ? (
+              <TouchableOpacity style={styles.actionChip} onPress={() => Linking.openURL(`tel:${client.phone}`)}>
+                <Text style={styles.actionChipIcon}>📞</Text>
+                <Text style={styles.actionChipLabel} numberOfLines={1}>{client.full_name?.split(' ')[0]}</Text>
+              </TouchableOpacity>
+            ) : user._contact?.dispatchPhone ? (
+              <TouchableOpacity style={styles.actionChip} onPress={() => Linking.openURL(`tel:${user._contact.dispatchPhone}`)}>
+                <Text style={styles.actionChipIcon}>📞</Text>
+                <Text style={styles.actionChipLabel} numberOfLines={1}>{t('call_dispatch')}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {/* §7.10 — inspections keep the camera even though other task
+                types hide it; cleans keep it for before/after/damage. */}
+            {(!isTask || isInspection) && (
+              <TouchableOpacity style={styles.actionChip} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
+                <Text style={styles.actionChipIcon}>📸</Text>
+                <Text style={styles.actionChipLabel} numberOfLines={1}>{t('job_photos')}</Text>
+              </TouchableOpacity>
+            )}
+            {!isTask && (
+              <TouchableOpacity style={styles.actionChip} onPress={() => setShowInventory(true)}>
+                <Text style={styles.actionChipIcon}>📦</Text>
+                <Text style={styles.actionChipLabel} numberOfLines={1}>{t('supplies')}</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={styles.actionChip} onPress={() => setShowMessages(true)}>
+              <Text style={styles.actionChipIcon}>💬</Text>
+              <Text style={styles.actionChipLabel} numberOfLines={1}>{t('messages')}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Time tracker card */}
@@ -1782,6 +1789,10 @@ const styles = StyleSheet.create({
   callBtnText: { color: '#15803D', fontSize: 13, fontWeight: '700' },
   messagesBtn: { marginTop: 8, backgroundColor: '#ECFDF5', borderWidth: 1, borderColor: '#6EE7B7', borderRadius: 10, padding: 12, alignItems: 'center' },
   messagesBtnText: { color: '#065F46', fontSize: 13, fontWeight: '700' },
+  actionRow: { flexDirection: 'row', gap: 6, marginTop: 10 },
+  actionChip: { flex: 1, alignItems: 'center', paddingVertical: 8, paddingHorizontal: 2, borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F9FAFB' },
+  actionChipIcon: { fontSize: 17 },
+  actionChipLabel: { fontSize: 10, fontWeight: '700', color: '#4B5563', marginTop: 2 },
   photosBtn: { marginTop: 8, backgroundColor: '#F5F3FF', borderWidth: 1, borderColor: '#DDD6FE', borderRadius: 10, padding: 12, alignItems: 'center' },
   photosBtnText: { color: '#7C3AED', fontSize: 13, fontWeight: '700' },
   suppliesBtn: { marginTop: 8, backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FCD34D', borderRadius: 10, padding: 12, alignItems: 'center' },
