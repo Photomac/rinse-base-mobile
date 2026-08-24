@@ -89,6 +89,7 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   // state), room by room. §7.9's point: a score is only fair against the
   // standard, so put the standard on the inspector's screen.
   const [standard, setStandard] = useState<any[]>([])
+  const [parentJob, setParentJob] = useState<any>(null)
   const [openStd, setOpenStd] = useState<Record<string, boolean>>({})
 
   const [layer, setLayer] = useState('supervisor')
@@ -123,8 +124,12 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
       setNotes(data.notes ?? '')
       if (data.parent_job_id) {
         // Best-effort — the form works without it (old cleans have no rooms).
-        const { data: std } = await supabase.rpc('job_turnover_checklist', { p_job_id: data.parent_job_id })
+        const [{ data: std }, { data: parent }] = await Promise.all([
+          supabase.rpc('job_turnover_checklist', { p_job_id: data.parent_job_id }),
+          supabase.from('jobs').select('completed_at, scheduled_start').eq('id', data.parent_job_id).maybeSingle(),
+        ])
         setStandard(std ?? [])
+        setParentJob(parent ?? null)
       }
     }
     setLoading(false)
@@ -246,6 +251,22 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
           <View style={{ marginTop: 4, marginBottom: 16 }}>
             <Text style={styles.label}>{t('insp_standard_title')}</Text>
             <Text style={styles.hint}>{t('insp_standard_hint')}</Text>
+            {/* WHICH clean is being judged — a property can have several cleans
+                a day (bulk-completed backlogs especially), and inspecting the
+                wrong one's empty checklist reads as a bug (Todd, 2026-08-24). */}
+            {parentJob?.completed_at && (
+              <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 6 }}>
+                {t('insp_parent_clean')} {new Date(parentJob.completed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+              </Text>
+            )}
+            {/* An untouched checklist is a FACT the inspector should weigh
+                (desk-completed clean, no recorded work) — say it, don't render
+                a silent wall of empty boxes. */}
+            {!standard.some((r: any) => r.item_id && (r.completed || r.result != null || (r.item_kind === 'evidence' && r.photo_url) || r.room_signed_off_at)) && (
+              <View style={{ backgroundColor: '#FEF3C7', borderColor: '#F59E0B', borderWidth: 1, borderRadius: 8, padding: 8, marginBottom: 6 }}>
+                <Text style={{ fontSize: 11, color: '#92400E', fontWeight: '700' }}>{t('insp_no_recorded_work')}</Text>
+              </View>
+            )}
             {(() => {
               const groups: any[] = []
               for (const r of standard) {
@@ -262,12 +283,16 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
                 const answered = g.items.filter((i: any) => i.item_kind !== 'evidence')
                 const doneN = answered.filter((i: any) => i.completed || i.result != null).length
                 const signed = !!g.items[0]?.room_signed_off_at
+                const evidNeeded = evid.filter((i: any) => i.level === 'evidence_required')
+                const roomDone = signed || (answered.length > 0
+                  && doneN === answered.length
+                  && evidNeeded.every((i: any) => i.photo_url))
                 const isOpen = !!openStd[g.key]
                 return (
                   <View key={g.key} style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, marginBottom: 5, overflow: 'hidden' }}>
                     <TouchableOpacity onPress={() => setOpenStd(prev => ({ ...prev, [g.key]: !isOpen }))}
                       style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 9, backgroundColor: '#F9FAFB' }}>
-                      <Text style={{ flex: 1, fontSize: 13, fontWeight: '800', color: '#111827' }} numberOfLines={1}>{g.name}</Text>
+                      <Text style={{ flex: 1, fontSize: 13, fontWeight: '800', color: roomDone ? '#059669' : '#111827' }} numberOfLines={1}>{roomDone ? '\u2713 ' : ''}{g.name}</Text>
                       {signed && <Text style={{ fontSize: 10, fontWeight: '800', color: '#059669' }}>{t('insp_std_signed')}</Text>}
                       {issues.length > 0 && <Text style={{ fontSize: 11, fontWeight: '800', color: '#DC2626' }}>⚠ {issues.length}</Text>}
                       <Text style={{ fontSize: 10, color: '#6B7280' }}>
