@@ -951,6 +951,25 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         return
       }
 
+      // Phase 3 (opt-in per tenant): items marked Required on the turnover
+      // checklist must be ticked (or their room signed off, or answered as an
+      // issue). List the rooms and pop them open — the work is on this screen.
+      const requiredLeft = blockers.filter((b: any) => b.code === 'unchecked_required_item')
+      if (requiredLeft.length > 0) {
+        const roomsLeft = [...new Set(requiredLeft.map((b: any) => b.room).filter(Boolean))] as string[]
+        const affected = checklist.filter((i: any) => requiredLeft.some((b: any) => b.checklist_item_id === i.jobItemId))
+        Alert.alert(
+          `☑️ ${t('required_items_missing_title')}`,
+          `${t('required_items_missing_msg')}\n\n• ${roomsLeft.join('\n• ')}`,
+          [{ text: t('ok'), onPress: () => {
+            const opens: Record<string, boolean> = {}
+            for (const i of affected) if (i.room_uid) opens[i.room_uid] = true
+            setOpenRooms(prev => ({ ...prev, ...opens }))
+          } }]
+        )
+        return
+      }
+
       // Laundry runs: cash reconciliation is required (and must tie out)
       // before the run can be completed — offer to open the laundry form.
       if (blockers.some((b: any) => b.code === 'laundry_cash_missing' || b.code === 'laundry_cash_mismatch')) {
