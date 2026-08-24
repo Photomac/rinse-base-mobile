@@ -84,6 +84,13 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   // True when filing this visit would pay nothing at all — see load().
   const [noPay, setNoPay] = useState(false)
 
+  // The parent clean's executed Turnover Checklist — the standard the crew
+  // worked to AND what they claim they did (ticks, verify answers, photo
+  // state), room by room. §7.9's point: a score is only fair against the
+  // standard, so put the standard on the inspector's screen.
+  const [standard, setStandard] = useState<any[]>([])
+  const [openStd, setOpenStd] = useState<Record<string, boolean>>({})
+
   const [layer, setLayer] = useState('supervisor')
   const [result, setResult] = useState('')
   const [corrections, setCorrections] = useState(false)
@@ -114,6 +121,11 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
       setCorrections(!!data.corrections_made)
       setMinutes(data.correction_minutes != null ? String(data.correction_minutes) : '')
       setNotes(data.notes ?? '')
+      if (data.parent_job_id) {
+        // Best-effort — the form works without it (old cleans have no rooms).
+        const { data: std } = await supabase.rpc('job_turnover_checklist', { p_job_id: data.parent_job_id })
+        setStandard(std ?? [])
+      }
     }
     setLoading(false)
   }
@@ -226,6 +238,72 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
           </Text>
           <Text style={styles.whySub}>{done ? t('insp_locked') : t('insp_not_completed')}</Text>
         </View>
+
+        {/* The parent clean's executed standard — what the crew signed off,
+            room by room (§7.9: a score is only fair against the standard).
+            Read-only; collapsed rooms; issues and missing photos surfaced. */}
+        {standard.some((r: any) => r.item_id) && (
+          <View style={{ marginTop: 4, marginBottom: 16 }}>
+            <Text style={styles.label}>{t('insp_standard_title')}</Text>
+            <Text style={styles.hint}>{t('insp_standard_hint')}</Text>
+            {(() => {
+              const groups: any[] = []
+              for (const r of standard) {
+                if (!r.item_id) continue
+                const key = r.room_id ?? '__other__'
+                let g = groups.find(x => x.key === key)
+                if (!g) { g = { key, name: r.room_name, items: [] }; groups.push(g) }
+                g.items.push(r)
+              }
+              return groups.map(g => {
+                const issues = g.items.filter((i: any) => i.result === 'issue')
+                const evid = g.items.filter((i: any) => i.item_kind === 'evidence')
+                const evidDone = evid.filter((i: any) => i.photo_url).length
+                const answered = g.items.filter((i: any) => i.item_kind !== 'evidence')
+                const doneN = answered.filter((i: any) => i.completed || i.result != null).length
+                const signed = !!g.items[0]?.room_signed_off_at
+                const isOpen = !!openStd[g.key]
+                return (
+                  <View key={g.key} style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, marginBottom: 5, overflow: 'hidden' }}>
+                    <TouchableOpacity onPress={() => setOpenStd(prev => ({ ...prev, [g.key]: !isOpen }))}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 9, backgroundColor: '#F9FAFB' }}>
+                      <Text style={{ flex: 1, fontSize: 13, fontWeight: '800', color: '#111827' }} numberOfLines={1}>{g.name}</Text>
+                      {signed && <Text style={{ fontSize: 10, fontWeight: '800', color: '#059669' }}>{t('insp_std_signed')}</Text>}
+                      {issues.length > 0 && <Text style={{ fontSize: 11, fontWeight: '800', color: '#DC2626' }}>⚠ {issues.length}</Text>}
+                      <Text style={{ fontSize: 10, color: '#6B7280' }}>
+                        {doneN}/{answered.length}{evid.length ? `  📷 ${evidDone}/${evid.length}` : ''}
+                      </Text>
+                      <Text style={{ color: '#9CA3AF' }}>{isOpen ? '▾' : '▸'}</Text>
+                    </TouchableOpacity>
+                    {isOpen && (
+                      <View style={{ padding: 9, paddingTop: 3 }}>
+                        {g.items.map((i: any) => {
+                          const icon = i.item_kind === 'evidence'
+                            ? (i.photo_url ? '📷' : '📷❗')
+                            : i.result === 'issue' ? '⚠'
+                            : i.result === 'na' ? '–'
+                            : (i.completed ? '✓' : '□')
+                          const color = i.result === 'issue' ? '#DC2626'
+                            : i.item_kind === 'evidence' && !i.photo_url ? '#B45309'
+                            : i.completed ? '#059669' : '#6B7280'
+                          return (
+                            <View key={i.item_id} style={{ flexDirection: 'row', gap: 7, paddingVertical: 2 }}>
+                              <Text style={{ width: 22, textAlign: 'center', color, fontSize: 12 }}>{icon}</Text>
+                              <Text style={{ flex: 1, fontSize: 12, color: '#374151' }}>
+                                {i.body}
+                                {i.result === 'issue' && i.issue_note ? ` — ${i.issue_note}` : ''}
+                              </Text>
+                            </View>
+                          )
+                        })}
+                      </View>
+                    )}
+                  </View>
+                )
+              })
+            })()}
+          </View>
+        )}
 
         {done ? (
           <View style={[styles.filedCard, { borderColor: RESULTS.find(r => r.id === rec.result)?.color ?? '#E2E8F0' }]}>
