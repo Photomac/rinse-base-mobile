@@ -21,9 +21,16 @@ export function LoginScreen() {
   const { t } = useLang()
 
   async function handleLogin() {
-    if (!email || !password) { Alert.alert(t('login_failed'), !email ? t('enter_email') : t('enter_password')); return }
+    // Trim the email the same way the reset paths below already do. iOS autofill
+    // and the keyboard suggestion bar both hand back a trailing space, and an
+    // untrimmed address fails as "Invalid login credentials" — indistinguishable
+    // from a wrong password, so the crew member retypes forever. A Cleanfix
+    // Squad cleaner hit exactly this on 2026-08-25: 12 rejected sign-ins from
+    // her iPhone while the same credentials worked on another handset.
+    const addr = email.trim()
+    if (!addr || !password) { Alert.alert(t('login_failed'), !addr ? t('enter_email') : t('enter_password')); return }
     setLoading(true)
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { error } = await supabase.auth.signInWithPassword({ email: addr, password })
     if (error) {
       // Supabase auth errors arrive in English — map the common ones so
       // Spanish-first crew get a readable reason, not a raw API string.
