@@ -15,6 +15,7 @@ import * as TaskManager from 'expo-task-manager'
 import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
+import { uuid4 } from './outbox'
 import { getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
 
@@ -213,12 +214,21 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
           : Infinity
         const speed = fix?.coords.speed ?? -1 // unknown reads as -1 → passes
         if (fix && dist <= RADIUS_M * 1.3 && speed < AUTO_MAX_SPEED_MPS) {
-          const { data: entry, error: insErr } = await supabase.from('job_time_entries').insert({
+          // Client-minted id + upsert, not a bare insert. This exact request has
+          // been delivered twice by the transport in production: Shine Whistler
+          // 2026-08-20, two rows 1.4ms apart carrying an identical clocked_in_at
+          // and GPS fix to 14 decimals, billing 410 minutes for a 205-minute
+          // clean. One handler run, one .insert(), a lost ack, two rows. Giving
+          // the row its id up front makes the replay land on the same row.
+          // This is the rule the manual punch and the whole outbox already
+          // follow — a time entry IS the crew member's pay.
+          const { data: entry, error: insErr } = await supabase.from('job_time_entries').upsert({
+            id: uuid4(),
             tenant_id: user.tenant_id, job_id: jobId, user_id: user.id,
             clocked_in_at: arrival.at, entry_type: 'work',
             source: 'auto', arrived_at: arrival.at,
             clock_in_lat: fix.coords.latitude, clock_in_lng: fix.coords.longitude,
-          }).select('id').single()
+          }, { onConflict: 'id' }).select('id').single()
           if (!insErr && entry) {
             await clearPendingArrival(jobId) // consumed — a manual punch must not double-enter
             // Mirror manual clock-in: the job is being worked now. Status guard
