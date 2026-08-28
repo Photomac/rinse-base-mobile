@@ -14,6 +14,7 @@ import { JobDetailScreen } from './src/screens/JobDetailScreen'
 import { SOSScreen } from './src/screens/SOSScreen'
 import { ChatListScreen, ChatScreen } from './src/screens/ChatScreens'
 import { registerPushToken } from './src/lib/notifications'
+import { reportClientVersion } from './src/lib/clientVersion'
 import { startLocationTracking, stopLocationTracking } from './src/lib/locationTracker'
 // Side-effect import also registers the SOS ping TaskManager task at bundle
 // eval, so a headless OS relaunch mid-emergency finds the handler.
@@ -113,6 +114,8 @@ function AppInner() {
     if (effective) {
       setErrorContext({ tenantId: effective.tenant_id, email: effective.email, role: effective.role })
       registerPushToken(effective).catch(console.warn)
+      // Which bundle is this device on? Answers "did this OTA land here".
+      reportClientVersion().catch(console.warn)
       startLocationTracking(effective).catch(console.warn)
       // An SOS that outlived the process (app killed, phone rebooted) keeps
       // trailing; one resolved while we were dead clears itself instead.
