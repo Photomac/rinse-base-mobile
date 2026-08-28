@@ -1140,7 +1140,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       onFiled={finishFiledInspection}
     />
   )
-  if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
+  if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} requiredOutstanding={Math.max(0, reqTotal - reqDone)} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
