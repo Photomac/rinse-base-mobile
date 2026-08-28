@@ -25,9 +25,13 @@ interface Props {
   user: any
   onBack: () => void
   preselectedItem?: any
+  /** Named property shots this job still owes. Photos taken on THIS screen do
+   *  not satisfy them — see the banner. Passed down rather than re-queried:
+   *  JobDetailScreen already resolves it, gated on the tenant's enforce flag. */
+  requiredOutstanding?: number
 }
 
-export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
+export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOutstanding = 0 }: Props) {
   const { t } = useLang()
   const [photos, setPhotos] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -266,6 +270,23 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
+        {/* A photo taken on this screen carries NO photo_requirement_id — only
+            captureRequiredPhoto() sets that, and it is reached from the room
+            checklist on the job screen. So a crew member can fill this screen
+            with pictures and still be refused completion for missing required
+            area photos. Measured on one account: 264 of 1,665 photos (16%)
+            across 22 jobs counted for nothing, and the crew member with the
+            most wasted shots was on this app, not the web. Say so here. */}
+        {requiredOutstanding > 0 && (
+          <TouchableOpacity onPress={onBack} style={styles.reqWarn} activeOpacity={0.7}>
+            <Text style={styles.reqWarnTitle}>
+              📷 {ti(t('photos_dont_count_title'), { n: String(requiredOutstanding) })}
+            </Text>
+            <Text style={styles.reqWarnBody}>{t('photos_dont_count_body')}</Text>
+            <Text style={styles.reqWarnCta}>← {t('photos_dont_count_cta')}</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Pending queue status — crew proof-of-work must never feel uncertain.
             Yellow = waiting on signal; red = the server is rejecting uploads
             (shows the error, so it's not mistaken for coverage). Tap retries. */}
@@ -422,6 +443,13 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem }: Props) {
 }
 
 const styles = StyleSheet.create({
+  // Violet, matching the required-shot affordance on the job screen this sends
+  // them back to — deliberately not the yellow/red used for upload trouble,
+  // because nothing here has failed; it just doesn't count.
+  reqWarn: { backgroundColor: '#F5F3FF', borderWidth: 1, borderColor: '#DDD6FE', borderRadius: 10, padding: 12, marginBottom: 10 },
+  reqWarnTitle: { fontSize: 14, fontWeight: '700', color: '#5B21B6', marginBottom: 3 },
+  reqWarnBody: { fontSize: 12, color: '#6D28D9', lineHeight: 17 },
+  reqWarnCta: { fontSize: 12, fontWeight: '700', color: '#7C3AED', marginTop: 7 },
   container: { flex: 1, backgroundColor: '#F8F9FA' },
   noteBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 24 },
   noteCard: { backgroundColor: '#fff', borderRadius: 16, padding: 18 },
