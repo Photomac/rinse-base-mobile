@@ -240,6 +240,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const isClockedIn = !!activeEntry && !isPaused
   // In daily mode there's no per-job timer, so "started" tracks job status instead.
   const isStarted = timeEntries.length > 0 || !!activeEntry || (dailyMode && (job.status === 'in_progress' || job.status === 'completed'))
+  // A clean that is in_progress with no open punch — the crew clocked out but
+  // the completion gate held the job open (a missing required area photo, say).
+  // Without this the job has NO control at all: Clock In is hidden by
+  // isStarted, Complete by isClockedIn, Resume by isPaused. It falls off the
+  // day at midnight and can never be closed from the phone again. Paused is
+  // deliberately excluded — pause closes the entry too, and that state already
+  // has its Resume action.
+  const isStrandedInProgress = job.status === 'in_progress' && !activeEntry && !isPaused
 
   useEffect(() => {
     // Drain queued offline writes first chance we get (same trigger set as the
@@ -1423,20 +1431,27 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 </TouchableOpacity>
               )}
               {isClockedIn && (
-                <>
-                  <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#F59E0B', flex: 1 }]} onPress={handlePause} disabled={saving}>
-                    <Text style={styles.clockBtnText}>⏸ {t('pause')}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#10B981', flex: 1 }]} onPress={() => {
-                    if (isInspection) { setShowInspection(true); return }
-                    Alert.alert(t('complete_job_confirm'), `${t('total_time')}: ${fmtDuration(elapsedMinutes)}`, [
+                <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#F59E0B', flex: 1 }]} onPress={handlePause} disabled={saving}>
+                  <Text style={styles.clockBtnText}>⏸ {t('pause')}</Text>
+                </TouchableOpacity>
+              )}
+              {(isClockedIn || isStrandedInProgress) && (
+                <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#10B981', flex: 1 }]} onPress={() => {
+                  if (isInspection) { setShowInspection(true); return }
+                  // elapsedMinutes is the sum of CLOSED entries once the timer
+                  // stops, so it stays accurate for a stranded job; only show
+                  // it when there is actually time on the clock.
+                  Alert.alert(
+                    t('complete_job_confirm'),
+                    elapsedMinutes > 0 ? `${t('total_time')}: ${fmtDuration(elapsedMinutes)}` : '',
+                    [
                       { text: t('cancel'), style: 'cancel' },
                       { text: t('complete_job'), onPress: completeJob }
-                    ])
-                  }} disabled={saving}>
-                    <Text style={styles.clockBtnText}>✓ {isInspection ? t('insp_complete') : t('complete_job')}</Text>
-                  </TouchableOpacity>
-                </>
+                    ],
+                  )
+                }} disabled={saving}>
+                  <Text style={styles.clockBtnText}>✓ {isInspection ? t('insp_complete') : t('complete_job')}</Text>
+                </TouchableOpacity>
               )}
               {isPaused && (
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={handleResume} disabled={saving}>
