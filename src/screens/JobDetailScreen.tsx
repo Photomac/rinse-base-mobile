@@ -503,8 +503,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // rows and the same `completed` flags, or the crew and the owner see
   // different checklists. A row EXISTING does not mean it's done; only
   // `completed = true` does. Templates are a fallback for jobs that were
-  // never seeded; the built-in default list covers properties with no
-  // template at all.
+  // never seeded. The built-in default list covers properties with no
+  // template — EXCEPT when the company runs with checklists off
+  // (tenants.default_checklist_seed = 'none'): an owner who deliberately
+  // cleared every checklist must not have crews working an invented list
+  // they can't see or edit.
   async function loadChecklistForAddress(addressId: string | null, quiet = false) {
     if (!quiet) setLoadingChecklist(true)
     const [tmplRes, rowsRes] = await Promise.all([
@@ -526,27 +529,28 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       v => v.job_id === job.id)
     let items: any[]
     const checkedMap: Record<string, boolean> = {}
-    if (rows.length > 0 && tmpl.length > 0) {
+    if (rows.length > 0) {
+      // The job has its own rows — render them as-is. Previously this branch
+      // also required a live template, so a job seeded from a template the
+      // owner later cleared fell through to the invented default list with
+      // the real rows appended after it.
       items = rows.map(r => ({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false, room_uid: r.room_id, item_kind: r.item_kind || 'task', level: r.level || 'guidance', result: r.result ?? null, issue_note: r.issue_note ?? null }))
       rows.forEach(r => { if (r.completed) checkedMap[r.id] = true })
     } else if (tmpl.length > 0) {
       // Template exists but this job was never seeded — ticks upsert rows.
       items = tmpl.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title, requires_photo: item.requires_photo || false }))
     } else {
-      // No template: default list, merged with any rows the crew already
-      // created so re-opening the job keeps the ticks.
-      const byKey = new Map(rows.map(r => [`${r.room}|${r.task}`, r]))
-      items = DEFAULT_CHECKLIST.map(d => {
-        const r = byKey.get(`${d.room}|${d.title}`)
-        if (r?.completed) checkedMap[d.id] = true
-        return { ...d, jobItemId: r?.id, requires_photo: r?.photo_required || false }
-      })
-      // Rows outside the default list (seeded from a since-deleted template)
-      // still show — the owner sees them too.
-      rows.filter(r => !DEFAULT_CHECKLIST.some(d => d.room === r.room && d.title === r.task)).forEach(r => {
-        items.push({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false })
-        if (r.completed) checkedMap[r.id] = true
-      })
+      // No rows, no template. Companies that deliberately run without
+      // checklists get an empty list; everyone else keeps the default.
+      // Fail-open to the default: offline or a fetch error must not strip a
+      // crew of the list they had yesterday.
+      let seedMode = 'generated'
+      try {
+        const { data: t } = await cachedQuery(`tenseed:${user.tenant_id}`, supabase.from('tenants')
+          .select('default_checklist_seed').eq('id', user.tenant_id).maybeSingle())
+        if ((t as any)?.default_checklist_seed) seedMode = (t as any).default_checklist_seed
+      } catch {}
+      items = seedMode === 'none' ? [] : DEFAULT_CHECKLIST.map(d => ({ ...d }))
     }
     setChecklist(items)
     setChecked(checkedMap)
@@ -1135,7 +1139,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   const completedCount = Object.values(checked).filter(Boolean).length
   const allChecked = checklist.every(i => checked[i.id])
-  const progressPct = Math.round((completedCount / checklist.length) * 100)
+  const progressPct = checklist.length ? Math.round((completedCount / checklist.length) * 100) : 0
 
   if (showMessages) return <MessagesScreen job={job} user={user} onBack={() => setShowMessages(false)} />
   if (showInventory) return <JobInventoryScreen job={job} user={user} focusRoomId={typeof showInventory === 'object' ? showInventory.roomId : undefined} onBack={() => setShowInventory(false)} />
@@ -1465,8 +1469,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         {/* Turnover checklist — cleans only; laundry runs use the reconciliation
             form. Phase 2: rooms accordion in the order the cleaner walks the
             house; DO ☐ / VERIFY ◇ / photos per room. Items with no room (old
-            jobs, template-less properties) group under "Other". */}
-        {isStarted && !isTask && (
+            jobs, template-less properties) group under "Other". Hidden
+            entirely when there is nothing to work — a company running with
+            checklists off must not see an empty "0/0" card. */}
+        {isStarted && !isTask && (checklist.length > 0 || evidence.length > 0 || loadingChecklist) && (
           <View style={styles.card}>
             {(() => {
               const groups: any[] = []
