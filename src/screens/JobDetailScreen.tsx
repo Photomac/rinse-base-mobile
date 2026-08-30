@@ -12,6 +12,7 @@ import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
 import { PhotoViewer } from '../components/PhotoViewer'
 import { IncidentReportCard } from '../components/IncidentReportCard'
+import { InspectionResultCard } from '../components/InspectionResultCard'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { captureRequiredPhoto } from '../lib/requiredPhotoCapture'
@@ -1742,6 +1743,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             <TextInput style={styles.notesInput} value={notes} onChangeText={setNotes} placeholder={t('notes_placeholder')} placeholderTextColor="#9CA3AF" multiline numberOfLines={3} />
           </View>
         )}
+
+        {/* Inspection results — what the inspector found on THIS clean, shown
+            to the cleaner who did it. Read-only, findings-not-scores; renders
+            nothing until an inspection is filed. */}
+        {job.status === 'completed' && !isTask && <InspectionResultCard job={job} />}
 
         {job.status === 'completed' && (
           <View style={styles.completedBanner}>

@@ -464,7 +464,21 @@ export const translations = {
     upd_failed_title: "Couldn't check for updates",
     upd_failed_msg: 'Check your connection and try again. ({{error}})',
     insp_unpaid_banner: 'This visit will pay nothing. Nobody clocked in, and the property has no inspection rate, so it is paid hourly on zero minutes. Clock in on the job screen first, or ask your manager to set a rate for this property.',
-    insp_unpaid_confirm: 'Heads up: nobody clocked in and there is no rate, so this visit pays nothing.'
+    insp_unpaid_confirm: 'Heads up: nobody clocked in and there is no rate, so this visit pays nothing.',
+    // Crew-facing inspection results (read-only card on a completed clean).
+    // Findings, never scores — Blueprint Ch.7 §7.9.
+    insp_results_title: 'Inspection results',
+    insp_results_by: 'Inspected by',
+    insp_results_passed_note: 'Nice work — this clean passed inspection.',
+    insp_results_corr_note: 'This clean passed after some corrections. Review what was adjusted below.',
+    insp_results_fail_note: 'The inspection found items to review. This is information to learn from, not a grade — check the notes and photos below.',
+    insp_results_corrections: 'Corrections were made during the inspection',
+    insp_results_findings: 'What was found',
+    insp_results_photos: 'Inspection photos',
+    sev_critical: 'Critical',
+    sev_major: 'Major',
+    sev_minor: 'Minor',
+    sev_observation: 'Observation'
   },
   es: {
     // Common
@@ -926,7 +940,19 @@ export const translations = {
     upd_failed_title: 'No se pudo buscar actualizaciones',
     upd_failed_msg: 'Revisa tu conexión e inténtalo de nuevo. ({{error}})',
     insp_unpaid_banner: 'Esta visita no pagará nada. Nadie marcó entrada y la propiedad no tiene tarifa de inspección, así que se paga por hora sobre cero minutos. Marca entrada primero en la pantalla del trabajo, o pide a tu gerente que fije una tarifa para esta propiedad.',
-    insp_unpaid_confirm: 'Aviso: nadie marcó entrada y no hay tarifa, así que esta visita no pagará nada.'
+    insp_unpaid_confirm: 'Aviso: nadie marcó entrada y no hay tarifa, así que esta visita no pagará nada.',
+    insp_results_title: 'Resultados de la inspección',
+    insp_results_by: 'Inspeccionado por',
+    insp_results_passed_note: '¡Buen trabajo! Esta limpieza aprobó la inspección.',
+    insp_results_corr_note: 'Esta limpieza aprobó después de algunas correcciones. Revisa abajo lo que se ajustó.',
+    insp_results_fail_note: 'La inspección encontró puntos por revisar. Es información para aprender, no una calificación — revisa las notas y fotos abajo.',
+    insp_results_corrections: 'Se hicieron correcciones durante la inspección',
+    insp_results_findings: 'Lo que se encontró',
+    insp_results_photos: 'Fotos de la inspección',
+    sev_critical: 'Crítico',
+    sev_major: 'Mayor',
+    sev_minor: 'Menor',
+    sev_observation: 'Observación'
   },
   pt: {
     // Common
@@ -1388,7 +1414,19 @@ export const translations = {
     upd_failed_title: 'Não foi possível buscar atualizações',
     upd_failed_msg: 'Verifique sua conexão e tente novamente. ({{error}})',
     insp_unpaid_banner: 'Esta visita não pagará nada. Ninguém bateu o ponto e a propriedade não tem tarifa de inspeção, então é paga por hora sobre zero minutos. Bata o ponto na tela do trabalho primeiro, ou peça à sua gerente para definir uma tarifa para esta propriedade.',
-    insp_unpaid_confirm: 'Atenção: ninguém bateu o ponto e não há tarifa, então esta visita não pagará nada.'
+    insp_unpaid_confirm: 'Atenção: ninguém bateu o ponto e não há tarifa, então esta visita não pagará nada.',
+    insp_results_title: 'Resultados da inspeção',
+    insp_results_by: 'Inspecionado por',
+    insp_results_passed_note: 'Bom trabalho — esta limpeza foi aprovada na inspeção.',
+    insp_results_corr_note: 'Esta limpeza foi aprovada após algumas correções. Veja abaixo o que foi ajustado.',
+    insp_results_fail_note: 'A inspeção encontrou itens para revisar. É informação para aprender, não uma nota — veja as anotações e fotos abaixo.',
+    insp_results_corrections: 'Foram feitas correções durante a inspeção',
+    insp_results_findings: 'O que foi encontrado',
+    insp_results_photos: 'Fotos da inspeção',
+    sev_critical: 'Crítico',
+    sev_major: 'Maior',
+    sev_minor: 'Menor',
+    sev_observation: 'Observação'
   }
 }
 
