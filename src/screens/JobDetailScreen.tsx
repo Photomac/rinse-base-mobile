@@ -170,15 +170,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [reqTotal, setReqTotal] = useState(0)
   const [reqDone, setReqDone] = useState(0)
   const [reqAnnounced, setReqAnnounced] = useState(false)
-  // When this job's shot list froze: the crew's first clock-in, from
-  // job_photo_requirement_cutoff(). A shot the owner adds AFTER the crew
-  // arrived does not block completion server-side, so it must not be counted
-  // as outstanding here either — a phone reading "12 left" on a clean the gate
-  // will close is the two-surfaces-disagree defect all over again.
-  // null / 'infinity' = nobody has clocked in yet, so the full current list
-  // applies; that is also what an RPC error or an older DB yields, which keeps
-  // this fail-open.
-  const [reqCutoff, setReqCutoff] = useState<string | null>(null)
+  // Exactly which requirements this job owes, straight from the DB
+  // (job_required_photo_ids): frozen at the crew's clock-in AND excluding rooms
+  // the owner archived. Recomputing either rule on the phone is what let the
+  // archived-room bug hide — the gate said one thing, this screen said another,
+  // and crews were asked for photos of rooms this screen will not even render.
+  // null = unknown (RPC error, or an older DB) and everything counts, fail-open.
+  const [owedReqs, setOwedReqs] = useState<Set<string> | null>(null)
 
   // Time tracking
   const [timeEntries, setTimeEntries] = useState<any[]>([])
@@ -191,15 +189,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
 
-  // Parsed to epoch millis, NEVER string-compared: Supabase returns '+00:00'
-  // offsets while the RPC can return the literal 'infinity', and lexical order
-  // on those two shapes is meaningless.
-  const cutoffMs = reqCutoff && reqCutoff !== 'infinity' ? Date.parse(reqCutoff) : NaN
-  const addedLater = (createdAt: string | null | undefined) => {
-    if (!Number.isFinite(cutoffMs) || !createdAt) return false
-    const made = Date.parse(createdAt)
-    return Number.isFinite(made) && made > cutoffMs
-  }
+  // Listed, shootable, but not outstanding for THIS clean — added after the
+  // crew clocked in, or on a room the owner archived.
+  const notOwed = (reqId: string, required: boolean) =>
+    !!owedReqs && required && !owedReqs.has(reqId)
 
   const { t } = useLang()
   const addr = job.client_addresses as any
@@ -487,35 +480,29 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       .eq('id', user.tenant_id).maybeSingle()
     if (!tenant?.enforce_photo_requirements) { setReqTotal(0); return }
 
-    // Rows, not a head-count: the list has to be filtered by the freeze cutoff
-    // and `done` counted only WITHIN the frozen-in set. Counting satisfied
-    // shots against the whole table would let a crew who photographed a
-    // late-added area push done past total and render a negative "left".
-    const [{ data: reqRows }, { data: shot }, { data: cutoffVal }] = await Promise.all([
+    // The DB decides what is owed. `done` is counted only WITHIN that set:
+    // counting satisfied shots against the whole property would let a crew who
+    // photographed a no-longer-owed area push done past total and render a
+    // negative "left".
+    const [{ data: reqRows }, { data: shot }, { data: owedRows }] = await Promise.all([
       supabase.from('property_photo_requirements')
-        .select('id, created_at')
+        .select('id')
         .eq('address_id', addrId).eq('required', true),
       supabase.from('job_photos')
         .select('photo_requirement_id')
         .eq('job_id', job.id).not('photo_requirement_id', 'is', null),
-      supabase.rpc('job_photo_requirement_cutoff', { p_job_id: job.id }),
+      supabase.rpc('job_required_photo_ids', { p_job_id: job.id }),
     ])
-    const cutoff = typeof cutoffVal === 'string' ? cutoffVal : null
-    setReqCutoff(cutoff)
-
-    const ms = cutoff && cutoff !== 'infinity' ? Date.parse(cutoff) : NaN
-    const inScope = (r: any) => {
-      if (!Number.isFinite(ms) || !r.created_at) return true
-      const made = Date.parse(r.created_at)
-      return !Number.isFinite(made) || made <= ms
-    }
-    const owed = (reqRows ?? []).filter(inScope)
-    const owedIds = new Set(owed.map((r: any) => r.id))
+    const owedIds = Array.isArray(owedRows)
+      ? new Set((owedRows as any[]).map(r => r.requirement_id))
+      // Fail-open: an older DB or a failed RPC counts every required row.
+      : new Set(((reqRows ?? []) as any[]).map(r => r.id))
+    setOwedReqs(Array.isArray(owedRows) ? (owedIds as Set<string>) : null)
     // Distinct requirements satisfied — two shots of the same area is still one.
     const done = new Set(
       (shot ?? []).map((p: any) => p.photo_requirement_id).filter((id: string) => owedIds.has(id))
     ).size
-    setReqTotal(owed.length)
+    setReqTotal(owedIds.size)
     setReqDone(done)
   }
 
@@ -1540,7 +1527,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 const answered = verifies.filter((i: any) => i.result != null || checked[i.id]).length
                 const issues = verifies.filter((i: any) => i.result === 'issue').length
                 const evRows = evidence.filter((e: any) => (e.room_id || '__other__') === g.key)
-                const evReq = evRows.filter((e: any) => e.required && !addedLater(e.created_at))
+                const evReq = evRows.filter((e: any) => e.required && !notOwed(e.id, e.required))
                 const req = { total: evReq.length, done: evReq.filter((e: any) => e.photo_url).length }
                 const signed = !!signoffs[g.key]
                 const workDone = g.mode === 'room_complete'
@@ -1690,7 +1677,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                                   <Text style={styles.checkLabel}>
                                     {e.area_name}
                                     {!e.required && <Text style={{ color: '#9CA3AF', fontStyle: 'italic', fontSize: 11 }}> · {t('optional_photo')}</Text>}
-                                    {e.required && addedLater(e.created_at) && <Text style={{ color: '#9CA3AF', fontStyle: 'italic', fontSize: 11 }}> · {t('photo_added_after_clean')}</Text>}
+                                    {notOwed(e.id, e.required) && <Text style={{ color: '#9CA3AF', fontStyle: 'italic', fontSize: 11 }}> · {t('photo_not_required_this_clean')}</Text>}
                                   </Text>
                                 </View>
                                 <TouchableOpacity onPress={() => shootEvidence(e)} disabled={shootingId === e.id}
