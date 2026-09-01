@@ -142,7 +142,8 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
         severity: sev,
         title: finalTitle,
         description: description.trim() || null,
-        room_id: roomId || null,
+        // A room with no property to match it against would now be rejected by the DB.
+        room_id: addressId ? (roomId || null) : null,
         photo_urls: photoUrls,
         status: 'reported',
       }).select('id').single()
