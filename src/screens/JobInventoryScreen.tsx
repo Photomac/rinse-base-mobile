@@ -256,13 +256,15 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                         >
                           <Text style={[styles.lowToggleText, done && { color: '#fff' }]}>{done ? '✓' : t('pack')}</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={() => toggleLow(item.id)}
-                          style={[styles.lowToggle, row.needs_restock && styles.lowToggleOn, { marginLeft: 6 }]}
-                        >
-                          <Text style={[styles.lowToggleText, row.needs_restock && { color: '#fff' }]}>{row.needs_restock ? '⚠' : t('report')}</Text>
-                        </TouchableOpacity>
                       </View>
+                      {/* Missing/damaged linen is filed from "Report an issue" (Linen type)
+                          on the job screen, which flags this row and writes the note.
+                          Read-only here — the old ⚠ toggle was never used by any crew. */}
+                      {row.needs_restock && (
+                        <Text style={{ fontSize: 12, color: '#854D0E', marginTop: 6 }}>
+                          <Text style={{ fontWeight: '700' }}>⚠ {t('linen_reported')}</Text>{row.notes ? `: ${row.notes}` : ''}
+                        </Text>
+                      )}
                     </View>
                   )
                 }
@@ -315,13 +317,17 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                   </View>
                 )
               })}
+              {isLinen && (
+                <Text style={[styles.helper, { marginTop: 6 }]}>{t('linen_report_hint')}</Text>
+              )}
             </View>
             )
           })}
 
           <View style={{ marginTop: 8, paddingHorizontal: 4 }}>
             <Text style={styles.helper}>{t('note_helper')}</Text>
-            {items.filter(i => (log[i.id]?.needs_restock)).map(item => (
+            {/* Linen notes come from the incident report, not from here. */}
+            {items.filter(i => i.category !== 'Linens' && log[i.id]?.needs_restock).map(item => (
               <View key={`note-${item.id}`} style={styles.noteCard}>
                 <Text style={styles.noteLabel}>{item.item_name}</Text>
                 <TextInput
