@@ -15,6 +15,7 @@ import React, { useState, useEffect } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Image, Alert } from 'react-native'
 import { pickAndUploadImage } from '../lib/chatAttachments'
 import { supabase } from '../lib/supabase'
+import { roomLabel } from '../lib/rooms'
 import { useLang } from '../contexts/LangContext'
 import { TranslationKey } from '../lib/i18n'
 import { CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT } from '../lib/theme'
@@ -53,7 +54,12 @@ const SEVERITY: { id: string; labelKey: TranslationKey; descKey: TranslationKey;
   { id: 'serious',  labelKey: 'ir_sev_serious',  descKey: 'ir_sev_serious_desc',  color: '#EF4444' },
 ]
 
-export function IncidentReportCard({ job, user }: { job: any; user: any }) {
+// rooms: the property's property_rooms (from JobDetailScreen). presetRoom +
+// presetKey: the checklist hand-off — bumping presetKey opens the form with
+// that room selected, so "Report an issue in Bathroom 2" lands here pre-filled.
+export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, presetKey = 0 }: {
+  job: any; user: any; rooms?: any[]; presetRoom?: { id: string; name: string } | null; presetKey?: number
+}) {
   const { t } = useLang()
   const [open, setOpen] = useState(false)
   const [reportType, setReportType] = useState('damage')
@@ -67,6 +73,13 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
   const [linenItemId, setLinenItemId] = useState('')
   const [linenQty, setLinenQty] = useState(1)
   const [linenCond, setLinenCond] = useState('stained')
+  const [roomId, setRoomId] = useState('')
+
+  useEffect(() => {
+    if (presetKey > 0) { setOpen(true); setRoomId(presetRoom?.id || '') }
+  }, [presetKey])
+  const roomRows = rooms.filter((r: any) => !r.archived_at && r.room_type !== 'final')
+  const roomName = roomId ? (roomRows.find((r: any) => r.id === roomId) ? roomLabel(roomRows.find((r: any) => r.id === roomId)) : presetRoom?.name || null) : null
 
   const type = REPORT_TYPES.find(rt => rt.id === reportType) || REPORT_TYPES[0]
   // Lost & found isn't damage — a guest left a belonging behind. It skips the
@@ -94,7 +107,7 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
   function reset() {
     setReportType('damage'); setSeverity('minor')
     setTitle(''); setDescription(''); setPhotoUrls([]); setOpen(false)
-    setLinenItemId(''); setLinenQty(1); setLinenCond('stained')
+    setLinenItemId(''); setLinenQty(1); setLinenCond('stained'); setRoomId('')
   }
 
   async function addPhoto() {
@@ -129,6 +142,7 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
         severity: sev,
         title: finalTitle,
         description: description.trim() || null,
+        room_id: roomId || null,
         photo_urls: photoUrls,
         status: 'reported',
       }).select('id').single()
@@ -160,7 +174,7 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
       // manager reviews it and chooses to send (owner-controlled QC).
       try {
         await supabase.functions.invoke('notify-damage-report', {
-          body: { job_id: job.id, tenant_id: user.tenant_id, report_type: reportType, severity: sev, title: finalTitle, photo_url: photoUrls[0] || null, recipients: 'owner' },
+          body: { job_id: job.id, tenant_id: user.tenant_id, report_type: reportType, severity: sev, title: finalTitle, room: roomName, photo_url: photoUrls[0] || null, recipients: 'owner' },
         })
       } catch { /* report is saved; notify is best-effort */ }
 
@@ -204,6 +218,22 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
           )
         })}
       </View>
+
+      {roomRows.length > 0 && (
+        <>
+          <Text style={styles.label}>{t('ir_room_label')}</Text>
+          <View style={styles.typeGrid}>
+            {roomRows.map((r: any) => {
+              const sel = roomId === r.id
+              return (
+                <TouchableOpacity key={r.id} style={[styles.typeBtn, sel && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => setRoomId(sel ? '' : r.id)}>
+                  <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{roomLabel(r)}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        </>
+      )}
 
       {!unrated && (
         <>

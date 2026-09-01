@@ -155,6 +155,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // rendered inside their rooms; required-only counts derive from this.
   const [evidence, setEvidence] = useState<any[]>([])
   const [openRooms, setOpenRooms] = useState<Record<string, boolean>>({})
+  // Room hand-off: "Report an issue in <room>" opens the incident card below
+  // with that room preset and scrolls it into view.
+  const [incidentRoom, setIncidentRoom] = useState<{ id: string; name: string } | null>(null)
+  const [incidentKey, setIncidentKey] = useState(0)
+  const scrollRef = useRef<ScrollView>(null)
+  const incidentY = useRef(0)
+  function reportIssueIn(id: string, name: string) {
+    setIncidentRoom({ id, name }); setIncidentKey(k => k + 1)
+    setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(0, incidentY.current - 12), animated: true }), 80)
+  }
   const [defaultMode, setDefaultMode] = useState<'detailed' | 'room_complete'>('detailed')
   const [issueForId, setIssueForId] = useState<string | null>(null)
   const [issueText, setIssueText] = useState('')
@@ -1187,7 +1197,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         <View style={{ width: 60 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll}>
         {/* Property photo — not for location-less tasks (internal shell property) */}
         {(isTask && !hasTaskLocation) ? null : addr?.photo_url ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => setViewPropertyPhoto(true)}>
@@ -1690,6 +1700,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                                 </TouchableOpacity>
                               </View>
                             ))}
+                            {g.key !== '__other__' && !isTask && (
+                              <TouchableOpacity onPress={() => reportIssueIn(g.key, g.name)}
+                                style={{ marginTop: 6, alignSelf: 'flex-start', borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E7EB', borderRadius: 8, paddingVertical: 5, paddingHorizontal: 10 }}>
+                                <Text style={{ fontSize: 11, fontWeight: '700', color: '#6B7280' }}>⚠ {ti(t('ir_report_in_room'), { room: g.name })}</Text>
+                              </TouchableOpacity>
+                            )}
                             {g.mode === 'room_complete' && g.key !== '__other__' && (
                               st.signed ? (
                                 <Text style={{ fontSize: 12, color: '#059669', fontWeight: '800', marginTop: 6 }}>✓ {t('room_signed_off')}</Text>
@@ -1759,7 +1775,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Property incident report — damage / missing / maintenance / pest /
             safety / lost & found (manager reviews before the host is told) */}
-        {isStarted && !isTask && <IncidentReportCard job={job} user={user} />}
+        <View onLayout={e => { incidentY.current = e.nativeEvent.layout.y }}>
+          {isStarted && !isTask && <IncidentReportCard job={job} user={user} rooms={roomsMeta} presetRoom={incidentRoom} presetKey={incidentKey} />}
+        </View>
 
         {/* Notes */}
         {isStarted && (
