@@ -11,7 +11,7 @@
 // REPORT_TYPES and the notify-damage-report email TYPE_ICON map.
 // (Table/function names keep the legacy "damage report" identifiers on purpose.)
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Image, Alert } from 'react-native'
 import { pickAndUploadImage } from '../lib/chatAttachments'
 import { supabase } from '../lib/supabase'
@@ -27,8 +27,25 @@ const REPORT_TYPES: { id: string; labelKey: TranslationKey; icon: string; color:
   { id: 'maintenance', labelKey: 'ir_type_maintenance', icon: '🔧', color: '#3B82F6' },
   { id: 'pest',        labelKey: 'ir_type_pest',        icon: '🐜', color: '#A16207' },
   { id: 'safety',      labelKey: 'ir_type_safety',      icon: '⚠️', color: '#7C3AED' },
+  { id: 'linen',       labelKey: 'ir_type_linen',       icon: '🧺', color: '#0E7490' },
   { id: 'lost_found',  labelKey: 'ir_type_lost_found',  icon: '🧳', color: '#8B5CF6' },
 ]
+
+// Linen is a loss/condition report against the property's linen list (the
+// same address_inventory rows the Supplies screen packs against): item + qty +
+// condition instead of a severity rating. Saving it ALSO flags the linen
+// ledger (job_inventory_log) so the owner's pull sheet, Supplies restock list
+// and by-client loss report see it. The stored title and ledger note use the
+// English label so the owner reads one vocabulary whatever language the crew
+// works in; the chips show t(labelKey).
+const LINEN_CONDITIONS: { id: string; labelKey: TranslationKey; en: string }[] = [
+  { id: 'stained', labelKey: 'ir_linen_stained', en: 'Stained' },
+  { id: 'torn',    labelKey: 'ir_linen_torn',    en: 'Torn / worn out' },
+  { id: 'missing', labelKey: 'ir_linen_missing', en: 'Missing' },
+  { id: 'rewash',  labelKey: 'ir_linen_rewash',  en: 'Needs rewash' },
+]
+type LinenItem = { id: string; item_name: string; par_level: number | null }
+const stepBtn = { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: BORDER, alignItems: 'center' as const, justifyContent: 'center' as const }
 
 const SEVERITY: { id: string; labelKey: TranslationKey; descKey: TranslationKey; color: string }[] = [
   { id: 'minor',    labelKey: 'ir_sev_minor',    descKey: 'ir_sev_minor_desc',    color: '#10B981' },
@@ -46,15 +63,38 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
   const [photoUrls, setPhotoUrls] = useState<string[]>([])
   const [uploading, setUploading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [linenItems, setLinenItems] = useState<LinenItem[]>([])
+  const [linenItemId, setLinenItemId] = useState('')
+  const [linenQty, setLinenQty] = useState(1)
+  const [linenCond, setLinenCond] = useState('stained')
 
   const type = REPORT_TYPES.find(rt => rt.id === reportType) || REPORT_TYPES[0]
   // Lost & found isn't damage — a guest left a belonging behind. It skips the
   // severity rating and uses the found-item wording.
   const isLF = reportType === 'lost_found'
+  const isLinen = reportType === 'linen'
+  const unrated = isLF || isLinen
+  const addressId = job.client_addresses?.id || job.address_id || null
+
+  // The property's linen list, loaded once the form opens.
+  useEffect(() => {
+    if (!open || !addressId) return
+    supabase.from('address_inventory').select('id, item_name, par_level')
+      .eq('address_id', addressId).eq('category', 'Linens').order('sort_order')
+      .then(({ data }) => setLinenItems((data ?? []) as LinenItem[]))
+  }, [open, addressId])
+
+  const linenItem = linenItems.find(i => i.id === linenItemId) || null
+  const linenCondEn = LINEN_CONDITIONS.find(c => c.id === linenCond)?.en || linenCond
+  // A picked linen item files under a composed title ("2× King sheet set —
+  // Stained"); with no linen list on the property the crew describes it freely.
+  const linenTitle = linenItem ? `${linenQty}× ${linenItem.item_name} — ${linenCondEn}` : title.trim()
+  const canSubmit = isLinen ? (!!linenItem || !!title.trim()) : !!title.trim()
 
   function reset() {
     setReportType('damage'); setSeverity('minor')
     setTitle(''); setDescription(''); setPhotoUrls([]); setOpen(false)
+    setLinenItemId(''); setLinenQty(1); setLinenCond('stained')
   }
 
   async function addPhoto() {
@@ -72,32 +112,55 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
   }
 
   async function save() {
-    if (!title.trim()) { Alert.alert(t(isLF ? 'lf_need_item' : 'ir_need_title')); return }
+    if (!canSubmit) { Alert.alert(t(isLF ? 'lf_need_item' : 'ir_need_title')); return }
     setSaving(true)
     try {
-      const addressId = job.client_addresses?.id || job.address_id || null
-      const sev = isLF ? 'minor' : severity
+      const finalTitle = isLinen ? linenTitle : title.trim()
+      // Unrated types never carry a severity the crew picked before switching type.
+      const sev = unrated ? 'minor' : severity
       // supabase-js returns { error } instead of throwing — check it, or a failed
       // insert falls through to the "saved" success path (silent-failure family).
-      const { error: insertError } = await supabase.from('job_damage_reports').insert({
+      const { data: inserted, error: insertError } = await supabase.from('job_damage_reports').insert({
         tenant_id: user.tenant_id,
         job_id: job.id,
         address_id: addressId,
         reported_by: user?.id ?? null,
         report_type: reportType,
         severity: sev,
-        title: title.trim(),
+        title: finalTitle,
         description: description.trim() || null,
         photo_urls: photoUrls,
         status: 'reported',
-      })
+      }).select('id').single()
       if (insertError) throw insertError
+
+      // Mirror a linen report into the linen ledger — the same job_inventory_log
+      // row the Supplies screen, the owner's pull sheet "Linen issues" and the
+      // by-client loss report read. One row per (job, item): update the pack
+      // row if the crew already has one, else insert an unpacked one.
+      // incident_id ties the two so the loss counts once and the restock email
+      // stays quiet (the incident email covers it; the host hears on Send to host).
+      if (isLinen && linenItem && inserted?.id) {
+        try {
+          const note = `${linenCondEn} ×${linenQty}${description.trim() ? ` — ${description.trim()}` : ''}`
+          const { data: existing } = await supabase.from('job_inventory_log').select('id, notes')
+            .eq('job_id', job.id).eq('inventory_id', linenItem.id).limit(1).maybeSingle()
+          const notes = existing?.notes ? `${existing.notes}\n${note}` : note
+          const { error: ledgerError } = existing
+            ? await supabase.from('job_inventory_log').update({ needs_restock: true, notes, incident_id: inserted.id }).eq('id', existing.id)
+            : await supabase.from('job_inventory_log').insert({
+                tenant_id: user.tenant_id, job_id: job.id, inventory_id: linenItem.id, item_name: linenItem.item_name,
+                qty_used: 0, needs_restock: true, notes, incident_id: inserted.id,
+              })
+          if (ledgerError) throw ledgerError
+        } catch { Alert.alert(t('ir_linen_ledger_warn')) }
+      }
 
       // Heads-up the cleaning company only — the host is told later, if/when the
       // manager reviews it and chooses to send (owner-controlled QC).
       try {
         await supabase.functions.invoke('notify-damage-report', {
-          body: { job_id: job.id, tenant_id: user.tenant_id, report_type: reportType, severity: sev, title: title.trim(), photo_url: photoUrls[0] || null, recipients: 'owner' },
+          body: { job_id: job.id, tenant_id: user.tenant_id, report_type: reportType, severity: sev, title: finalTitle, photo_url: photoUrls[0] || null, recipients: 'owner' },
         })
       } catch { /* report is saved; notify is best-effort */ }
 
@@ -142,7 +205,7 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
         })}
       </View>
 
-      {!isLF && (
+      {!unrated && (
         <>
           <Text style={styles.label}>{t('ir_severity_label')}</Text>
           <View style={styles.sevRow}>
@@ -163,14 +226,63 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
         </>
       )}
 
-      <Text style={styles.label}>{t(isLF ? 'lf_item_label' : 'ir_what_label')} *</Text>
-      <TextInput
-        style={styles.input}
-        value={title}
-        onChangeText={setTitle}
-        placeholder={t(isLF ? 'lf_item_placeholder' : 'ir_what_placeholder')}
-        placeholderTextColor={TEXT_LIGHT}
-      />
+      {isLinen && (
+        <>
+          <Text style={styles.label}>{t('ir_linen_which')}</Text>
+          {linenItems.length === 0 ? (
+            <Text style={[styles.sub, { marginBottom: 8 }]}>{t('ir_linen_none')}</Text>
+          ) : (
+            <View style={styles.typeGrid}>
+              {linenItems.map(i => {
+                const sel = linenItemId === i.id
+                return (
+                  <TouchableOpacity key={i.id} style={[styles.typeBtn, sel && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => setLinenItemId(sel ? '' : i.id)}>
+                    <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{i.item_name}</Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+          )}
+          <View style={{ flexDirection: 'row', gap: 14, marginBottom: 10, alignItems: 'flex-start' }}>
+            <View>
+              <Text style={styles.label}>{t('ir_linen_qty')}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TouchableOpacity onPress={() => setLinenQty(q => Math.max(1, q - 1))} style={stepBtn}><Text style={{ fontSize: 16, color: TEXT }}>−</Text></TouchableOpacity>
+                <Text style={{ fontSize: 15, fontWeight: '700', color: TEXT, minWidth: 22, textAlign: 'center' }}>{linenQty}</Text>
+                <TouchableOpacity onPress={() => setLinenQty(q => q + 1)} style={stepBtn}><Text style={{ fontSize: 16, color: TEXT }}>+</Text></TouchableOpacity>
+              </View>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>{t('ir_linen_condition')}</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                {LINEN_CONDITIONS.map(c => {
+                  const sel = linenCond === c.id
+                  return (
+                    <TouchableOpacity key={c.id} style={[styles.sevBtn, { flex: 0, paddingHorizontal: 10 }, sel && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => setLinenCond(c.id)}>
+                      <Text style={[styles.sevLabel, sel && { color: type.color, fontWeight: '700' }]}>{t(c.labelKey)}</Text>
+                    </TouchableOpacity>
+                  )
+                })}
+              </View>
+            </View>
+          </View>
+        </>
+      )}
+
+      {isLinen && linenItem ? (
+        <Text style={[styles.sub, { marginBottom: 10 }]}>{t('ir_linen_filed_as')}: <Text style={{ color: TEXT, fontWeight: '700' }}>{linenTitle}</Text></Text>
+      ) : (
+        <>
+          <Text style={styles.label}>{t(isLF ? 'lf_item_label' : 'ir_what_label')} *</Text>
+          <TextInput
+            style={styles.input}
+            value={title}
+            onChangeText={setTitle}
+            placeholder={t(isLF ? 'lf_item_placeholder' : isLinen ? 'ir_linen_placeholder' : 'ir_what_placeholder')}
+            placeholderTextColor={TEXT_LIGHT}
+          />
+        </>
+      )}
 
       <TextInput
         style={[styles.input, styles.noteInput]}
@@ -203,11 +315,11 @@ export function IncidentReportCard({ job, user }: { job: any; user: any }) {
           <Text style={styles.cancelBtnText}>{t('lf_cancel')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.saveBtn, { backgroundColor: type.color }, (!title.trim() || saving) && styles.saveBtnDisabled]}
+          style={[styles.saveBtn, { backgroundColor: type.color }, (!canSubmit || saving) && styles.saveBtnDisabled]}
           onPress={save}
-          disabled={!title.trim() || saving}
+          disabled={!canSubmit || saving}
         >
-          <Text style={styles.saveBtnText}>{saving ? t('lf_saving') : t(isLF ? 'lf_save' : 'ir_save')}</Text>
+          <Text style={styles.saveBtnText}>{saving ? t('lf_saving') : t(isLF ? 'lf_save' : isLinen ? 'ir_linen_save' : 'ir_save')}</Text>
         </TouchableOpacity>
       </View>
     </View>
