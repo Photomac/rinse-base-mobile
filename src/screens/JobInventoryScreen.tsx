@@ -41,7 +41,10 @@ function roomLabel(rm: any): string {
 // crew didn't count this item — they may have only logged usage / a manual
 // low flag. The DB trigger auto-flags needs_restock when qty_remaining drops
 // below par, so crew don't need to mark it themselves on counted items.
-type LogState = Record<string, { qty_used: number; qty_remaining: string; needs_restock: boolean; notes: string }>
+// incident_id: a linen incident filed from "Report an issue" links its ledger
+// row to the report. The delete-then-insert save must carry it, or a resave
+// severs the link and re-fires the owner's restock email.
+type LogState = Record<string, { qty_used: number; qty_remaining: string; needs_restock: boolean; notes: string; incident_id?: string | null }>
 
 export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   const { t } = useLang()
@@ -70,7 +73,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
         .order('category', { nullsFirst: false })
         .order('item_name'),
       supabase.from('job_inventory_log')
-        .select('inventory_id, qty_used, qty_remaining, needs_restock, notes')
+        .select('inventory_id, qty_used, qty_remaining, needs_restock, notes, incident_id')
         .eq('job_id', job.id),
       supabase.from('property_rooms')
         .select('id, room_type, instance_no, name, sort_order')
@@ -87,6 +90,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
         qty_remaining: l.qty_remaining != null ? String(l.qty_remaining) : '',
         needs_restock: !!l.needs_restock,
         notes: l.notes ?? '',
+        incident_id: l.incident_id ?? null,
       }
     })
     setLog(map)
@@ -137,6 +141,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
         qty_remaining: v.qty_remaining === '' ? null : Number(v.qty_remaining),
         needs_restock: !!v.needs_restock,
         notes: v.notes?.trim() || null,
+        incident_id: v.incident_id ?? null,
       }))
     if (rows.length > 0) {
       const { error } = await supabase.from('job_inventory_log').insert(rows)
