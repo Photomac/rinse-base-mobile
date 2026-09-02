@@ -27,15 +27,7 @@ interface Item {
   room_id: string | null
 }
 
-// Same display-name derivation as the JobDetailScreen room accordion.
-function roomLabel(rm: any): string {
-  return (rm.name || '').trim() || (
-    rm.room_type === 'bedroom' ? (rm.instance_no === 1 ? 'Primary Bedroom' : `Bedroom ${rm.instance_no}`)
-    : rm.room_type === 'bathroom' ? `Bathroom ${rm.instance_no}`
-    : rm.room_type === 'final' ? 'Final Guest-Ready Check'
-    : rm.room_type === 'living' ? 'Living Room'
-    : rm.room_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) + (rm.instance_no > 1 ? ` ${rm.instance_no}` : ''))
-}
+import { roomLabel } from '../lib/rooms'
 
 // qty_remaining is the cycle-count value entered at end of clean. NULL means
 // crew didn't count this item — they may have only logged usage / a manual
