@@ -53,12 +53,14 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  // inventory_id → delta against par for this turnover (turnover_linen_extras).
+  const [extras, setExtras] = useState<Record<string, number>>({})
 
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
-    const [invRes, logRes, roomsRes] = await Promise.all([
+    const [invRes, logRes, roomsRes, extraRes] = await Promise.all([
       supabase.from('address_inventory')
         .select('id, item_name, category, par_level, unit, room_id')
         .eq('address_id', addrId)
@@ -72,9 +74,19 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
         .eq('address_id', addrId)
         .is('archived_at', null)
         .order('sort_order'),
+      // Extra linen the office added for THIS booking on the Linen Pull Sheet —
+      // e.g. a 14-guest group in a house whose par is 10 bath towels. Without
+      // this the phone would say "6/6 packed" on a turnover the office says
+      // needs four more, and the crew would leave short.
+      supabase.from('turnover_linen_extras')
+        .select('inventory_id, extra_qty')
+        .eq('job_id', job.id),
     ])
     setItems(invRes.data ?? [])
     setRooms(roomsRes.data ?? [])
+    setExtras(Object.fromEntries(
+      ((extraRes.data ?? []) as any[]).map(x => [x.inventory_id, x.extra_qty])
+    ))
     const map: LogState = {}
     ;(logRes.data ?? []).forEach((l: any) => {
       map[l.inventory_id] = {
@@ -169,6 +181,12 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
     items: rows,
   }))
   const sections = [...roomSections, ...catSections]
+  // What this turnover packs to: the property's standing par plus whatever the
+  // office added for this booking on the Linen Pull Sheet. Floored at 0 so a
+  // negative delta larger than the par can't ask for negative towels.
+  function linenTarget(item: Item): number {
+    return Math.max(0, (item.par_level ?? 0) + (extras[item.id] || 0))
+  }
   // Mirror the DB trigger logic so the banner is accurate before save:
   // count anything manually flagged OR cycle-counted below par.
   function isBelowPar(item: Item, row: { qty_remaining: string }): boolean {
@@ -213,8 +231,11 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
             // supplies count-left/used/low — mirrors the web job panel.
             const isLinen = sec.isLinen
             const rows = sec.items
-            const linenPar = isLinen ? rows.filter(r => (r.par_level ?? 0) > 0) : []
-            const linenPacked = linenPar.filter(r => (log[r.id]?.qty_used || 0) >= (r.par_level ?? 0)).length
+            // The tally has to count against what this turnover actually needs,
+            // not the standing par, or a row carrying an extra reads as done
+            // while short.
+            const linenPar = isLinen ? rows.filter(r => linenTarget(r) > 0) : []
+            const linenPacked = linenPar.filter(r => (log[r.id]?.qty_used || 0) >= linenTarget(r)).length
             return (
             <View key={sec.key} style={styles.categoryCard}>
               <Text style={styles.categoryHeader}>
@@ -225,12 +246,26 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                 const row = log[item.id] || { qty_used: 0, qty_remaining: '', needs_restock: false, notes: '' }
                 if (isLinen) {
                   const par = item.par_level ?? 0
-                  const done = par > 0 && row.qty_used >= par
+                  const extra = extras[item.id] || 0
+                  const target = linenTarget(item)
+                  const done = target > 0 && row.qty_used >= target
                   return (
                     <View key={item.id} style={styles.itemRow}>
                       <View style={styles.itemHead}>
                         <Text style={styles.itemName}>{item.item_name}</Text>
-                        <Text style={styles.itemMeta}>{t('par')}: {par}</Text>
+                        {/* Show the par AND the adjusted target when they differ,
+                            so the number to pack is unambiguous on a small screen
+                            and the crew can see the office changed it. */}
+                        {extra !== 0 ? (
+                          <Text style={styles.itemMeta}>
+                            {t('par')}: {par}
+                            <Text style={{ color: '#B45309', fontWeight: '700' }}>
+                              {'  '}{extra > 0 ? `+${extra}` : extra} = {target}
+                            </Text>
+                          </Text>
+                        ) : (
+                          <Text style={styles.itemMeta}>{t('par')}: {par}</Text>
+                        )}
                       </View>
                       <View style={styles.itemControls}>
                         <View style={styles.qtyGroup}>
@@ -242,9 +277,9 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                           </View>
                         </View>
                         <TouchableOpacity
-                          onPress={() => setQty(item.id, done ? -row.qty_used : par - row.qty_used)}
-                          disabled={par === 0}
-                          style={[styles.lowToggle, done && styles.lowToggleOn, par === 0 && { opacity: 0.4 }]}
+                          onPress={() => setQty(item.id, done ? -row.qty_used : target - row.qty_used)}
+                          disabled={target === 0}
+                          style={[styles.lowToggle, done && styles.lowToggleOn, target === 0 && { opacity: 0.4 }]}
                         >
                           <Text style={[styles.lowToggleText, done && { color: '#fff' }]}>{done ? '✓' : t('pack')}</Text>
                         </TouchableOpacity>
