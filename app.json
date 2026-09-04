@@ -69,7 +69,13 @@
           "isIosBackgroundLocationEnabled": true
         }
       ],
-      "@sentry/react-native"
+      [
+        "@sentry/react-native",
+        {
+          "organization": "rinsebase-app",
+          "project": "rinsebase-mobile"
+        }
+      ]
     ],
     "extra": {
       "eas": {
