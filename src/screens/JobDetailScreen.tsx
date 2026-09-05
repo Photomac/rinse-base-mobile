@@ -1232,7 +1232,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Job info card */}
         <View style={styles.card}>
-          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : isInspection ? <>🔍 {t('inspection')} · {propLabel}</> : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{propLabel}{job.is_turnover ? `  🏠 ${t('turnover')}` : ''}</>}</Text>
+          <Text style={styles.clientName}>{isLaundry ? `🧺 ${t('laundry_run')}` : isInspection ? <>🔍 {t('inspection')} · {propLabel}</> : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : <>{propLabel}{job.is_turnover ? `  🏠 ${t('turnover')}` : ''}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}</>}</Text>
           {routeStop && (
             <View style={styles.routeStopBadge}>
               <Text style={styles.routeStopText}>🧭 {ti(t('route_stop_of'), { k: String(routeStop.k), m: String(routeStop.m) })}</Text>
