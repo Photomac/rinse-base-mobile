@@ -39,6 +39,7 @@
     "react-native-web": "^0.21.0"
   },
   "devDependencies": {
+    "@expo/fingerprint": "^0.15.4",
     "@types/react": "~19.1.10",
     "sharp": "^0.34.5",
     "typescript": "~5.9.2"
