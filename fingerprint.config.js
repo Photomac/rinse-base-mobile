@@ -19,5 +19,13 @@ const { SourceSkips } = require('@expo/fingerprint')
 
 /** @type {import('@expo/fingerprint').Config} */
 module.exports = {
-  sourceSkips: SourceSkips.ExpoConfigVersions,
+  sourceSkips:
+    SourceSkips.ExpoConfigVersions |
+    // The library DEFAULT. Setting sourceSkips REPLACES the default rather than
+    // adding to it, and without this flag EAS builds fail at Configure expo-updates
+    // with "Runtime version mismatch": prebuild rewrites the android/ios scripts
+    // in package.json (expo start --ios -> expo run:ios) on the build server, so
+    // the hash computed there differs from the one computed here (builds 26/29,
+    // 2026-09-05). This flag skips those two scripts unless they already run.
+    SourceSkips.PackageJsonAndroidAndIosScriptsIfNotContainRun,
 }
