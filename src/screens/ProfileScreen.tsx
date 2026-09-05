@@ -13,6 +13,11 @@ import { SLATE_DARK, GOLD } from '../lib/theme'
 // delivers OTAs), so reading these adds no native dependency and this screen
 // stays OTA-shippable.
 import * as Updates from 'expo-updates'
+// Native store version + build number. A native dep — added at the same rebuild
+// that switched runtimeVersion to the fingerprint policy, so it costs nothing
+// extra; it is what lets this line keep saying "v1.1.4 (24)" now that
+// Updates.runtimeVersion is a hash rather than the version.
+import * as Application from 'expo-application'
 
 const ROLE_KEYS: Record<string, string> = {
   owner: 'role_owner', manager: 'role_manager', dispatcher: 'role_dispatcher',
@@ -73,7 +78,9 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
   // ── Build identity ────────────────────────────────────────────────────────
   // One copyable line answering "which build is this?". Four parts, because any
   // one alone is ambiguous:
-  //   version   — what the store installed
+  //   version   — what the store installed, with its build number: "v1.1.4 (24)"
+  //   runtime   — first 7 chars of the native fingerprint (the OTA lane). Two
+  //               store versions can share one lane; this says whether they do.
   //   channel   — which release track it listens to
   //   update    — WHICH over-the-air bundle is actually running, or "store
   //               build" when running the one baked into the binary. Two phones
@@ -85,7 +92,8 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
   const buildLine = React.useMemo(() => {
     const parts: string[] = []
     try {
-      parts.push(`v${Updates.runtimeVersion ?? '?'}`)
+      parts.push(`v${Application.nativeApplicationVersion ?? '?'} (${Application.nativeBuildVersion ?? '?'})`)
+      if (Updates.runtimeVersion) parts.push(`rt ${Updates.runtimeVersion.slice(0, 7)}`)
       if (Updates.channel) parts.push(Updates.channel)
       if (Updates.isEmbeddedLaunch || !Updates.updateId) {
         parts.push(t('build_store'))

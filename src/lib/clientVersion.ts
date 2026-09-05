@@ -12,12 +12,16 @@
 // publish. embeddedLaunch === true means the device is running the bundle baked
 // into its binary, i.e. it has taken NO OTA at all.
 //
-// Deliberately uses ONLY expo-updates (already a dependency) plus AsyncStorage.
-// expo-constants / expo-application would each be a new NATIVE dependency,
-// requiring a store build — which could not reach existing devices over OTA,
-// defeating the point of shipping this.
+// Originally used ONLY expo-updates so this could ship over the air without a
+// store build. expo-application was added later at a rebuild that was happening
+// anyway (runtimeVersion → fingerprint policy), because under that policy
+// Updates.runtimeVersion is a native-code hash, not the app version, and
+// app_version must keep meaning "which store build" — otherwise the question
+// this file exists to answer ("did these devices take the OTA?") collapses
+// runtime and version into one unreadable column.
 
 import * as Updates from 'expo-updates'
+import * as Application from 'expo-application'
 import { Platform } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
@@ -48,8 +52,8 @@ export async function reportClientVersion(): Promise<void> {
     await supabase.rpc('record_client_version', {
       p_surface: Platform.OS === 'ios' ? 'ios' : 'android',
       p_install_id: await installId(),
-      p_app_version: Updates.runtimeVersion ?? null,   // runtimeVersion policy is appVersion
-      p_runtime_version: Updates.runtimeVersion ?? null,
+      p_app_version: Application.nativeApplicationVersion ?? null,  // store version, e.g. 1.1.4
+      p_runtime_version: Updates.runtimeVersion ?? null,             // OTA lane: fingerprint hash
       p_update_id: Updates.updateId ?? null,           // null in dev / Expo Go
       p_channel: Updates.channel ?? null,
       p_embedded: Updates.isEmbeddedLaunch ?? null,
