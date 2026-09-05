@@ -51,7 +51,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     // online. Cached rows carry scheduled_start, so day placement stays right
     // even when the cache is a day or two old.
     const { data, fromCache } = await cachedQuery(`sched:${user.id}`, supabase.from('jobs')
-      .select('id, status, scheduled_start, scheduled_end, is_turnover, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id)')
+      .select('id, job_number, status, scheduled_start, scheduled_end, is_turnover, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id)')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', start.toISOString())
       .lte('scheduled_start', end.toISOString())
@@ -227,7 +227,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       <Text style={[styles.statusText, { color }]}>{t((STATUS_LABEL_KEYS[job.status] || 'status_scheduled') as any)}</Text>
                     </View>
                   </View>
-                  <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}</Text>
+                  <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}</Text>
                   {(!job.job_type || job.job_type === 'clean' || job.job_type === 'inspection') && <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>}
                   {job.is_turnover && <Text style={styles.turnoverTag}>🏠 {t('turnover')}{job.window_minutes != null ? `  ·  ↔ ${t('back_to_back')}` : ''}</Text>}
                 </View>
