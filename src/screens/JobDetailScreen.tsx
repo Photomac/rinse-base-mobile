@@ -229,11 +229,27 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [turnover, setTurnover] = useState<{ checkout: string | null; checkin: string | null; window: number | null; urgency: string | null } | null>(null)
   const [guestCount, setGuestCount] = useState<number | null>(null)
   // Everyone working this job (lead first) — crew see who they're working with.
-  const [crewOnJob, setCrewOnJob] = useState<{ name: string; isLead: boolean }[]>([])
+  const [crewOnJob, setCrewOnJob] = useState<{ id: string; name: string; isLead: boolean }[]>([])
+  // Owner/manager opening a clean they are NOT on the crew of: the Clock In
+  // button asks whose hours it is recording instead of silently clocking the
+  // owner in. Pay follows the time entry's user_id, so an owner tapping Clock
+  // In "for" a cleaner used to put the cleaner's pay on the owner's payroll
+  // line (Cleanfix Squad, 2026-08/09 — explained three times, never stuck,
+  // because the button on screen kept saying otherwise).
+  const [recordForOpen, setRecordForOpen] = useState(false)
   const [bagColor, setBagColor] = useState<string | null>(null)
   // Crew see the property, not the homeowner — client names are for admins.
   const isAdminRole = ['owner', 'manager', 'dispatcher'].includes(user.role)
   const propLabel = addr?.nickname || (isAdminRole ? client?.full_name : addr?.street)
+  // Desk staff on somebody else's clean. An admin who IS on the roster is just
+  // crew here and keeps the normal self-clock-in path.
+  const recordsForOthers = isAdminRole && crewOnJob.length > 0 && !crewOnJob.some(c => c.id === user.id)
+  // "Maria · " prefix for a time entry that isn't the viewer's own.
+  function entryOwnerLabel(entry: any): string {
+    if (!entry || entry.user_id === user.id) return ''
+    const name = entry.users?.full_name || crewOnJob.find(c => c.id === entry.user_id)?.name
+    return name ? `${name} · ` : ''
+  }
   // Dispatcher-suggested driving order → "Stop k of M" for this crew's day.
   const [routeStop, setRouteStop] = useState<{ k: number; m: number } | null>(null)
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
@@ -355,10 +371,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Full crew roster for this job, lead first.
     const { data: crewRows } = await cachedQuery(`crew:${job.id}`, supabase
       .from('job_assignments')
-      .select('is_lead, users!job_assignments_user_id_fkey(full_name)')
+      .select('is_lead, users!job_assignments_user_id_fkey(id, full_name)')
       .eq('job_id', job.id)
       .order('is_lead', { ascending: false }))
-    setCrewOnJob((crewRows ?? []).map((a: any) => ({ name: a.users?.full_name, isLead: !!a.is_lead })).filter((c: any) => c.name))
+    setCrewOnJob((crewRows ?? []).map((a: any) => ({ id: a.users?.id, name: a.users?.full_name, isLead: !!a.is_lead })).filter((c: any) => c.id && c.name))
 
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId) return
@@ -444,20 +460,25 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }, [isClockedIn, activeEntry, timeEntries])
 
   async function loadTimeEntries() {
-    const { data: fetched } = await cachedQuery(`time:${job.id}:${user.id}`, supabase
+    // Own entries only — except for desk staff on a clean they aren't crew on,
+    // who see (and run) the whole job's clock: the entry they recorded for a
+    // cleaner has to survive a reload, or Complete could never close it.
+    const wholeJob = recordsForOthers
+    let q = supabase
       .from('job_time_entries')
-      .select('*')
+      .select(wholeJob ? '*, users!job_time_entries_user_id_fkey(full_name)' : '*')
       .eq('job_id', job.id)
-      .eq('user_id', user.id)
-      .order('clocked_in_at'))
+    if (!wholeJob) q = q.eq('user_id', user.id)
+    const { data: fetched } = await cachedQuery(`time:${job.id}:${wholeJob ? 'job' : user.id}`, q.order('clocked_in_at'))
     // Queued offline punches overlay the cached/live rows, so a relaunch in a
     // dead zone still shows the running timer (and can pause/clock out).
     const data = (await overlayPending('job_time_entries', fetched ?? [],
-      v => v.job_id === job.id && v.user_id === user.id))
+      v => v.job_id === job.id && (wholeJob || v.user_id === user.id)))
       .sort((a: any, b: any) => String(a.clocked_in_at).localeCompare(String(b.clocked_in_at)))
     if (data) {
       setTimeEntries(data)
-      const active = data.find(e => !e.clocked_out_at)
+      // Prefer the viewer's own open punch; a proxy entry is the fallback.
+      const active = data.find(e => !e.clocked_out_at && e.user_id === user.id) || data.find(e => !e.clocked_out_at)
       if (active) {
         setActiveEntry(active)
         setIsPaused(false)
@@ -473,6 +494,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       setElapsedMinutes(total)
     }
   }
+
+  // The roster loads after mount. Once it says this is somebody else's clean,
+  // widen the clock to the whole job so a proxy punch is visible and closable.
+  useEffect(() => { if (recordsForOthers) loadTimeEntries() }, [recordsForOthers])
 
   /**
    * How many named property shots this job still owes.
@@ -731,7 +756,20 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
   }
 
-  async function handleClockIn() {
+  // Owner/manager on a clean they aren't crew on: ask whose hours these are
+  // before anything is written. Everyone else clocks themselves in directly.
+  function handleClockIn() {
+    if (recordsForOthers) { setRecordForOpen(true); return }
+    clockInAs(null)
+  }
+
+  // forUserId: null = the viewer. Anything else is a PROXY punch recorded by
+  // desk staff on a cleaner's behalf — it carries no GPS stamp and no arrival
+  // backdate, because the phone in hand is the owner's, not the cleaner's, and
+  // a fence entry it recorded is the owner arriving.
+  async function clockInAs(forUserId: string | null) {
+    const proxy = !!forUserId && forUserId !== user.id
+    setRecordForOpen(false)
     setSaving(true)
     // GPS-verified time tracking: if the arrival geofence recorded a fence
     // entry for this job, backdate the punch to that instant (QB Time
@@ -739,7 +777,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // scheduled start so early sitting-in-the-car isn't billable. Otherwise a
     // best-effort quick GPS fix stamps the manual punch. Neither may block or
     // fail the punch itself.
-    const arrival = await getPendingArrival(job.id)
+    const arrival = proxy ? null : await getPendingArrival(job.id)
     let clockedInAt = new Date()
     let stamp: { lat: number; lng: number } | null = null
     if (arrival) {
@@ -748,7 +786,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       clockedInAt = arrivedAt > floor ? arrivedAt : floor
       if (clockedInAt > new Date()) clockedInAt = new Date() // never in the future
       stamp = { lat: arrival.lat, lng: arrival.lng }
-    } else {
+    } else if (!proxy) {
       stamp = await quickGpsStamp()
     }
 
@@ -760,7 +798,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // failure.
     const entry = {
       id: uuid4(),
-      tenant_id: user.tenant_id, job_id: job.id, user_id: user.id,
+      tenant_id: user.tenant_id, job_id: job.id, user_id: forUserId ?? user.id,
       clocked_in_at: clockedInAt.toISOString(), entry_type: 'work',
       source: arrival ? 'prompted' : 'manual',
       arrived_at: arrival?.at ?? null,
@@ -792,7 +830,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // an app relaunch, and don't require a job_assignment). Clock-in is the
     // user-initiated moment where we escalate to the "Always" location prompt
     // so tracking keeps working with the phone in their pocket.
-    startLocationTracking(user, { requestBackground: true }).catch(() => {})
+    if (!proxy) startLocationTracking(user, { requestBackground: true }).catch(() => {})
     // Update job status
     await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { status: 'in_progress' } })
     onStatusChange(job, 'in_progress')
@@ -1403,7 +1441,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {!dailyMode && timeEntries.filter(e => e.clocked_out_at).map((entry, i) => (
             <View key={entry.id} style={styles.timeEntry}>
               <Text style={styles.timeEntryText}>
-                {t('session')} {i + 1}: {fmtTime(entry.clocked_in_at)} – {fmtTime(entry.clocked_out_at)}
+                {entryOwnerLabel(entry)}{t('session')} {i + 1}: {fmtTime(entry.clocked_in_at)} – {fmtTime(entry.clocked_out_at)}
               </Text>
               <Text style={styles.timeEntryDuration}>{fmtDuration(entry.duration_minutes || 0)}</Text>
               {entry.pause_reason && <Text style={styles.timeEntryReason}>⏸ {entry.pause_reason}</Text>}
@@ -1414,7 +1452,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {!dailyMode && isClockedIn && (
             <View style={[styles.timeEntry, { backgroundColor: '#ECFDF5', borderColor: TEAL }]}>
               <Text style={[styles.timeEntryText, { color: '#065F46' }]}>
-                🟢 {t('active_since')} {fmtTime(activeEntry.clocked_in_at)}
+                🟢 {entryOwnerLabel(activeEntry)}{t('active_since')} {fmtTime(activeEntry.clocked_in_at)}
               </Text>
             </View>
           )}
@@ -1836,6 +1874,29 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               </TouchableOpacity>
               <TouchableOpacity style={[styles.modalConfirmBtn, !pauseReason && { opacity: 0.4 }]} onPress={confirmPause} disabled={!pauseReason || saving}>
                 {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>{t('pause_job')}</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Whose time is this? — desk staff clocking in on a cleaner's clean */}
+      <Modal visible={recordForOpen} transparent animationType="slide" onRequestClose={() => setRecordForOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>⏱ {t('record_for_title')}</Text>
+            <Text style={styles.modalSub}>{t('record_for_msg')}</Text>
+            {crewOnJob.map(c => (
+              <TouchableOpacity key={c.id} style={[styles.reasonBtn, styles.reasonBtnActive]} onPress={() => clockInAs(c.id)} disabled={saving}>
+                <Text style={[styles.reasonBtnText, { color: '#fff' }]}>{c.isLead ? `${c.name} (${t('lead_tag')})` : c.name}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.reasonBtn} onPress={() => clockInAs(user.id)} disabled={saving}>
+              <Text style={styles.reasonBtnText}>{t('record_for_me')}</Text>
+            </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setRecordForOpen(false)}>
+                <Text style={{ color: '#6B7280', fontWeight: '600' }}>{t('cancel')}</Text>
               </TouchableOpacity>
             </View>
           </View>
