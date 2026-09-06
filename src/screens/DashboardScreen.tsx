@@ -18,6 +18,11 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const { t, lang } = useLang()
   const [todayJobs, setTodayJobs] = useState<any[]>([])
   const [cancelledToday, setCancelledToday] = useState<any[]>([])
+  // Cleans left open on a PREVIOUS day — see the query in load().
+  const [needsClosing, setNeedsClosing] = useState<any[]>([])
+  // jobId -> outstanding blocker count. Absent = unresolved (offline, or
+  // the RPC failed), which renders no badge rather than a wrong one.
+  const [closingBlockers, setClosingBlockers] = useState<Record<string, number>>({})
   const [activeJob, setActiveJob] = useState<any>(null)
   const [nextJob, setNextJob] = useState<any>(null)
   const [monthStats, setMonthStats] = useState({ completed: 0, hours: 0, earnings: 0 })
@@ -48,7 +53,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     // Reads go through cachedQuery: last good result survives in AsyncStorage,
     // so a crew member who loaded their day online keeps it when signal drops.
-    const [todayRes, monthRes] = await Promise.all([
+    const [todayRes, monthRes, strandedRes] = await Promise.all([
       cachedQuery(`dash:today:${user.id}`, supabase.from('jobs')
         .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
         .eq('tenant_id', user.tenant_id)
@@ -71,6 +76,23 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             .eq('job_assignments.user_id', user.id)
             .eq('status', 'completed')
             .gte('scheduled_start', monthStart.toISOString())),
+
+      // Cleans left open on a PREVIOUS day. The dashboard above is a strict
+      // today window and Schedule only reaches back a month, so a job that
+      // stayed in_progress overnight quietly left the crew's reach — the exact
+      // way the 8/16–8/29 backlog built up. Cached like the rest of the day so
+      // it survives a dead zone.
+      //
+      // Deliberately has NO lower date bound: a stranded clean stays actionable
+      // until it is closed. The status filter keeps this empty for a crew with
+      // nothing outstanding.
+      cachedQuery(`dash:stranded:${user.id}`, supabase.from('jobs')
+        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
+        .eq('tenant_id', user.tenant_id)
+        .in('status', ['in_progress', 'en_route'])
+        .lt('scheduled_start', todayStart.toISOString())
+        .order('scheduled_start')
+        .limit(50)),
     ])
     setOffline(todayRes.fromCache)
 
@@ -94,6 +116,14 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     setCancelledToday(myTodayAll.filter((j: any) => j.status === 'cancelled'))
 
     const myMonth = (monthRes.data ?? []).filter((j: any) => new Date(j.scheduled_start) >= monthStart)
+
+    // Same ownership filter + pending overlay as the day itself, so a queued
+    // offline completion drops the row instead of nagging until it syncs.
+    const strandedAll = await overlayPending('jobs', (isOwner
+      ? (strandedRes.data ?? [])
+      : (strandedRes.data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
+    ))
+    setNeedsClosing(strandedAll.filter((j: any) => j.status === 'in_progress' || j.status === 'en_route'))
 
     setTodayJobs(myToday)
     setActiveJob(myToday.find((j: any) => j.status === 'in_progress') || null)
@@ -142,6 +172,26 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   }, [user])
 
   useEffect(() => { load() }, [load])
+
+  // Resolve "ready to close" vs "still short of photos" per stranded clean,
+  // using the SAME job_completion_blockers() gate JobDetailScreen enforces on
+  // Complete — so the badge can never promise something the gate then refuses.
+  // Kept out of load() so the day paints first; badges fill in after. Offline
+  // it simply stays unresolved and no badge renders.
+  useEffect(() => {
+    if (needsClosing.length === 0) { setClosingBlockers({}); return }
+    let cancelled = false
+    ;(async () => {
+      const entries = await Promise.all(needsClosing.map(async (j: any) => {
+        const { data, error } = await supabase.rpc('job_completion_blockers', { p_job_id: j.id })
+        if (error) return null
+        return [j.id, (data ?? []).length] as const
+      }))
+      if (cancelled) return
+      setClosingBlockers(Object.fromEntries(entries.filter(Boolean) as (readonly [string, number])[]))
+    })()
+    return () => { cancelled = true }
+  }, [needsClosing])
 
   // Live "on shift" timer
   useEffect(() => {
@@ -339,6 +389,47 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               </TouchableOpacity>
             </View>
 
+            {/* ── NEEDS CLOSING ──
+                Cleans left open on an earlier day. Sits ABOVE today's list
+                because it is overdue work, and because being unreachable is
+                the whole reason these accumulate. */}
+            {needsClosing.length > 0 && (
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Text style={[styles.sectionTitle, { color: '#B45309' }]}>{t('needs_closing')} ({needsClosing.length})</Text>
+                </View>
+                <Text style={styles.needsClosingHint}>{t('needs_closing_hint')}</Text>
+                {needsClosing.map((job: any) => {
+                  const addr = job.client_addresses
+                  const n = closingBlockers[job.id]
+                  const isReady = n === 0
+                  const days = Math.max(1, Math.floor((Date.now() - new Date(job.scheduled_start).getTime()) / 86400000))
+                  return (
+                    <TouchableOpacity key={job.id} style={styles.strandedRow} onPress={() => onJobPress(job)}>
+                      <View style={[styles.jobDot, { backgroundColor: '#F59E0B' }]} />
+                      <View style={styles.jobInfo}>
+                        <Text style={styles.jobClient}>
+                          {job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}
+                          {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
+                        </Text>
+                        <Text style={styles.jobTime}>
+                          {new Date(job.scheduled_start).toLocaleDateString(localeFor(lang), { month: 'short', day: 'numeric' })} · {ti(t('open_for_days'), { days: String(days) })}
+                        </Text>
+                        {/* No badge until the gate answers — an optimistic
+                            "ready" that then refuses on Complete is worse. */}
+                        {n !== undefined && (
+                          <Text style={[styles.strandedBadge, isReady ? styles.strandedBadgeReady : styles.strandedBadgeBlocked]}>
+                            {isReady ? t('ready_to_close') : ti(t('photos_outstanding'), { count: String(n) })}
+                          </Text>
+                        )}
+                      </View>
+                      <Text style={styles.jobArrow}>→</Text>
+                    </TouchableOpacity>
+                  )
+                })}
+              </View>
+            )}
+
             {/* Today's job list preview */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
@@ -469,6 +560,13 @@ const styles = StyleSheet.create({
   jobClient: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
   jobTime: { fontSize: 11, color: '#94A3B8', marginTop: 2 },
   jobArrow: { fontSize: 16, color: '#CBD5E1' },
+  // "Needs closing" — amber-bordered so an overdue clean reads as an
+  // exception against the plain white rows of today's work.
+  needsClosingHint: { fontSize: 11, color: '#94A3B8', marginBottom: 8, lineHeight: 15 },
+  strandedRow: { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 8, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#FCD34D' },
+  strandedBadge: { alignSelf: 'flex-start', fontSize: 10, fontWeight: '700', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, overflow: 'hidden', marginTop: 6 },
+  strandedBadgeReady: { backgroundColor: '#DCFCE7', color: '#15803D' },
+  strandedBadgeBlocked: { backgroundColor: '#FEE2E2', color: '#991B1B' },
   routeStopBadge: { backgroundColor: '#F5F3FF', borderColor: '#DDD6FE', borderWidth: 1, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, marginRight: 8 },
   routeStopText: { fontSize: 10, fontWeight: '800', color: '#6D28D9' },
   moreBtn: { backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
