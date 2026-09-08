@@ -1338,7 +1338,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('property_notes')}</Text><Text style={styles.infoValue}>{propMeta.crew_notes}</Text></View>
             </View>
           )}
-          {!isTask && stagingPhotos.length > 0 && (
+          {/* Same rule as the camera chip below (§7.10): inspections keep this
+              even though other task types hide it. It was gated on `!isTask`
+              alone, and isTask is `job_type !== 'clean'` — so the one role whose
+              whole job is checking the property looks right could not see the
+              reference shots at all. */}
+          {(!isTask || isInspection) && stagingPhotos.length > 0 && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📸</Text>
               <View style={{ flex: 1 }}>
@@ -1413,6 +1418,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <TouchableOpacity style={styles.actionChip} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
                 <Text style={styles.actionChipIcon}>📸</Text>
                 <Text style={styles.actionChipLabel} numberOfLines={1}>{t('job_photos')}</Text>
+              </TouchableOpacity>
+            )}
+            {/* Reference shots, with the count on the chip. The photo-requirement
+                list taught this: reachable is not the same as findable — crew
+                found the required shots only when the number was on the button
+                (mobile 4dd0954). Same fix, same reason. Scrolls the property
+                straight into the existing full-screen viewer — swipeable, captions
+                included — which is what someone checking "does this look right?"
+                actually wants, rather than a 110px strip further down. */}
+            {(!isTask || isInspection) && stagingPhotos.length > 0 && (
+              <TouchableOpacity style={styles.actionChip} onPress={() => setStagingViewerIndex(0)}>
+                <Text style={styles.actionChipIcon}>🖼</Text>
+                <Text style={styles.actionChipLabel} numberOfLines={1}>{t('staging_photos')} ({stagingPhotos.length})</Text>
               </TouchableOpacity>
             )}
             {!isTask && (
