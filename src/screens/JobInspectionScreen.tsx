@@ -23,10 +23,11 @@
 // FIRST (clockOut, owned by JobDetailScreen) and only file if that succeeded.
 
 import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { PhotoViewer } from '../components/PhotoViewer'
 import type { TranslationKey } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
@@ -90,6 +91,13 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   // standard, so put the standard on the inspector's screen.
   const [standard, setStandard] = useState<any[]>([])
   const [parentJob, setParentJob] = useState<any>(null)
+  // The owner's reference shots for this property — how it should LOOK when
+  // finished. §7.9 puts the executed checklist here because a score is only
+  // fair against the standard; these are the visual half of that same standard,
+  // and until now the inspector was the one role that could not see them at all
+  // (JobDetailScreen gated them behind `!isTask`, and an inspection is a task).
+  const [stagingPhotos, setStagingPhotos] = useState<{ url: string; caption?: string | null }[]>([])
+  const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null)
   const [openStd, setOpenStd] = useState<Record<string, boolean>>({})
 
   const [layer, setLayer] = useState('supervisor')
@@ -131,6 +139,20 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
         setStandard(std ?? [])
         setParentJob(parent ?? null)
       }
+    }
+    // Reference shots hang off the ADDRESS, so they load whether or not this
+    // visit has a parent clean — an inspection with no parent still needs to
+    // know what "right" looks like.
+    const addrId = job.client_addresses?.id || job.address_id
+    if (addrId) {
+      const { data: addr } = await supabase.from('client_addresses')
+        .select('staging_photos').eq('id', addrId).maybeSingle()
+      // Entries with no image yet are the owner's shot-list placeholders — a
+      // labelled empty slot is a task for whoever visits next, not something
+      // crew can work from. Filtered at the source so the chip count, the
+      // strip and the viewer can never disagree.
+      setStagingPhotos((Array.isArray((addr as any)?.staging_photos) ? (addr as any).staging_photos : [])
+        .filter((p: any) => p?.url))
     }
     setLoading(false)
   }
@@ -243,6 +265,25 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
           </Text>
           <Text style={styles.whySub}>{done ? t('insp_locked') : t('insp_not_completed')}</Text>
         </View>
+
+        {/* How the property is SUPPOSED to look — the owner's reference shots.
+            Above the executed checklist on purpose: an inspector judges against
+            the standard, and the visual standard is what they are actually
+            comparing the room to. Tap for the full-screen viewer. */}
+        {stagingPhotos.length > 0 && (
+          <View style={{ marginTop: 4, marginBottom: 16 }}>
+            <Text style={styles.label}>📸 {t('staging_photos')} ({stagingPhotos.length})</Text>
+            <Text style={styles.hint}>{t('insp_staging_hint')}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+              {stagingPhotos.map((p, i) => (
+                <TouchableOpacity key={i} onPress={() => setStagingViewerIndex(i)} style={{ marginRight: 8 }}>
+                  <Image source={{ uri: p.url }} style={{ width: 120, height: 120, borderRadius: 10 }} resizeMode="cover" />
+                  {!!p.caption && <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 3, width: 120 }} numberOfLines={2}>{p.caption}</Text>}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
         {/* The parent clean's executed standard — what the crew signed off,
             room by room (§7.9: a score is only fair against the standard).
@@ -428,6 +469,13 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
           </View>
         </>)}
       </ScrollView>
+      {stagingViewerIndex != null && stagingPhotos.length > 0 && (
+        <PhotoViewer
+          photos={stagingPhotos.map(p => ({ url: p.url, caption: p.caption || null, meta: t('staging_photos') }))}
+          startIndex={stagingViewerIndex}
+          onClose={() => setStagingViewerIndex(null)}
+        />
+      )}
     </SafeAreaView>
   )
 }
