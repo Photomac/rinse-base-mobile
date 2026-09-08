@@ -147,7 +147,12 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
     if (addrId) {
       const { data: addr } = await supabase.from('client_addresses')
         .select('staging_photos').eq('id', addrId).maybeSingle()
-      setStagingPhotos(Array.isArray((addr as any)?.staging_photos) ? (addr as any).staging_photos : [])
+      // Entries with no image yet are the owner's shot-list placeholders — a
+      // labelled empty slot is a task for whoever visits next, not something
+      // crew can work from. Filtered at the source so the chip count, the
+      // strip and the viewer can never disagree.
+      setStagingPhotos((Array.isArray((addr as any)?.staging_photos) ? (addr as any).staging_photos : [])
+        .filter((p: any) => p?.url))
     }
     setLoading(false)
   }

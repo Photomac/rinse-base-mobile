@@ -386,7 +386,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (data) {
       setPropMeta(data as any)
       setBagColor((data as any).laundry_bag_color ?? null)
-      setStagingPhotos(Array.isArray((data as any).staging_photos) ? (data as any).staging_photos : [])
+      // Entries with no image yet are the owner's shot-list placeholders — a
+      // labelled empty slot is a task for whoever visits next, not something
+      // crew can work from. Filtered at the source so the chip count, the
+      // strip and the viewer can never disagree.
+      setStagingPhotos((Array.isArray((data as any).staging_photos) ? (data as any).staging_photos : [])
+        .filter((p: any) => p?.url))
       setPetFriendly(!!(data as any).pet_friendly)
       setPetFee(Number((data as any).pet_fee) || 0)
     }
