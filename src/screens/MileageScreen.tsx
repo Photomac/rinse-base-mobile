@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert,
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
+import { fmtDate } from '../lib/timezone'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -12,7 +13,6 @@ const IRS_RATE = 0.70 // 2025 IRS standard mileage rate fallback
 const PURPOSES_KEYS = ['job_travel', 'supply_run_miles', 'equipment_pickup', 'client_meeting', 'training', 'other'] as const
 type PurposeKey = typeof PURPOSES_KEYS[number]
 
-function fmtDate(iso: string) { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }
 function fmt$(n: number) { return '$' + n.toFixed(2) }
 function fmtDuration(ms: number) {
   const mins = Math.floor(ms / 60000)

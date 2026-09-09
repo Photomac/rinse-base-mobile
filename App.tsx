@@ -25,6 +25,7 @@ import './src/lib/arrivalGeofence'
 import { flushQueue } from './src/lib/photoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
 import { clearDataCache } from './src/lib/dataCache'
+import { setCurrentTz, fmtTime } from './src/lib/timezone'
 import { flushOutbox } from './src/lib/outbox'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
@@ -67,6 +68,9 @@ function AppInner() {
         // never a network blip (those are retried without an event) — so it's
         // safe to drop the offline profile copy here.
         if (_event === 'SIGNED_OUT' && lastAuthId.current) { clearCachedProfile(lastAuthId.current); clearDataCache() }
+        // Shared devices: don't leave the previous tenant's zone armed for
+        // whoever signs in next.
+        setCurrentTz(null)
         setUser(null); setLoading(false)
       }
     })
@@ -80,7 +84,7 @@ function AppInner() {
       // (the cleaning company owns that relationship) — they reach dispatch.
       try {
         const { data: tenant } = await supabase.from('tenants')
-          .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus').eq('id', data.tenant_id).maybeSingle()
+          .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, timezone, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus').eq('id', data.tenant_id).maybeSingle()
         let dispatchPhone = tenant?.dispatch_phone || null
         if (!dispatchPhone) {
           const { data: owner } = await supabase.from('users')
@@ -91,12 +95,16 @@ function AppInner() {
         data._contact = { crewCanContactClient: !!tenant?.crew_can_contact_client, dispatchPhone }
         // 'daily' → crew clock in once for the day (shift); 'per_job' (default) → per-clean timer.
         data._timeMode = tenant?.time_tracking_mode || 'per_job'
+        // The business's zone. Every job time and day bucket in the app renders
+        // in THIS zone, not the phone's, so the crew and the owner read the same
+        // clock for the same clean. Null → fall back to device-local.
+        data._tz = tenant?.timezone || null
         // >0 → tenant pays a laundry bonus for at least one destination
         // (home / on-site / office / laundromat); gates the bag counter on cleans.
         data._laundryBonus = Math.max(
           Number(tenant?.laundry_takehome_bonus || 0), Number(tenant?.laundry_onsite_bonus || 0),
           Number(tenant?.laundry_office_bonus || 0), Number(tenant?.laundry_laundromat_bonus || 0))
-      } catch (e) { data._contact = { crewCanContactClient: false, dispatchPhone: null }; data._timeMode = 'per_job'; data._laundryBonus = 0 }
+      } catch (e) { data._contact = { crewCanContactClient: false, dispatchPhone: null }; data._timeMode = 'per_job'; data._tz = null; data._laundryBonus = 0 }
       saveCachedProfile(authId, data)
     }
     // Offline fallback: a fetch ERROR (no signal, server down) is not proof the
@@ -109,6 +117,9 @@ function AppInner() {
       if (error) effective = await loadCachedProfile(authId)
       else clearCachedProfile(authId)
     }
+    // Before setUser: the first paint of the dashboard already formats job
+    // times, and a late call here would render one frame in the wrong zone.
+    setCurrentTz(effective?._tz)
     setUser(effective)
     setLoading(false)
     if (effective) {
@@ -173,7 +184,7 @@ function AppInner() {
         const { data: mine } = await supabase.from('job_assignments')
           .select('id').eq('job_id', job.id).eq('user_id', user.id).limit(1).maybeSingle()
         if (!mine || throttled()) return
-        const newTime = new Date(job.scheduled_start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+        const newTime = fmtTime(job.scheduled_start)
         Notifications.scheduleNotificationAsync({
           content: { title: '📅 Job rescheduled', body: `Your job has been moved to ${newTime}`, sound: true },
           trigger: null,

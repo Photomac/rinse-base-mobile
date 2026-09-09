@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator , RefreshControl } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
@@ -8,6 +8,10 @@ import { SLATE_DARK, GOLD } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { overlayPending } from '../lib/outbox'
+// Which day a clean falls on is the TENANT's day, not the phone's — see
+// src/lib/timezone.ts. Grid cells are local calendar Dates whose literal Y/M/D
+// is what's drawn, so they key off localDayKey and jobs key off dayKey.
+import { fmtTime, dayKey, localDayKey, todayKey, todayAsLocalDate } from '../lib/timezone'
 
 const STATUS_COLORS: Record<string, string> = {
   scheduled:   '#3B82F6',
@@ -23,7 +27,7 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
 }
 
 function isSameDay(a: Date, b: Date) { return a.toDateString() === b.toDateString() }
-function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
+const EMPTY_DAY: any[] = []
 function addDays(d: Date, n: number) { const r = new Date(d); r.setDate(r.getDate() + n); return r }
 
 type ViewMode = 'month' | 'week'
@@ -35,8 +39,8 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [offline, setOffline] = useState(false)
-  const [selectedDate, setSelectedDate] = useState(new Date())
-  const [anchor, setAnchor] = useState(new Date())
+  const [selectedDate, setSelectedDate] = useState(todayAsLocalDate)
+  const [anchor, setAnchor] = useState(todayAsLocalDate)
   const [view, setView] = useState<ViewMode>('month')
   // Crew see the property, not the homeowner — client names are for admins.
   const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
@@ -70,11 +74,26 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     setRefreshing(false)
   }
 
+  // Bucket once per load rather than re-scanning every job for each of the ~42
+  // cells the month grid draws. Keys are tenant-zone days; a grid cell is a
+  // local calendar Date whose literal Y/M/D is what it displays, so the two
+  // sides of the lookup are built by different helpers on purpose.
+  const jobsByDay = useMemo(() => {
+    const m = new Map<string, any[]>()
+    for (const j of jobs) {
+      const k = dayKey(j.scheduled_start)
+      const bucket = m.get(k)
+      if (bucket) bucket.push(j)
+      else m.set(k, [j])
+    }
+    return m
+  }, [jobs])
+
   function getJobsForDay(day: Date) {
-    return jobs.filter(j => isSameDay(new Date(j.scheduled_start), day))
+    return jobsByDay.get(localDayKey(day)) ?? EMPTY_DAY
   }
 
-  const now = new Date()
+  const today = todayKey()
   const selectedJobs = getJobsForDay(selectedDate)
 
   function buildMonthGrid() {
@@ -109,7 +128,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
           if (view === 'month') setAnchor(a => new Date(a.getFullYear(), a.getMonth() - 1, 1))
           else setAnchor(a => addDays(a, -7))
         }}><Text style={styles.navBtn}>‹</Text></TouchableOpacity>
-        <TouchableOpacity onPress={() => { setAnchor(new Date()); setSelectedDate(new Date()) }}>
+        <TouchableOpacity onPress={() => { setAnchor(todayAsLocalDate()); setSelectedDate(todayAsLocalDate()) }}>
           <Text style={styles.headerLabel}>{view === 'month' ? monthLabel : weekLabel}</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => {
@@ -152,7 +171,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                 {week.map((day, di) => {
                   if (!day) return <View key={di} style={styles.dayCell} />
                   const dayJobs = getJobsForDay(day)
-                  const isToday = isSameDay(day, now)
+                  const isToday = localDayKey(day) === today
                   const isSelected = isSameDay(day, selectedDate)
                   const isOtherMonth = day.getMonth() !== anchor.getMonth()
                   return (
@@ -183,7 +202,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
             <View style={styles.weekRow}>
               {buildWeekDays().map((day, i) => {
                 const dayJobs = getJobsForDay(day)
-                const isToday = isSameDay(day, now)
+                const isToday = localDayKey(day) === today
                 const isSelected = isSameDay(day, selectedDate)
                 return (
                   <TouchableOpacity key={i} style={[styles.weekDayCell, isSelected && styles.dayCellSelected]} onPress={() => setSelectedDate(day)}>
@@ -212,7 +231,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
         <View style={styles.selectedDaySection}>
           <Text style={styles.selectedDayLabel}>
             {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-            {isSameDay(selectedDate, now) ? ` · ${t('today')}` : ''}
+            {localDayKey(selectedDate) === today ? ` · ${t('today')}` : ''}
           </Text>
           {selectedJobs.length === 0 ? (
             <View style={styles.emptyDay}>

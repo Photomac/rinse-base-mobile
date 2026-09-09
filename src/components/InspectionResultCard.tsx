@@ -16,6 +16,7 @@ import React, { useEffect, useState } from 'react'
 import { View, Text, Image, ScrollView, StyleSheet } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { fmtDate } from '../lib/timezone'
 import { CARD, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
 
 const VERDICT: Record<string, { i18n: any; bg: string; fg: string }> = {
@@ -81,7 +82,7 @@ export function InspectionResultCard({ job }: { job: any }) {
         {!!inspector && (
           <Text style={{ fontSize: 11, color: TEXT_MUTED }}>
             {t('insp_results_by')} {inspector}
-            {insp.completed_at ? ` · ${new Date(insp.completed_at).toLocaleDateString()}` : ''}
+            {insp.completed_at ? ` · ${fmtDate(insp.completed_at)}` : ''}
           </Text>
         )}
       </View>

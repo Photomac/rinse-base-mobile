@@ -10,10 +10,10 @@ import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
 import { cachedQuery } from '../lib/dataCache'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 import { byCrewDayOrder } from '../lib/jobOrder'
-
-function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-}
+// Job times and the day bucket render in the TENANT's zone, not the phone's,
+// so the crew and the owner read the same clock for the same clean. See
+// src/lib/timezone.ts.
+import { fmtTime, fmtDate, dayKey, todayKey, startOfDayInTz, endOfDayInTz, startOfMonthInTz } from '../lib/timezone'
 
 export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void; onSOS: () => void }) {
   const { t, lang } = useLang()
@@ -46,9 +46,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // driving back into signal is a natural sync moment).
     flushOutbox().catch(() => {})
     const now = new Date()
-    const todayStart = new Date(now); todayStart.setHours(0,0,0,0)
-    const todayEnd = new Date(now); todayEnd.setHours(23,59,59,999)
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+    // "Today" is the tenant's day, not the phone's. With the two disagreeing,
+    // a late-evening clean sat in one app's today and the other's tomorrow.
+    const todayStart = startOfDayInTz(now)
+    const todayEnd = endOfDayInTz(now)
+    // Same for the month: these bounds feed crew_pay_for_period, so a phone in
+    // another zone must not report a different month's earnings than payroll.
+    const monthStart = startOfMonthInTz(now)
 
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
 
@@ -100,10 +104,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // Cached rows can be from an EARLIER day — re-filter to the current window
     // client-side so yesterday's cache never renders as today's jobs. No-op on
     // live data (the server already filtered).
-    const inToday = (j: any) => {
-      const ts = new Date(j.scheduled_start).getTime()
-      return ts >= todayStart.getTime() && ts <= todayEnd.getTime()
-    }
+    const today = todayKey()
+    const inToday = (j: any) => dayKey(j.scheduled_start) === today
     // Queued offline status changes (en_route/in_progress/completed) overlay
     // the cached/live rows so the day reads right after a relaunch.
     const myTodayAll = await overlayPending('jobs', (isOwner
@@ -289,7 +291,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           <View style={styles.headerTop}>
             <View>
               <Text style={styles.greeting}>{greeting}, {user.full_name?.split(' ')[0]} 👋</Text>
-              <Text style={styles.date}>{now.toLocaleDateString(localeFor(lang), { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
+              <Text style={styles.date}>{fmtDate(now, localeFor(lang), { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
             </View>
             <TouchableOpacity style={styles.sosBtn} onPress={onSOS} activeOpacity={0.8}>
               <Text style={styles.sosBtnText}>🆘</Text>
@@ -425,7 +427,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                           {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
                         </Text>
                         <Text style={styles.jobTime}>
-                          {new Date(job.scheduled_start).toLocaleDateString(localeFor(lang), { month: 'short', day: 'numeric' })} · {ti(t('open_for_days'), { days: String(days) })}
+                          {fmtDate(job.scheduled_start, localeFor(lang))} · {ti(t('open_for_days'), { days: String(days) })}
                         </Text>
                         {/* No badge until the gate answers — an optimistic
                             "ready" that then refuses on Complete is worse. */}
