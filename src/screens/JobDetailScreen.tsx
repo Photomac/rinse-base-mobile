@@ -4,6 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
+// Job times render in the tenant's zone, not the phone's — src/lib/timezone.ts.
+import { fmtTime } from '../lib/timezone'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
 import { LaundryRunScreen } from './LaundryRunScreen'
@@ -124,7 +126,6 @@ const DEFAULT_CHECKLIST: { id: string; labelKey: 'chk_kitchen' | 'chk_bathrooms'
   { id: '8', labelKey: 'chk_walkthrough',   room: 'General',  title: 'Walkthrough' },
 ]
 
-function fmtTime(iso: string) { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
 function fmtDuration(minutes: number) {
   const h = Math.floor(minutes / 60)
   const m = Math.round(minutes % 60)
@@ -825,7 +826,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       // without explanation reads as a bug.
       if (Date.now() - clockedInAt.getTime() > 90_000) {
         Alert.alert('📍', ti(t('clocked_in_from_arrival'), {
-          time: clockedInAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+          time: fmtTime(clockedInAt),
         }))
       }
     }

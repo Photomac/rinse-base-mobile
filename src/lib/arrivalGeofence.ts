@@ -15,6 +15,7 @@ import * as TaskManager from 'expo-task-manager'
 import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
+import { fmtTime, setCurrentTz } from './timezone'
 import { uuid4 } from './outbox'
 import { getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
@@ -197,8 +198,12 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
     // entry is somebody's pay.
     try {
       const { data: tenant } = await supabase.from('tenants')
-        .select('auto_clock_in, time_tracking_mode')
+        .select('auto_clock_in, time_tracking_mode, timezone')
         .eq('id', user.tenant_id).maybeSingle()
+      // This runs as a background task, which can be a fresh JS context where
+      // App.tsx never ran — arm the zone here so the time quoted in the push
+      // is the tenant's, not the phone's.
+      setCurrentTz(tenant?.timezone)
       // No auto-punch before the window opens — an early arrival gets the
       // prompt instead (backdate floor already handles early manual punches).
       const windowOpen = Date.now() >= new Date((job as any).scheduled_start).getTime() - 30 * 60000
@@ -240,7 +245,7 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
                 title: `⏱ ${tStatic('auto_clock_in_title')}`,
                 body: ti(tStatic('auto_clock_in_body'), {
                   property,
-                  time: new Date(arrival.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+                  time: fmtTime(arrival.at),
                 }),
                 sound: 'default',
                 data: { type: 'auto_clock_in', jobId },

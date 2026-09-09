@@ -26,6 +26,7 @@ import React, { useState, useEffect } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { fmtDateTime } from '../lib/timezone'
 import { useLang } from '../contexts/LangContext'
 import { PhotoViewer } from '../components/PhotoViewer'
 import type { TranslationKey } from '../lib/i18n'
@@ -297,7 +298,7 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
                 wrong one's empty checklist reads as a bug (Todd, 2026-08-24). */}
             {parentJob?.completed_at && (
               <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 6 }}>
-                {t('insp_parent_clean')} {new Date(parentJob.completed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                {t('insp_parent_clean')} {fmtDateTime(parentJob.completed_at)}
               </Text>
             )}
             {/* An untouched checklist is a FACT the inspector should weigh
