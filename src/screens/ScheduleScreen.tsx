@@ -6,6 +6,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
+import { byCrewDayOrder } from '../lib/jobOrder'
 import { overlayPending } from '../lib/outbox'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -51,7 +52,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     // online. Cached rows carry scheduled_start, so day placement stays right
     // even when the cache is a day or two old.
     const { data, fromCache } = await cachedQuery(`sched:${user.id}`, supabase.from('jobs')
-      .select('id, job_number, status, scheduled_start, scheduled_end, is_turnover, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id)')
+      .select('id, job_number, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id)')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', start.toISOString())
       .lte('scheduled_start', end.toISOString())
@@ -62,7 +63,9 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
       ? (data ?? [])
       : (data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
     // Queued offline status changes overlay the cached/live rows.
-    setJobs(await overlayPending('jobs', myJobs))
+    // Same order the Dashboard uses — a crew opening Schedule for today must
+    // see the sequence they see on the day screen, not a second opinion.
+    setJobs((await overlayPending('jobs', myJobs)).sort(byCrewDayOrder))
     setLoading(false)
     setRefreshing(false)
   }
