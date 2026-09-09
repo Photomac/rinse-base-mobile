@@ -9,6 +9,7 @@ import { startLocationTracking, stopLocationTracking } from '../lib/locationTrac
 import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
 import { cachedQuery } from '../lib/dataCache'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
+import { byCrewDayOrder } from '../lib/jobOrder'
 
 function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -125,9 +126,20 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     ))
     setNeedsClosing(strandedAll.filter((j: any) => j.status === 'in_progress' || j.status === 'en_route'))
 
-    setTodayJobs(myToday)
-    setActiveJob(myToday.find((j: any) => j.status === 'in_progress') || null)
-    setNextJob(myToday.find((j: any) => j.status === 'scheduled' || j.status === 'en_route') || null)
+    // Sorted here rather than trusting the query's ORDER BY: the server can only
+    // order by start time, which leaves same-slot jobs in an arbitrary — and
+    // unstable — sequence, and ignores the route the dispatcher set. See
+    // byCrewDayOrder for why time wins and route_order only breaks ties.
+    //
+    // "Next job" is derived from the SORTED list, not the raw one. It used to
+    // take the first scheduled row in whatever order the query returned, so on
+    // a day with several cleans in the same slot the crew's next stop was
+    // whichever one Postgres happened to hand back first — and could change on
+    // a refresh. Next now means next in the order they actually work.
+    const ordered = [...myToday].sort(byCrewDayOrder)
+    setTodayJobs(ordered)
+    setActiveJob(ordered.find((j: any) => j.status === 'in_progress') || null)
+    setNextJob(ordered.find((j: any) => j.status === 'scheduled' || j.status === 'en_route') || null)
 
     const hours = myMonth.reduce((s: number, j: any) => {
       if (!j.scheduled_end) return s
