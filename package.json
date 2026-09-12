@@ -41,8 +41,11 @@
   "devDependencies": {
     "@expo/fingerprint": "^0.15.4",
     "@types/react": "~19.1.10",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "sharp": "^0.34.5",
-    "typescript": "~5.9.2"
+    "typescript": "~5.9.2",
+    "typescript-eslint": "^8.70.0"
   },
   "private": true
 }
