@@ -3,7 +3,7 @@
 import { useState } from 'react'
 
 export function GateProbe({ ready }: { ready: boolean }) {
-  if (!ready) return null
   const [count] = useState(0)
+  if (!ready) return null
   return count
 }
