@@ -14,6 +14,7 @@ import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
 import { PhotoViewer } from '../components/PhotoViewer'
 import { IncidentReportCard } from '../components/IncidentReportCard'
+import { uploadImageToJobPhotos } from '../lib/chatAttachments'
 import { InspectionResultCard } from '../components/InspectionResultCard'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
@@ -170,6 +171,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [issueForId, setIssueForId] = useState<string | null>(null)
   const [issueText, setIssueText] = useState('')
   const [viewPropertyPhoto, setViewPropertyPhoto] = useState(false)
+  // The property's cover photo, held here so a new shot shows the moment it
+  // saves. A cover that won't load (e.g. a blank file from the old Blob upload)
+  // falls back to the take-photo button, so crew can replace it.
+  const [propertyPhotoUrl, setPropertyPhotoUrl] = useState<string | null>((job.client_addresses as any)?.photo_url ?? null)
+  const [propertyPhotoBroken, setPropertyPhotoBroken] = useState(false)
+  const [propertyPhotoBusy, setPropertyPhotoBusy] = useState(false)
 
   // Required property shots, surfaced BEFORE the work instead of at completion.
   // These live in property_photo_requirements and were previously visible only
@@ -1243,34 +1250,47 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll}>
         {/* Property photo — not for location-less tasks (internal shell property) */}
-        {(isTask && !hasTaskLocation) ? null : addr?.photo_url ? (
+        {(isTask && !hasTaskLocation) ? null : propertyPhotoUrl && !propertyPhotoBroken ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => setViewPropertyPhoto(true)}>
-            <Image source={{ uri: addr.photo_url }} style={{ width: '100%', height: 180, borderRadius: 12, marginBottom: 12 }} resizeMode="cover" />
+            <Image source={{ uri: propertyPhotoUrl }} onError={() => setPropertyPhotoBroken(true)} style={{ width: '100%', height: 180, borderRadius: 12, marginBottom: 12 }} resizeMode="cover" />
           </TouchableOpacity>
         ) : addr?.id && (
           <TouchableOpacity
-            style={{ width: '100%', height: 100, borderRadius: 12, marginBottom: 12, borderWidth: 1.5, borderStyle: 'dashed', borderColor: TEAL + '60', backgroundColor: TEAL + '08', alignItems: 'center', justifyContent: 'center' }}
+            disabled={propertyPhotoBusy}
+            style={{ width: '100%', height: 100, borderRadius: 12, marginBottom: 12, borderWidth: 1.5, borderStyle: 'dashed', borderColor: TEAL + '60', backgroundColor: TEAL + '08', alignItems: 'center', justifyContent: 'center', opacity: propertyPhotoBusy ? 0.6 : 1 }}
             onPress={async () => {
+              if (propertyPhotoBusy) return
               try {
                 // Gate on camera permission — launchCameraAsync throws
                 // "Missing camera or camera roll permission" if it isn't granted.
                 if (await ensureCameraCapture() !== 'granted') return
                 const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.8 })
                 if (result.canceled || !result.assets?.[0]) return
+                setPropertyPhotoBusy(true)
                 const asset = result.assets[0]
-                const ext = asset.uri.split('.').pop() || 'jpg'
-                const path = `${user.tenant_id}/properties/${addr.id}_${Date.now()}.${ext}`
-                const response = await fetch(asset.uri)
-                const blob = await response.blob()
-                const { error: upErr } = await supabase.storage.from('job-photos').upload(path, blob, { contentType: `image/${ext}`, upsert: true })
-                if (upErr) { Alert.alert(t('upload_failed'), upErr.message); return }
-                const { data: urlData } = supabase.storage.from('job-photos').getPublicUrl(path)
-                await supabase.from('client_addresses').update({ photo_url: urlData.publicUrl }).eq('id', addr.id)
+                const extRaw = (asset.uri.split('.').pop() || 'jpg').toLowerCase()
+                const ext = extRaw.length > 4 ? 'jpg' : extRaw
+                // FormData upload. The old fetch → Blob → supabase-js .upload() saved
+                // blank 0-byte covers under React Native (8 of 66 in prod, 2026-09-15),
+                // and a saved cover hid this button, so nobody could retake it.
+                const url = await uploadImageToJobPhotos(asset, `${user.tenant_id}/properties/${addr.id}_${Date.now()}.${ext}`)
+                const { error: saveErr } = await supabase.from('client_addresses').update({ photo_url: url }).eq('id', addr.id)
+                if (saveErr) { Alert.alert(t('upload_failed'), saveErr.message); return }
+                setPropertyPhotoUrl(url)
+                setPropertyPhotoBroken(false)
                 Alert.alert(t('photo_saved'), t('property_photo_saved'))
-              } catch (err: any) { Alert.alert(t('error'), err.message || t('upload_failed')) }
+              } catch (err: any) {
+                Alert.alert(t('error'), err.message || t('upload_failed'))
+              } finally {
+                setPropertyPhotoBusy(false)
+              }
             }}>
-            <Text style={{ fontSize: 24, color: TEAL, marginBottom: 4 }}>📷</Text>
-            <Text style={{ fontSize: 12, color: TEAL, fontWeight: '600' }}>{t('take_property_photo')}</Text>
+            {propertyPhotoBusy ? <ActivityIndicator color={TEAL} /> : (
+              <>
+                <Text style={{ fontSize: 24, color: TEAL, marginBottom: 4 }}>📷</Text>
+                <Text style={{ fontSize: 12, color: TEAL, fontWeight: '600' }}>{t('take_property_photo')}</Text>
+              </>
+            )}
           </TouchableOpacity>
         )}
 
@@ -1862,9 +1882,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         )}
       </ScrollView>
 
-      {viewPropertyPhoto && addr?.photo_url && (
+      {viewPropertyPhoto && propertyPhotoUrl && (
         <PhotoViewer
-          photos={[{ url: addr.photo_url, caption: propLabel || null, meta: t('property_photo') }]}
+          photos={[{ url: propertyPhotoUrl, caption: propLabel || null, meta: t('property_photo') }]}
           onClose={() => setViewPropertyPhoto(false)}
         />
       )}

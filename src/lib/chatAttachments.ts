@@ -42,11 +42,19 @@ export async function pickAndUploadImage(source: AttachmentSource, tenantId: str
   const asset = result.assets[0]
   const extRaw = (asset.uri.split('.').pop() || 'jpg').toLowerCase()
   const ext = extRaw.length > 4 ? 'jpg' : extRaw
-  const path = `${tenantId}/${folder}/${Date.now()}.${ext}`
-  // Upload as FormData straight to the storage REST endpoint (same pattern as
-  // photoQueue.uploadOne). supabase-js .upload() with a fetched Blob writes a
-  // 0-byte object under React Native — RN blobs don't survive its body
-  // conversion, and storage accepts the empty payload without erroring.
+  return uploadImageToJobPhotos(asset, `${tenantId}/${folder}/${Date.now()}.${ext}`)
+}
+
+// Upload a local image file to the public job-photos bucket at `path` and return
+// its public URL. Throws on failure.
+//
+// FormData straight to the storage REST endpoint (same pattern as
+// photoQueue.uploadOne). supabase-js .upload() with a fetched Blob writes a
+// 0-byte object under React Native — RN blobs don't survive its body
+// conversion, and storage accepts the empty payload without erroring. Every
+// mobile image upload goes through here or photoQueue; never .upload(blob).
+export async function uploadImageToJobPhotos(asset: { uri: string; mimeType?: string | null }, path: string): Promise<string> {
+  const ext = (path.split('.').pop() || 'jpg').toLowerCase()
   const { data: { session } } = await supabase.auth.getSession()
   const token = session?.access_token
   if (!token) throw new Error('No signed-in session')
