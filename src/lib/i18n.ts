@@ -4,6 +4,20 @@ export type Language = 'en' | 'es' | 'pt'
 
 export const translations = {
   en: {
+    // Dashboard "Get ready for today" prep card
+    prep_title: 'Get ready for today',
+    prep_all_set: 'All set for today',
+    prep_show: 'Show',
+    prep_linens_title: 'Linens to bring',
+    prep_linens_sub: "For {n} of today's cleans",
+    prep_bags: '{color} bags',
+    prep_turnaround_title: 'Guests arriving today',
+    prep_guest_arrives: 'guest arrives {time}',
+    prep_arrives_today: 'guest arrives today',
+    prep_restock_title: 'Supplies to restock',
+    prep_restock_sub: 'Still marked low from a past visit',
+    prep_access_title: 'Check access',
+    prep_access_sub: 'No lockbox code or entry instructions on file — call dispatch before you go',
     // Common
     back: 'Back', save: 'Save', cancel: 'Cancel', loading: 'Loading...', error: 'Error',
     done: 'Done', yes: 'Yes', no: 'No', optional: 'optional',
@@ -508,6 +522,20 @@ export const translations = {
     sev_observation: 'Observation'
   },
   es: {
+    // Tarjeta "Prepárate para hoy"
+    prep_title: 'Prepárate para hoy',
+    prep_all_set: 'Todo listo para hoy',
+    prep_show: 'Ver',
+    prep_linens_title: 'Ropa de cama para llevar',
+    prep_linens_sub: 'Para {n} de las limpiezas de hoy',
+    prep_bags: 'bolsas {color}',
+    prep_turnaround_title: 'Huéspedes que llegan hoy',
+    prep_guest_arrives: 'el huésped llega a las {time}',
+    prep_arrives_today: 'el huésped llega hoy',
+    prep_restock_title: 'Suministros para reponer',
+    prep_restock_sub: 'Siguen marcados como bajos de una visita anterior',
+    prep_access_title: 'Revisa el acceso',
+    prep_access_sub: 'No hay código de caja de llaves ni instrucciones de entrada — llama a la oficina antes de ir',
     // Common
     back: 'Atrás', save: 'Guardar', cancel: 'Cancelar', loading: 'Cargando...', error: 'Error',
     done: 'Listo', yes: 'Sí', no: 'No', optional: 'opcional',
@@ -1008,6 +1036,20 @@ export const translations = {
     sev_observation: 'Observación'
   },
   pt: {
+    // Cartão "Prepare-se para hoje"
+    prep_title: 'Prepare-se para hoje',
+    prep_all_set: 'Tudo pronto para hoje',
+    prep_show: 'Ver',
+    prep_linens_title: 'Roupa de cama para levar',
+    prep_linens_sub: 'Para {n} das limpezas de hoje',
+    prep_bags: 'sacos {color}',
+    prep_turnaround_title: 'Hóspedes chegando hoje',
+    prep_guest_arrives: 'hóspede chega às {time}',
+    prep_arrives_today: 'hóspede chega hoje',
+    prep_restock_title: 'Suprimentos para repor',
+    prep_restock_sub: 'Ainda marcados em falta de uma visita anterior',
+    prep_access_title: 'Verifique o acesso',
+    prep_access_sub: 'Sem código do cofre de chaves nem instruções de entrada — ligue para o escritório antes de ir',
     // Common
     back: 'Voltar', save: 'Salvar', cancel: 'Cancelar', loading: 'Carregando...', error: 'Erro',
     done: 'Pronto', yes: 'Sim', no: 'Não', optional: 'opcional',

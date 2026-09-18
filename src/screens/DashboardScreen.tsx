@@ -10,6 +10,7 @@ import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
 import { cachedQuery } from '../lib/dataCache'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 import { byCrewDayOrder } from '../lib/jobOrder'
+import { PrepCard } from '../components/PrepCard'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
 // src/lib/timezone.ts.
@@ -367,6 +368,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                 <Text style={styles.activeArrow}>→</Text>
               </TouchableOpacity>
             )}
+
+            {/* Get ready for today — renders nothing when there's nothing to prep */}
+            <PrepCard user={user} jobs={todayJobs} onJobPress={onJobPress} />
 
             {/* Next job */}
             {nextJob && !activeJob && (
