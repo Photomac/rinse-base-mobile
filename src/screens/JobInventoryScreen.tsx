@@ -50,6 +50,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   const [items, setItems] = useState<Item[]>([])
   const [rooms, setRooms] = useState<any[]>([])
   const [log, setLog] = useState<LogState>({})
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -127,6 +128,17 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   function setNotes(id: string, notes: string) {
     const row = ensureRow(id)
     setLog(prev => ({ ...prev, [id]: { ...row, notes } }))
+  }
+
+  // Counting every item at every house is what killed supply logging: across
+  // the platform only ~10% of cleans carried any supply row at all, and the
+  // ones that did were mostly "flag everything" taps. So a consumable now
+  // asks one question on arrival — is it low? — and the counts sit behind
+  // "+ Add counts" for the crews that do restock from the van. A row that
+  // already HAS counts opens expanded, so nothing a crew typed goes hidden.
+  function countsShown(id: string, row: { qty_used: number; qty_remaining: string }) {
+    const has = row.qty_remaining !== '' || row.qty_used > 0
+    return expanded[id] ?? has
   }
 
   async function save() {
@@ -296,6 +308,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                   )
                 }
                 const belowPar = isBelowPar(item, row)
+                const showCounts = countsShown(item.id, row)
                 return (
                   <View key={item.id} style={styles.itemRow}>
                     <View style={styles.itemHead}>
@@ -305,6 +318,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                       )}
                     </View>
                     <View style={styles.itemControls}>
+                      {showCounts && (<>
                       {/* Cycle count — primary action */}
                       <View style={styles.countGroup}>
                         <Text style={styles.countLabel}>{t('count_left')}</Text>
@@ -327,6 +341,12 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                           <TouchableOpacity style={styles.qtyBtn} onPress={() => setQty(item.id, +1)}><Text style={styles.qtyBtnText}>+</Text></TouchableOpacity>
                         </View>
                       </View>
+                      </>)}
+                      {!showCounts && (
+                        <TouchableOpacity onPress={() => setExpanded(prev => ({ ...prev, [item.id]: true }))} style={styles.addCountsBtn}>
+                          <Text style={styles.addCounts}>+ {t('add_counts')}</Text>
+                        </TouchableOpacity>
+                      )}
                       {/* Manual low toggle — for items the crew didn't count but knows are low */}
                       <TouchableOpacity
                         onPress={() => toggleLow(item.id)}
@@ -437,6 +457,8 @@ const styles = StyleSheet.create({
   lowToggleOn: { backgroundColor: AMBER, borderColor: AMBER },
   lowToggleText: { color: '#92400E', fontWeight: '700', fontSize: 11 },
   belowParHint: { fontSize: 10, color: '#92400E', fontWeight: '700', marginTop: 6, fontStyle: 'italic' },
+  addCountsBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: '#CBD5E1' },
+  addCounts: { fontSize: 12, color: '#64748B', fontWeight: '600' },
 
   noteCard: {
     backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#E2E8F0',
