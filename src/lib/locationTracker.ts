@@ -9,7 +9,7 @@ import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
-import { tStatic } from './i18n'
+import { tStatic, ti } from './i18n'
 
 const LOCATION_TASK = 'crew-location-task'
 const PING_INTERVAL = 5 * 60 * 1000 // 5 minutes
@@ -209,6 +209,38 @@ export async function maybeStopLocationTracking(user: any) {
   } catch { /* best-effort — worst case tracking continues as before */ }
 }
 
+// Day-shift tenants (time_tracking_mode = 'daily') have no per-job clock: the
+// "active job" the departure check keys on is merely a clean marked started.
+// App.tsx caches the mode on the user as _timeMode; the headless background
+// task rebuilds a bare user, so fall back to the tenant row.
+async function isDailyMode(user: any): Promise<boolean> {
+  if (user?._timeMode) return user._timeMode === 'daily'
+  try {
+    const { data } = await supabase.from('tenants')
+      .select('time_tracking_mode').eq('id', user.tenant_id).maybeSingle()
+    return data?.time_tracking_mode === 'daily'
+  } catch { return false }
+}
+
+// The "you left the property" push. Two versions, because the wrong one is a
+// lie: a per-job crew member IS still clocked in and should clock out; a
+// day-shift crew member has no per-job clock — their paid day is untouched —
+// they just left a clean that isn't marked complete. Telling them to "clock
+// out" sends them looking for a button that does not exist in that mode.
+async function notifyLeftProperty(user: any, jobId: string, property: string, extra: Record<string, any> = {}) {
+  const daily = await isDailyMode(user)
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: tStatic(daily ? 'left_site_daily_title' : 'left_site_clocked_title'),
+      body: ti(tStatic(daily ? 'left_site_daily_body' : 'left_site_clocked_body'), { property }),
+      sound: 'default',
+      data: { type: 'geofence_alert', jobId },
+      ...extra,
+    },
+    trigger: null,
+  })
+}
+
 // ── BACKGROUND TASK HANDLER ──
 // This runs even when the app is in the background
 TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
@@ -292,15 +324,7 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
         const dismissed = geofenceDismissedUntil[activeJob.id] || 0
 
         if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: 'Still clocked in!',
-              body: `You've left ${addr.nickname || addr.street || 'the property'} but you're still clocked in. Tap to clock out.`,
-              sound: 'default',
-              data: { type: 'geofence_alert', jobId: activeJob.id },
-            },
-            trigger: null,
-          })
+          await notifyLeftProperty(user, activeJob.id, addr.nickname || addr.street || tStatic('arrival_generic_property'))
         }
       }
     }
@@ -368,19 +392,10 @@ async function pingLocation(user: any) {
         const dismissed = geofenceDismissedUntil[activeJob.id] || 0
 
         if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
-          const propertyName = addr.nickname || addr.street || 'your current job'
+          const propertyName = addr.nickname || addr.street || tStatic('arrival_generic_property')
 
           // Fire local push notification
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: 'Still clocked in!',
-              body: `You've left ${propertyName} but you're still clocked in. Tap to clock out.`,
-              sound: 'default',
-              data: { type: 'geofence_alert', jobId: activeJob.id },
-              categoryIdentifier: 'geofence',
-            },
-            trigger: null, // immediate
-          })
+          await notifyLeftProperty(user, activeJob.id, propertyName, { categoryIdentifier: 'geofence' })
 
           // Log the geofence departure (non-blocking — if this fails,
           // the push already fired, so we just swallow the error)

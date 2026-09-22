@@ -351,6 +351,10 @@ export const translations = {
     clocked_in_from_arrival: 'Clocked in from your arrival at {{time}} — GPS-verified.',
     auto_clock_in_title: 'Clocked in automatically',
     auto_clock_in_body: "You're on the clock at {{property}} since {{time}}. Open the app if this is wrong.",
+    left_site_clocked_title: 'Still clocked in!',
+    left_site_clocked_body: "You've left {{property}} but you're still clocked in. Tap to clock out.",
+    left_site_daily_title: 'Not marked complete',
+    left_site_daily_body: "You've left {{property}} but it isn't marked complete. Tap to finish it, or ignore this if you're coming back.",
     client_badge: 'Client',
     // Today
     please_take_after_photo: 'Please take at least one after photo before marking this job complete.',
@@ -868,6 +872,10 @@ export const translations = {
     clocked_in_from_arrival: 'Entrada registrada desde tu llegada a las {{time}} — verificado por GPS.',
     auto_clock_in_title: 'Entrada registrada automáticamente',
     auto_clock_in_body: 'Estás en el reloj en {{property}} desde las {{time}}. Abre la app si esto es un error.',
+    left_site_clocked_title: '¡Sigues registrado!',
+    left_site_clocked_body: 'Saliste de {{property}} pero sigues registrado. Toca para registrar tu salida.',
+    left_site_daily_title: 'Sin marcar como terminada',
+    left_site_daily_body: 'Saliste de {{property}} pero no está marcada como terminada. Toca para finalizarla, o ignora esto si vas a volver.',
     client_badge: 'Cliente',
     // Today
     please_take_after_photo: 'Toma al menos una foto de "después" antes de marcar este trabajo como completado.',
@@ -1382,6 +1390,10 @@ export const translations = {
     clocked_in_from_arrival: 'Ponto batido na sua chegada, às {{time}} — verificado por GPS.',
     auto_clock_in_title: 'Ponto batido automaticamente',
     auto_clock_in_body: 'Você está no ponto em {{property}} desde {{time}}. Abra o app se isso estiver errado.',
+    left_site_clocked_title: 'Ainda no ponto!',
+    left_site_clocked_body: 'Você saiu de {{property}} mas ainda está no ponto. Toque para bater a saída.',
+    left_site_daily_title: 'Não marcada como concluída',
+    left_site_daily_body: 'Você saiu de {{property}} mas ela não está marcada como concluída. Toque para finalizar, ou ignore se for voltar.',
     client_badge: 'Cliente',
     // Today
     please_take_after_photo: 'Tire pelo menos uma foto de "depois" antes de marcar este serviço como concluído.',
