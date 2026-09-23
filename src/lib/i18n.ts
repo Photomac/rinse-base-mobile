@@ -460,6 +460,7 @@ export const translations = {
     ir_save: 'Save report',
     ir_saved_title: 'Report saved',
     ir_saved_msg: 'Your manager will review it and decide what to share.',
+    ir_saved_offline_msg: 'No signal right now. The report is saved on your phone and will send, with its photos, when you\'re back in coverage.',
     ir_need_title: 'Describe what happened first',
     // Inspection (Ch.7 §7.8) — a separate visit that verifies someone else's clean
     inspection: 'Inspection',
@@ -992,6 +993,7 @@ export const translations = {
     ir_save: 'Guardar reporte',
     ir_saved_title: 'Reporte guardado',
     ir_saved_msg: 'Tu gerente lo revisará y decidirá qué compartir.',
+    ir_saved_offline_msg: 'Sin señal ahora. El reporte está guardado en tu teléfono y se enviará, con sus fotos, cuando vuelvas a tener cobertura.',
     ir_need_title: 'Primero describe qué pasó',
     // Inspección (Cap.7 §7.8) — una visita aparte que verifica la limpieza de otra persona
     inspection: 'Inspección',
@@ -1522,6 +1524,7 @@ export const translations = {
     ir_save: 'Salvar relatório',
     ir_saved_title: 'Relatório salvo',
     ir_saved_msg: 'Seu gerente vai revisar e decidir o que compartilhar.',
+    ir_saved_offline_msg: 'Sem sinal agora. O relatório está salvo no seu celular e será enviado, com as fotos, quando você voltar a ter cobertura.',
     ir_need_title: 'Primeiro descreva o que aconteceu',
     // Inspeção (Cap.7 §7.8) — uma visita separada que verifica a limpeza de outra pessoa
     inspection: 'Inspeção',
