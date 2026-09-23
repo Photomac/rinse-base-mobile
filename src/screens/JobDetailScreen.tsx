@@ -238,6 +238,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // job row (sync-ical keeps them fresh on drift); bag color lives on the property.
   const [turnover, setTurnover] = useState<{ checkout: string | null; checkin: string | null; window: number | null; urgency: string | null } | null>(null)
   const [guestCount, setGuestCount] = useState<number | null>(null)
+  // Pets the PMS says are on the stay (property_reservations.pet_count). null =
+  // the source didn't say — iCal never does.
+  const [bookedPets, setBookedPets] = useState<number | null>(null)
   // Everyone working this job (lead first) — crew see who they're working with.
   const [crewOnJob, setCrewOnJob] = useState<{ id: string; name: string; isLead: boolean }[]>([])
   // Owner/manager opening a clean they are NOT on the crew of: the Clock In
@@ -359,7 +362,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // payload — same for the laundry flag and the client's type.
     const { data: jr } = await cachedQuery(`jobmeta:${job.id}`, supabase
       .from('jobs')
-      .select('seam_access_code, laundry_done_onsite, pet_fee_applied, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count)')
+      .select('seam_access_code, laundry_done_onsite, pet_fee_applied, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count, pet_count)')
       .eq('id', job.id)
       .maybeSingle())
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
@@ -376,6 +379,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       })
       const gc = (jr as any).property_reservations?.guest_count
       if (gc) setGuestCount(gc)
+      const pc = (jr as any).property_reservations?.pet_count
+      if (pc != null) setBookedPets(pc)
     }
 
     // Full crew roster for this job, lead first.
@@ -439,7 +444,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     return new Promise(resolve => {
       Alert.alert(
         `🐾 ${t('pet_prompt_title')}`,
-        t('pet_prompt_msg'),
+        // When the booking itself lists pets, say so: the crew is confirming a
+        // fact, not guessing. Still asked either way — guests bring pets they
+        // never declared, and declared ones sometimes don't come.
+        bookedPets ? ti(t('pet_prompt_msg_booked'), { n: String(bookedPets) }) : t('pet_prompt_msg'),
         [
           { text: t('pet_prompt_no'), onPress: () => resolve('no') },
           {
@@ -1313,6 +1321,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               )}
               {guestCount != null && (
                 <Text style={{ fontSize: 12, fontWeight: '600', color: '#374151', marginTop: 3 }}>👥 {ti(t('guests_stayed'), { n: String(guestCount) })}</Text>
+              )}
+              {!!bookedPets && (
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#92400E', marginTop: 3 }}>🐾 {ti(t('pets_on_booking'), { n: String(bookedPets) })}</Text>
               )}
               {turnover.window != null && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6 }}>
