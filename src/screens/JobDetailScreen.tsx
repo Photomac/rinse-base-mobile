@@ -205,7 +205,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [elapsedMinutes, setElapsedMinutes] = useState(0)
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
-  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; crew_notes?: string | null } | null>(null)
+  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null } | null>(null)
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
 
@@ -390,7 +390,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!addrId) return
     const { data } = await cachedQuery(`propmeta:${addrId}`, supabase
       .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft, beds, crew_notes, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
+      .select('bedrooms, bathrooms, sqft, beds, sleeps, crew_notes, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
       .eq('id', addrId)
       .maybeSingle())
     if (data) {
@@ -1338,6 +1338,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 propMeta?.bedrooms != null ? `${propMeta.bedrooms} ${t('beds_short')}` : null,
                 propMeta?.bathrooms != null ? `${propMeta.bathrooms} ${t('baths_short')}` : null,
                 propMeta?.beds != null ? `🛏 ${propMeta.beds} ${t('beds_total_short')}` : null,
+                propMeta?.sleeps != null ? `👥 ${ti(t('sleeps_n'), { n: String(propMeta.sleeps) })}` : null,
                 propMeta?.sqft != null ? `${propMeta.sqft.toLocaleString()} ${t('sqft_short')}` : null,
               ].filter(Boolean).join('   ·   ')}
             </Text>
