@@ -13,7 +13,11 @@
 
 import React, { useState, useEffect } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Image, Alert } from 'react-native'
-import { pickAndUploadImage } from '../lib/chatAttachments'
+import * as ImagePicker from 'expo-image-picker'
+import { ensureCameraCapture } from '../lib/permissions'
+import { persistCapturedPhoto, discardCapturedPhoto, enqueueIncidentPhoto, flushQueue } from '../lib/photoQueue'
+import { writeThrough, uuid4 } from '../lib/outbox'
+import { queueIncidentNotify, flushIncidentNotifies } from '../lib/incidentNotify'
 import { supabase } from '../lib/supabase'
 import { roomLabel } from '../lib/rooms'
 import { useLang } from '../contexts/LangContext'
@@ -66,6 +70,8 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   const [severity, setSeverity] = useState('minor')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  // Local, on-device uris. Photos are persisted at capture and queued at save,
+  // so a report can be filed with no signal (Rhyne, Port O'Connor, 2026-09-23).
   const [photoUrls, setPhotoUrls] = useState<string[]>([])
   const [uploading, setUploading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -110,14 +116,24 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
     setLinenItemId(''); setLinenQty(1); setLinenCond('stained'); setRoomId('')
   }
 
+  // Discard the form: its photos were never queued, so delete their files.
+  function cancel() {
+    photoUrls.forEach(u => { discardCapturedPhoto(u) })
+    reset()
+  }
+
   async function addPhoto() {
     setUploading(true)
     try {
-      // pickAndUploadImage sends FormData straight to the storage REST endpoint
-      // — supabase-js .upload() with a fetched Blob writes a 0-byte object
-      // under React Native. Camera-only so incident photos are always fresh.
-      const url = await pickAndUploadImage('camera', user.tenant_id, job.id)
-      if (url) setPhotoUrls(p => [...p, url])
+      // Camera-only so incident photos are always fresh. Nothing uploads here:
+      // the photo is copied to durable on-device storage and queued on save,
+      // exactly like job photos, so a dead zone can't lose it.
+      if (await ensureCameraCapture() !== 'granted') { setUploading(false); return }
+      const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.7 })
+      if (!result.canceled && result.assets?.[0]) {
+        const local = await persistCapturedPhoto(result.assets[0].uri, job.id)
+        setPhotoUrls(p => [...p, local])
+      }
     } catch (e: any) {
       Alert.alert(t('upload_failed'), e?.message || '')
     }
@@ -133,7 +149,12 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
       const sev = unrated ? 'minor' : severity
       // supabase-js returns { error } instead of throwing — check it, or a failed
       // insert falls through to the "saved" success path (silent-failure family).
-      const { data: inserted, error: insertError } = await supabase.from('job_damage_reports').insert({
+      // Written through the offline outbox with a client id: live when there's
+      // signal, queued (and replayed exactly once) when there isn't. Photos
+      // attach afterwards from the photo queue, so photo_urls starts empty.
+      const reportId = uuid4()
+      const { error: insertError, queued } = await writeThrough({ table: 'job_damage_reports', op: 'upsert', onConflict: 'id', values: {
+        id: reportId,
         tenant_id: user.tenant_id,
         job_id: job.id,
         address_id: addressId,
@@ -144,10 +165,15 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
         description: description.trim() || null,
         // A room with no property to match it against would now be rejected by the DB.
         room_id: addressId ? (roomId || null) : null,
-        photo_urls: photoUrls,
+        // photo_urls deliberately omitted (the column defaults to '{}'): photos
+        // are appended afterwards, and a replayed upsert that re-sent [] would
+        // wipe any already attached.
         status: 'reported',
-      }).select('id').single()
+      } })
       if (insertError) throw insertError
+      for (const localUri of photoUrls) {
+        await enqueueIncidentPhoto({ localUri, tenant_id: user.tenant_id, job_id: job.id, user_id: user.id, incident_report_id: reportId })
+      }
 
       // Mirror a linen report into the linen ledger — the same job_inventory_log
       // row the Supplies screen, the owner's pull sheet "Linen issues" and the
@@ -155,33 +181,35 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
       // row if the crew already has one, else insert an unpacked one.
       // incident_id ties the two so the loss counts once and the restock email
       // stays quiet (the incident email covers it; the host hears on Send to host).
-      if (isLinen && linenItem && inserted?.id) {
+      // Needs the report to exist server-side (incident_id references it), so
+      // only when it was written live; a queued linen report keeps the warning.
+      if (isLinen && linenItem && queued) Alert.alert(t('ir_linen_ledger_warn'))
+      if (isLinen && linenItem && !queued) {
         try {
           const note = `${linenCondEn} ×${linenQty}${description.trim() ? ` — ${description.trim()}` : ''}`
           const { data: existing } = await supabase.from('job_inventory_log').select('id, notes')
             .eq('job_id', job.id).eq('inventory_id', linenItem.id).limit(1).maybeSingle()
           const notes = existing?.notes ? `${existing.notes}\n${note}` : note
           const { error: ledgerError } = existing
-            ? await supabase.from('job_inventory_log').update({ needs_restock: true, notes, incident_id: inserted.id }).eq('id', existing.id)
+            ? await supabase.from('job_inventory_log').update({ needs_restock: true, notes, incident_id: reportId }).eq('id', existing.id)
             : await supabase.from('job_inventory_log').insert({
                 tenant_id: user.tenant_id, job_id: job.id, inventory_id: linenItem.id, item_name: linenItem.item_name,
-                qty_used: 0, needs_restock: true, notes, incident_id: inserted.id,
+                qty_used: 0, needs_restock: true, notes, incident_id: reportId,
               })
           if (ledgerError) throw ledgerError
         } catch { Alert.alert(t('ir_linen_ledger_warn')) }
       }
 
       // Heads-up the cleaning company only — the host is told later, if/when the
-      // manager reviews it and chooses to send (owner-controlled QC).
-      try {
-        await supabase.functions.invoke('notify-damage-report', {
-          body: { job_id: job.id, tenant_id: user.tenant_id, report_type: reportType, severity: sev, title: finalTitle, room: roomName, photo_url: photoUrls[0] || null, recipients: 'owner' },
-        })
-      } catch { /* report is saved; notify is best-effort */ }
+      // manager reviews it and chooses to send (owner-controlled QC). Deferred
+      // until the report AND its photos have landed (lib/incidentNotify), so it
+      // survives no signal and still carries the first photo.
+      await queueIncidentNotify({ report_id: reportId, job_id: job.id, tenant_id: user.tenant_id, report_type: reportType, severity: sev, title: finalTitle, room: roomName })
+      void flushQueue().then(() => flushIncidentNotifies()).catch(() => {})
 
       const icon = type.icon
       reset()
-      Alert.alert(`${icon} ${t(isLF ? 'lf_saved_title' : 'ir_saved_title')}`, t(isLF ? 'lf_saved_msg' : 'ir_saved_msg'))
+      Alert.alert(`${icon} ${t(isLF ? 'lf_saved_title' : 'ir_saved_title')}`, queued ? t('ir_saved_offline_msg') : t(isLF ? 'lf_saved_msg' : 'ir_saved_msg'))
     } catch (e: any) {
       Alert.alert(t('error'), e?.message || t('could_not_upload'))
     }
@@ -330,7 +358,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
           {photoUrls.map((url, i) => (
             <View key={i}>
               <Image source={{ uri: url }} style={styles.thumb} />
-              <TouchableOpacity style={styles.removePhoto} onPress={() => setPhotoUrls(p => p.filter((_, j) => j !== i))}>
+              <TouchableOpacity style={styles.removePhoto} onPress={() => { discardCapturedPhoto(url); setPhotoUrls(p => p.filter((_, j) => j !== i)) }}>
                 <Text style={styles.removePhotoText}>×</Text>
               </TouchableOpacity>
             </View>
@@ -342,7 +370,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
       </TouchableOpacity>
 
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.cancelBtn} onPress={reset} disabled={saving}>
+        <TouchableOpacity style={styles.cancelBtn} onPress={cancel} disabled={saving}>
           <Text style={styles.cancelBtnText}>{t('lf_cancel')}</Text>
         </TouchableOpacity>
         <TouchableOpacity

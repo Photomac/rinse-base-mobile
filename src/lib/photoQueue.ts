@@ -44,6 +44,13 @@ export interface PendingPhoto {
   // caption fallback — so it must survive the offline queue intact.
   photo_requirement_id?: string | null
   visible_to_client: boolean
+  // Set on an incident-report photo: once in storage it is appended to that
+  // job_damage_reports row (append_incident_report_photo) instead of becoming a
+  // job_photos row. Absent on every entry queued before 2026-09-23.
+  incident_report_id?: string | null
+  // The file already reached storage on an earlier try; only the follow-up
+  // write is outstanding, so the next try skips the (large) upload.
+  stored?: boolean
   created_at: number
   attempts?: number
   lastErrorKind?: UploadErrorKind
@@ -119,7 +126,57 @@ export async function enqueuePhoto(p: {
   await writeQueue(q)
 }
 
-type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string }
+/** Copy a just-captured photo out of the clearable image-picker cache into
+ *  durable storage and return the durable uri. Used where the photo is held
+ *  on screen before it is queued (the incident report form). */
+export async function persistCapturedPhoto(uri: string, jobId: string): Promise<string> {
+  await ensureDir()
+  const localUri = `${DIR}${jobId}_${Date.now()}_${Math.floor(Math.random() * 1e6)}.jpg`
+  try {
+    await FileSystem.copyAsync({ from: uri, to: localUri })
+    return localUri
+  } catch {
+    return uri
+  }
+}
+
+/** Remove a persisted photo the crew discarded before saving. */
+export async function discardCapturedPhoto(localUri: string): Promise<void> {
+  if (!localUri.startsWith(DIR)) return
+  try { await FileSystem.deleteAsync(localUri, { idempotent: true }) } catch { /* ignore */ }
+}
+
+/** Queue an incident-report photo already persisted with persistCapturedPhoto.
+ *  It uploads like any job photo, then attaches to its report — which may
+ *  itself still be waiting in the outbox; the attach simply retries. */
+export async function enqueueIncidentPhoto(p: {
+  localUri: string; tenant_id: string; job_id: string; user_id: string; incident_report_id: string
+}): Promise<void> {
+  const id = `${p.job_id}_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
+  const entry: PendingPhoto = {
+    id,
+    localUri: p.localUri,
+    fileName: `${p.tenant_id}/${p.job_id}/incident_${Date.now()}_${Math.floor(Math.random() * 1e4)}.jpg`,
+    tenant_id: p.tenant_id,
+    job_id: p.job_id,
+    user_id: p.user_id,
+    photo_type: 'damage',
+    caption: null,
+    visible_to_client: false,
+    incident_report_id: p.incident_report_id,
+    created_at: Date.now(),
+  }
+  const q = await readQueue()
+  q.push(entry)
+  await writeQueue(q)
+}
+
+/** Photos for this incident report still waiting to upload or attach. */
+export async function pendingIncidentPhotos(reportId: string): Promise<number> {
+  return (await readQueue()).filter(p => p.incident_report_id === reportId).length
+}
+
+type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean }
 
 // Pull a human-readable reason out of a storage error response, e.g.
 // {"statusCode":"403","error":"Unauthorized","message":"new row violates row-level security policy"}
@@ -151,6 +208,7 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
   }
   if (!token) return { ok: false, kind: 'network', message: 'No signed-in session yet' }
 
+  if (!entry.stored) {
   let res: Response
   try {
     const form = new FormData()
@@ -176,9 +234,31 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
     // treat like a connectivity blip and keep retrying opportunistically.
     return { ok: false, kind: res.status < 500 ? 'server' : 'network', message }
   }
+  }
+
+  const { data: urlData } = supabase.storage.from('job-photos').getPublicUrl(entry.fileName)
+
+  // Incident-report photo: attach to its report rather than job_photos.
+  if (entry.incident_report_id) {
+    try {
+      const { data, error } = await supabase.rpc('append_incident_report_photo', {
+        p_report_id: entry.incident_report_id, p_url: urlData.publicUrl,
+      })
+      // A network failure here surfaces as a postgrest error with status 0.
+      if (error) return { ok: false, kind: (error as any)?.status === 0 ? 'network' : 'server', message: error.message, stored: true }
+      // The report itself can still be waiting in the outbox; the drain runs
+      // photos before the outbox, so this is expected on the first pass after
+      // signal returns. Short backoff, file stays stored, no re-upload.
+      if (data === 'no_report') return { ok: false, kind: 'server', message: 'Report not saved yet', stored: true }
+      if (data === 'denied') return { ok: false, kind: 'server', message: 'Not allowed to add a photo to this report', stored: true }
+    } catch (e: any) {
+      return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
+    }
+    try { await FileSystem.deleteAsync(entry.localUri, { idempotent: true }) } catch { /* ignore */ }
+    return { ok: true }
+  }
 
   try {
-    const { data: urlData } = supabase.storage.from('job-photos').getPublicUrl(entry.fileName)
     const { error } = await supabase.from('job_photos').insert({
       tenant_id: entry.tenant_id,
       job_id: entry.job_id,
@@ -190,9 +270,9 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
       photo_requirement_id: entry.photo_requirement_id ?? null,
       visible_to_client: entry.visible_to_client,
     })
-    if (error) return { ok: false, kind: 'server', message: error.message }
+    if (error) return { ok: false, kind: 'server', message: error.message, stored: true }
   } catch (e: any) {
-    return { ok: false, kind: 'network', message: e?.message || 'Network request failed' }
+    return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
   }
 
   try { await FileSystem.deleteAsync(entry.localUri, { idempotent: true }) } catch { /* ignore */ }
@@ -245,6 +325,7 @@ export async function flushQueue(opts?: { force?: boolean }): Promise<QueueStatu
       const attempts = (entry.attempts ?? 0) + 1
       survivors.push({
         ...entry,
+        stored: entry.stored || (!result.ok && result.stored) || undefined,
         attempts,
         lastErrorKind: result.kind,
         lastError: result.message,

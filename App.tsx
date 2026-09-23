@@ -27,6 +27,7 @@ import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/
 import { clearDataCache } from './src/lib/dataCache'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
 import { flushOutbox } from './src/lib/outbox'
+import { flushIncidentNotifies } from './src/lib/incidentNotify'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
 import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
@@ -237,7 +238,9 @@ function AppInner() {
   // photos that satisfy its checklist.
   useEffect(() => {
     if (!user) return
-    const drain = () => { flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}) }
+    // Incident heads-ups last: they wait for the report (outbox) and its photos
+    // (queue) to have landed.
+    const drain = () => { flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}).then(() => flushIncidentNotifies()).catch(() => {}) }
     drain()
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') drain()
