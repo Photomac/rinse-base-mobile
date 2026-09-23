@@ -347,6 +347,30 @@ export async function pendingStatus(jobId?: string): Promise<PendingStatus> {
   return { count: remaining, serverRejected, lastServerError }
 }
 
+export interface QueuedJobPhoto {
+  id: string
+  localUri: string
+  photo_type: string
+  caption: string | null
+  visible_to_client: boolean
+  created_at: number
+  /** The server rejected it (not just no signal). */
+  failing: boolean
+}
+
+/** This job's photos still on the device, for showing alongside uploaded ones.
+ *  Incident-report photos are excluded: they belong to their report, not the
+ *  job's photo list. */
+export async function queuedJobPhotos(jobId: string): Promise<QueuedJobPhoto[]> {
+  return (await readQueue())
+    .filter(p => p.job_id === jobId && !p.incident_report_id)
+    .map(p => ({
+      id: p.id, localUri: p.localUri, photo_type: p.photo_type, caption: p.caption,
+      visible_to_client: p.visible_to_client, created_at: p.created_at,
+      failing: p.lastErrorKind === 'server',
+    }))
+}
+
 export async function pendingCount(jobId?: string): Promise<number> {
   return (await pendingStatus(jobId)).count
 }

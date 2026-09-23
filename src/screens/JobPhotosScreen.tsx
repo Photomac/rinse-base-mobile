@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
-import { enqueuePhoto, flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
+import { enqueuePhoto, flushQueue, pendingStatus, PendingStatus, queuedJobPhotos } from '../lib/photoQueue'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { PhotoViewer, ViewerPhoto } from '../components/PhotoViewer'
@@ -61,16 +61,37 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
       .finally(() => { pendingStatus().then(setPending).catch(() => {}) })
   }, [])
 
-  async function loadPhotos() {
-    setLoading(true)
-    const { data } = await supabase
-      .from('job_photos')
-      .select('*')
-      .eq('job_id', job.id)
-      .order('created_at', { ascending: false })
-    setPhotos(data ?? [])
+  async function loadPhotos(silent = false) {
+    if (!silent) setLoading(true)
+    // Photos still on the device are listed too, from their local file, so a
+    // shot taken with no signal doesn't look like it never happened — that is
+    // what sent crews to retake photos or give up (Rhyne, 2026-09-23). Read
+    // alongside the server list so one render shows both.
+    const [{ data }, queued] = await Promise.all([
+      supabase.from('job_photos').select('*').eq('job_id', job.id).order('created_at', { ascending: false }),
+      queuedJobPhotos(job.id).catch(() => []),
+    ])
+    const onDevice = queued
+      .sort((a, b) => b.created_at - a.created_at)
+      .map(q => ({
+        id: `queued:${q.id}`, photo_url: q.localUri, photo_type: q.photo_type, caption: q.caption,
+        visible_to_client: q.visible_to_client, queued: true, failing: q.failing,
+      }))
+    setPhotos([...onDevice, ...(data ?? [])])
     setLoading(false)
   }
+
+  // While anything is still waiting, re-read quietly so a photo the background
+  // drain uploads flips from "waiting" to uploaded without leaving the screen.
+  const hasQueued = photos.some(p => p.queued)
+  useEffect(() => {
+    if (!hasQueued) return
+    const iv = setInterval(() => {
+      loadPhotos(true)
+      pendingStatus().then(setPending).catch(() => {})
+    }, 20_000)
+    return () => clearInterval(iv)
+  }, [hasQueued])
 
   // Required-shot capture LEFT this screen 2026-08-24 — evidence is taken
   // inside its room on the Turnover checklist (JobDetailScreen), one home not
@@ -381,9 +402,16 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
                       key={photo.id}
                       style={styles.photoWrapper}
                       onPress={() => setViewerIndex(galleryPhotos.findIndex(p => p.id === photo.id))}
-                      onLongPress={() => openPhotoOptions(photo)}
+                      // A queued photo has no job_photos row yet, so note/delete
+                      // don't apply; the banner above is where its retry lives.
+                      onLongPress={() => { if (!photo.queued) openPhotoOptions(photo) }}
                     >
-                      <Image source={{ uri: photo.photo_url }} style={styles.photo} />
+                      <Image source={{ uri: photo.photo_url }} style={[styles.photo, photo.queued && { opacity: 0.75 }]} />
+                      {photo.queued && (
+                        <View style={[styles.queuedBadge, photo.failing && { backgroundColor: '#DC2626' }]}>
+                          <Text style={styles.queuedBadgeText}>{photo.failing ? '⚠️' : '⏳'} {t('pending_upload')}</Text>
+                        </View>
+                      )}
                       {photo.caption && (
                         <Text style={styles.photoCaption} numberOfLines={1}>{photo.caption}</Text>
                       )}
@@ -509,6 +537,8 @@ const styles = StyleSheet.create({
   photoWrapper: { width: '47%', borderRadius: 10, overflow: 'hidden', backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB' },
   photo: { width: '100%', aspectRatio: 1, backgroundColor: '#F3F4F6' },
   photoCaption: { fontSize: 10, color: '#6B7280', padding: 4, textAlign: 'center' },
+  queuedBadge: { position: 'absolute', top: 6, left: 6, backgroundColor: 'rgba(146, 64, 14, 0.9)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  queuedBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
   clientBadge: { position: 'absolute', top: 6, right: 6, backgroundColor: TEAL, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
   clientBadgeText: { color: '#fff', fontSize: 8, fontWeight: '700' },
   hint: { textAlign: 'center', fontSize: 11, color: '#9CA3AF', marginTop: 16 },
