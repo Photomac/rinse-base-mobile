@@ -242,7 +242,12 @@ function AppInner() {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') drain()
     })
-    return () => sub.remove()
+    // Also retry while the app simply stays open: a crew driving back into
+    // coverage with the app on screen never backgrounds it, so the foreground
+    // trigger alone left photos waiting. Both drains are cheap no-ops when
+    // nothing is queued, and flushQueue ignores overlapping calls.
+    const iv = setInterval(() => { if (AppState.currentState === 'active') drain() }, 120_000)
+    return () => { sub.remove(); clearInterval(iv) }
   }, [user])
 
   if (loading) {

@@ -13,6 +13,12 @@ import { supabase } from './supabase'
 const QUEUE_KEY = 'rinsebase.photoQueue.v1'
 const DIR = FileSystem.documentDirectory + 'pending_photos/'
 const SUPABASE_URL = 'https://cbnbhwclbtowfbjylnph.supabase.co'
+// One weak bar can hold a request open indefinitely without failing it, and
+// only one flush runs at a time — so a single hung upload blocked every other
+// retry trigger until the app was killed (Rhyne, Port O'Connor, 9/23). Sized
+// for a SLOW-but-alive upload to finish: photos run ~1.8 MB average, 3.5 MB
+// max, which takes ~2 min at 25 KB/s. A shorter cap would kill those every time.
+const UPLOAD_TIMEOUT_MS = 240_000
 
 // 'network' = couldn't reach the server (no signal, fetch threw, no session yet)
 // — retrying when coverage returns IS the fix. 'server' = the server heard us
@@ -149,11 +155,19 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
   try {
     const form = new FormData()
     form.append('file', { uri: entry.localUri, name: entry.fileName, type: 'image/jpeg' } as any)
-    res = await fetch(
-      `${SUPABASE_URL}/storage/v1/object/job-photos/${entry.fileName}`,
-      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'x-upsert': 'true' }, body: form },
-    )
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS)
+    try {
+      res = await fetch(
+        `${SUPABASE_URL}/storage/v1/object/job-photos/${entry.fileName}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'x-upsert': 'true' }, body: form, signal: ac.signal },
+      )
+    } finally {
+      clearTimeout(timer)
+    }
   } catch (e: any) {
+    // A timeout is a coverage problem, not a rejection: keep it 'network' so it
+    // retries on the next trigger instead of backing off.
     return { ok: false, kind: 'network', message: e?.message || 'Network request failed' }
   }
   if (!res.ok) {
@@ -214,14 +228,20 @@ export async function flushQueue(opts?: { force?: boolean }): Promise<QueueStatu
     const q = await readQueue()
     if (!q.length) return { uploaded: 0, remaining: 0, serverRejected: 0, lastServerError: null }
     let uploaded = 0
+    let noSignal = false
     const survivors: PendingPhoto[] = []
     for (const entry of q) {
+      // After one "can't reach the server", the rest will fail the same way —
+      // stop the pass instead of making each photo wait out its own timeout.
+      // They keep their place and go on the next trigger.
+      if (noSignal) { survivors.push(entry); continue }
       if (!opts?.force && entry.nextAttemptAt && Date.now() < entry.nextAttemptAt) {
         survivors.push(entry)
         continue
       }
       const result = await uploadOne(entry)
       if (result.ok) { uploaded++; continue }
+      if (result.kind === 'network') noSignal = true
       const attempts = (entry.attempts ?? 0) + 1
       survivors.push({
         ...entry,
