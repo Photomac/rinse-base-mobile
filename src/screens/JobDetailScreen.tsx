@@ -13,6 +13,8 @@ import { JobInspectionScreen } from './JobInspectionScreen'
 import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
 import { PhotoViewer } from '../components/PhotoViewer'
+import { StagingPhotoGroups, stagingViewerPhotos } from '../components/StagingPhotoGroups'
+import type { StagingPhotoRow } from '../lib/stagingRooms'
 import { IncidentReportCard } from '../components/IncidentReportCard'
 import { uploadImageToJobPhotos } from '../lib/chatAttachments'
 import { InspectionResultCard } from '../components/InspectionResultCard'
@@ -225,7 +227,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [laundryDoneOnsite, setLaundryDoneOnsite] = useState<boolean>(!!job.laundry_done_onsite)
   // Owner-uploaded staging/reference photos (how the property should look when
   // done) — crew view them here; tap to open the fullscreen viewer.
-  const [stagingPhotos, setStagingPhotos] = useState<{ url: string; caption?: string | null }[]>([])
+  const [stagingPhotos, setStagingPhotos] = useState<StagingPhotoRow[]>([])
   const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null)
   // Pet flag — crew mark a clean as having pets → the property's pet_fee lands on
   // this clean's invoice (createJobInvoice / auto-invoice read jobs.pet_fee_applied).
@@ -1374,14 +1376,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <Text style={styles.infoIcon}>📸</Text>
               <View style={{ flex: 1 }}>
                 <Text style={styles.infoLabel}>{t('staging_photos')}</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
-                  {stagingPhotos.map((p, i) => (
-                    <TouchableOpacity key={i} onPress={() => setStagingViewerIndex(i)} style={{ marginRight: 8 }}>
-                      <Image source={{ uri: p.url }} style={{ width: 110, height: 110, borderRadius: 10 }} resizeMode="cover" />
-                      {!!p.caption && <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 3, width: 110 }} numberOfLines={2}>{p.caption}</Text>}
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
+                <StagingPhotoGroups photos={stagingPhotos} size={110} onOpen={setStagingViewerIndex} />
               </View>
             </View>
           )}
@@ -1891,7 +1886,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
       {stagingViewerIndex != null && stagingPhotos.length > 0 && (
         <PhotoViewer
-          photos={stagingPhotos.map(p => ({ url: p.url, caption: p.caption || null, meta: t('staging_photos') }))}
+          photos={stagingViewerPhotos(stagingPhotos, t)}
           startIndex={stagingViewerIndex}
           onClose={() => setStagingViewerIndex(null)}
         />
