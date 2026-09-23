@@ -76,7 +76,7 @@ export const translations = {
     status_completed: 'Completed', status_cancelled: 'Cancelled',
     // Job detail
     job_detail: 'Job detail', arrival_instructions: 'Arrival instructions', lockbox_code: 'Lockbox code', crew_door_code: 'Crew door code',
-    beds_short: 'bed', baths_short: 'bath', sqft_short: 'sqft', beds_total_short: 'beds',
+    beds_short: 'bed', baths_short: 'bath', sqft_short: 'sqft', beds_total_short: 'beds', sleeps_n: 'sleeps {n}',
     property_notes: 'Property notes',
     clock_in: 'Clock in — Start job', clock_in_short: 'Clock in', pause: 'Pause', resume: 'Resume',
     record_for_title: 'Whose time is this?',
@@ -607,7 +607,7 @@ export const translations = {
     status_completed: 'Completado', status_cancelled: 'Cancelado',
     // Job detail
     job_detail: 'Detalle del trabajo', arrival_instructions: 'Instrucciones de llegada', lockbox_code: 'Código de caja', crew_door_code: 'Código de puerta del equipo',
-    beds_short: 'rec', baths_short: 'baño', sqft_short: 'ft²', beds_total_short: 'camas',
+    beds_short: 'rec', baths_short: 'baño', sqft_short: 'ft²', beds_total_short: 'camas', sleeps_n: 'para {n} huéspedes',
     property_notes: 'Notas de la propiedad',
     clock_in: 'Registrar entrada — Iniciar', clock_in_short: 'Registrar entrada', pause: 'Pausar', resume: 'Continuar',
     record_for_title: '¿De quién es este tiempo?',
@@ -1135,7 +1135,7 @@ export const translations = {
     status_completed: 'Concluído', status_cancelled: 'Cancelado',
     // Job detail
     job_detail: 'Detalhes do serviço', arrival_instructions: 'Instruções de chegada', lockbox_code: 'Código do cofre', crew_door_code: 'Código da porta da equipe',
-    beds_short: 'qto', baths_short: 'banh', sqft_short: 'ft²', beds_total_short: 'camas',
+    beds_short: 'qto', baths_short: 'banh', sqft_short: 'ft²', beds_total_short: 'camas', sleeps_n: 'acomoda {n}',
     property_notes: 'Notas da propriedade',
     clock_in: 'Bater ponto — Iniciar serviço', clock_in_short: 'Bater ponto', pause: 'Pausar', resume: 'Continuar',
     record_for_title: 'De quem é este tempo?',
