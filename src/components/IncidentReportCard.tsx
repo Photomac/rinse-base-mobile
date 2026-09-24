@@ -21,7 +21,7 @@ import { queueIncidentNotify, flushIncidentNotifies } from '../lib/incidentNotif
 import { supabase } from '../lib/supabase'
 import { roomLabel } from '../lib/rooms'
 import { useLang } from '../contexts/LangContext'
-import { tv } from '../lib/vocab'
+import { useMachineTranslation } from '../lib/machineTranslate'
 import { TranslationKey } from '../lib/i18n'
 import { CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT } from '../lib/theme'
 
@@ -87,6 +87,10 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   }, [presetKey])
   const roomRows = rooms.filter((r: any) => !r.archived_at && r.room_type !== 'final')
   const roomName = roomId ? (roomRows.find((r: any) => r.id === roomId) ? roomLabel(roomRows.find((r: any) => r.id === roomId)) : presetRoom?.name || null) : null
+  // Picker labels in the crew's language: seeded room/linen names resolve locally
+  // (vocab.ts), owner-typed ones via translate-crew-text. What gets SAVED stays
+  // English (roomName, linenTitle) so the office reads one vocabulary.
+  const tx = useMachineTranslation(lang, [...roomRows.map((r: any) => roomLabel(r)), ...linenItems.map(i => i.item_name)])
 
   const type = REPORT_TYPES.find(rt => rt.id === reportType) || REPORT_TYPES[0]
   // Lost & found isn't damage — a guest left a belonging behind. It skips the
@@ -257,7 +261,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
               const sel = roomId === r.id
               return (
                 <TouchableOpacity key={r.id} style={[styles.typeBtn, sel && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => setRoomId(sel ? '' : r.id)}>
-                  <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{tv(lang, roomLabel(r))}</Text>
+                  <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{tx(roomLabel(r))}</Text>
                 </TouchableOpacity>
               )
             })}
@@ -297,7 +301,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
                 const sel = linenItemId === i.id
                 return (
                   <TouchableOpacity key={i.id} style={[styles.typeBtn, sel && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => setLinenItemId(sel ? '' : i.id)}>
-                    <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{tv(lang, i.item_name)}</Text>
+                    <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{tx(i.item_name)}</Text>
                   </TouchableOpacity>
                 )
               })}
