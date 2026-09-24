@@ -296,6 +296,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     propMeta?.crew_notes, jobNote,
     ...checklist.map((i: any) => i.title), ...checklist.map((i: any) => i.room),
     ...roomsMeta.map((r: any) => r.name),
+    ...evidence.map((e: any) => e.area_name),
   ])
   const dailyMode = user._timeMode === 'daily'
   const isClockedIn = !!activeEntry && !isPaused
@@ -1783,7 +1784,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                                   : <View style={{ width: 34, height: 34, borderRadius: 6, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}><Text style={{ opacity: 0.5 }}>📷</Text></View>}
                                 <View style={{ flex: 1 }}>
                                   <Text style={styles.checkLabel}>
-                                    {e.area_name}
+                                    {tx(e.area_name)}
                                     {!e.required && <Text style={{ color: '#9CA3AF', fontStyle: 'italic', fontSize: 11 }}> · {t('optional_photo')}</Text>}
                                     {notOwed(e.id, e.required) && <Text style={{ color: '#9CA3AF', fontStyle: 'italic', fontSize: 11 }}> · {t('photo_not_required_this_clean')}</Text>}
                                   </Text>
