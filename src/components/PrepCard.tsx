@@ -29,6 +29,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { tv } from '../lib/vocab'
 import { ti, localeFor } from '../lib/i18n'
 import { cachedQuery } from '../lib/dataCache'
 import { todayKey } from '../lib/timezone'
@@ -130,7 +131,7 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
         }
         const lines = Object.entries(totals).filter(([, v]) => v.qty > 0)
           .sort((a, b) => (a[1].order - b[1].order) || a[0].localeCompare(b[0]))
-          .map(([name, v]) => ({ text: `${v.qty} × ${name}` }))
+          .map(([name, v]) => ({ text: `${v.qty} × ${tv(lang, name)}` }))
         const bags = [...new Set(props.map(p => p.job.client_addresses.id))]
           .filter(id => addrById[id]?.laundry_bag_color)
           .map(id => ({ text: `${nameByAddr[id]}: ${ti(t('prep_bags'), { color: addrById[id].laundry_bag_color })}`, job: jobByAddr[id] }))
@@ -163,7 +164,7 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
         const id = r.jobs?.address_id
         if (id && r.item_name) (low[id] ||= new Set()).add(r.item_name)
       })
-      const restockLines = Object.entries(low).map(([id, items]) => ({ text: `${nameByAddr[id]}: ${[...items].join(', ')}`, job: jobByAddr[id] }))
+      const restockLines = Object.entries(low).map(([id, items]) => ({ text: `${nameByAddr[id]}: ${[...items].map(n => tv(lang, n)).join(', ')}`, job: jobByAddr[id] }))
       if (restockLines.length) out.push({ key: 'restock', icon: '🧴', title: t('prep_restock_title'), sub: t('prep_restock_sub'), lines: restockLines })
 
       // 🔑 Access — only judge properties we actually loaded, so an offline

@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Activi
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { tv } from '../lib/vocab'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
@@ -39,7 +40,7 @@ import { roomLabel } from '../lib/rooms'
 type LogState = Record<string, { qty_used: number; qty_remaining: string; needs_restock: boolean; notes: string; incident_id?: string | null }>
 
 export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const addrId = (job.client_addresses as any)?.id || job.address_id
   // Prefer the logged-in crew's tenant_id — the dashboard query doesn't
   // select job.tenant_id, so reading from `user` is more reliable. A crew
@@ -173,7 +174,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   const roomIdSet = new Set(rooms.map((r: any) => r.id))
   const roomOf = (i: Item) => (i.room_id && roomIdSet.has(i.room_id) ? i.room_id : null)
   const roomSectionsRaw = rooms
-    .map((rm: any) => ({ key: rm.id as string, title: roomLabel(rm), isLinen: false, items: items.filter(i => i.category !== 'Linens' && roomOf(i) === rm.id) }))
+    .map((rm: any) => ({ key: rm.id as string, title: tv(lang, roomLabel(rm)), isLinen: false, items: items.filter(i => i.category !== 'Linens' && roomOf(i) === rm.id) }))
     .filter(s => s.items.length > 0)
   // Opened from a room's Restock task → that room's section renders first.
   const roomSections = focusRoomId
@@ -188,7 +189,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   }, {})
   const catSections = Object.entries(grouped).map(([cat, rows]) => ({
     key: `cat:${cat}`,
-    title: roomSections.length > 0 && cat !== 'Linens' ? `${t('whole_property')} · ${cat}` : cat,
+    title: roomSections.length > 0 && cat !== 'Linens' ? `${t('whole_property')} · ${tv(lang, cat)}` : tv(lang, cat),
     isLinen: cat === 'Linens',
     items: rows,
   }))
@@ -264,7 +265,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                   return (
                     <View key={item.id} style={styles.itemRow}>
                       <View style={styles.itemHead}>
-                        <Text style={styles.itemName}>{item.item_name}</Text>
+                        <Text style={styles.itemName}>{tv(lang, item.item_name)}</Text>
                         {/* Show the par AND the adjusted target when they differ,
                             so the number to pack is unambiguous on a small screen
                             and the crew can see the office changed it. */}
@@ -312,9 +313,9 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                 return (
                   <View key={item.id} style={styles.itemRow}>
                     <View style={styles.itemHead}>
-                      <Text style={styles.itemName}>{item.item_name}</Text>
+                      <Text style={styles.itemName}>{tv(lang, item.item_name)}</Text>
                       {item.par_level != null && (
-                        <Text style={styles.itemMeta}>{t('par')}: {item.par_level}{item.unit ? ' ' + item.unit : ''}</Text>
+                        <Text style={styles.itemMeta}>{t('par')}: {item.par_level}{item.unit ? ' ' + tv(lang, item.unit) : ''}</Text>
                       )}
                     </View>
                     <View style={styles.itemControls}>
@@ -376,7 +377,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
             {/* Linen notes come from the incident report, not from here. */}
             {items.filter(i => i.category !== 'Linens' && log[i.id]?.needs_restock).map(item => (
               <View key={`note-${item.id}`} style={styles.noteCard}>
-                <Text style={styles.noteLabel}>{item.item_name}</Text>
+                <Text style={styles.noteLabel}>{tv(lang, item.item_name)}</Text>
                 <TextInput
                   style={styles.noteInput}
                   placeholder={t('add_note_placeholder')}

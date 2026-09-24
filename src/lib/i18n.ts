@@ -1462,7 +1462,7 @@ export const translations = {
     stay_flag_heavy_mess: 'Muita bagunça',
     stay_flag_damage: 'Danos',
     stay_flag_smoking: 'Cheiro de cigarro',
-    stay_flag_pets: 'Pets',
+    stay_flag_pets: 'Animais de estimação',
     stay_flag_extra_time: 'Levou tempo extra',
     stay_flag_items_moved: 'Itens fora do lugar/faltando',
     stay_note_placeholder: 'Algo que o anfitrião deva saber? (opcional)',

@@ -16,6 +16,7 @@ import React, { useEffect, useState } from 'react'
 import { View, Text, Image, ScrollView, StyleSheet } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { tv } from '../lib/vocab'
 import { fmtDate } from '../lib/timezone'
 import { CARD, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
 
@@ -32,7 +33,7 @@ const SEV: Record<string, { i18n: any; color: string }> = {
 }
 
 export function InspectionResultCard({ job }: { job: any }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [insp, setInsp] = useState<any>(null)
   const [inspector, setInspector] = useState('')
   const [photos, setPhotos] = useState<string[]>([])
@@ -111,7 +112,7 @@ export function InspectionResultCard({ job }: { job: any }) {
                 <Text style={{ fontSize: 10, fontWeight: '800', color: s.color, width: 84 }}>{t(s.i18n)}</Text>
                 <View style={{ flex: 1 }}>
                   <Text style={{ fontSize: 12, color: TEXT, lineHeight: 17 }}>
-                    {d.room ? `${d.room} — ` : ''}{d.description}
+                    {d.room ? `${tv(lang, d.room)} — ` : ''}{d.description}
                   </Text>
                 </View>
               </View>

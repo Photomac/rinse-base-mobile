@@ -21,6 +21,7 @@ import { queueIncidentNotify, flushIncidentNotifies } from '../lib/incidentNotif
 import { supabase } from '../lib/supabase'
 import { roomLabel } from '../lib/rooms'
 import { useLang } from '../contexts/LangContext'
+import { tv } from '../lib/vocab'
 import { TranslationKey } from '../lib/i18n'
 import { CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT } from '../lib/theme'
 
@@ -64,7 +65,7 @@ const SEVERITY: { id: string; labelKey: TranslationKey; descKey: TranslationKey;
 export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, presetKey = 0 }: {
   job: any; user: any; rooms?: any[]; presetRoom?: { id: string; name: string } | null; presetKey?: number
 }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [open, setOpen] = useState(false)
   const [reportType, setReportType] = useState('damage')
   const [severity, setSeverity] = useState('minor')
@@ -256,7 +257,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
               const sel = roomId === r.id
               return (
                 <TouchableOpacity key={r.id} style={[styles.typeBtn, sel && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => setRoomId(sel ? '' : r.id)}>
-                  <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{roomLabel(r)}</Text>
+                  <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{tv(lang, roomLabel(r))}</Text>
                 </TouchableOpacity>
               )
             })}
@@ -296,7 +297,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
                 const sel = linenItemId === i.id
                 return (
                   <TouchableOpacity key={i.id} style={[styles.typeBtn, sel && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => setLinenItemId(sel ? '' : i.id)}>
-                    <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{i.item_name}</Text>
+                    <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={1}>{tv(lang, i.item_name)}</Text>
                   </TouchableOpacity>
                 )
               })}
