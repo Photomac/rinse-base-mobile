@@ -293,7 +293,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // room names) resolve locally through vocab.ts; custom tasks, custom room
   // names and notes go through the translate-crew-text function and its cache.
   const tx = useMachineTranslation(lang, [
-    propMeta?.crew_notes, jobNote,
+    propMeta?.crew_notes, jobNote, bagColor,
     ...checklist.map((i: any) => i.title), ...checklist.map((i: any) => i.room),
     ...roomsMeta.map((r: any) => r.name),
     ...evidence.map((e: any) => e.area_name),
@@ -1405,7 +1405,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {!isTask && bagColor && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>🧺</Text>
-              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('laundry_bags_label')}</Text><Text style={styles.infoValue}>{bagColor}</Text></View>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('laundry_bags_label')}</Text><Text style={styles.infoValue}>{tx(bagColor)}</Text></View>
             </View>
           )}
           {!!jobNote && (
@@ -1836,7 +1836,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
         {/* Take-home laundry — cleaner bags laundry on a clean and washes it at
             home for the per-bag bonus. Only shows when the tenant pays one. */}
-        {isStarted && !isTask && !isResidential && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} bagColor={bagColor} />}
+        {isStarted && !isTask && !isResidential && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} bagColor={tx(bagColor)} />}
 
         {/* All laundry done on-site — one-tap flag, counted per crew on Payroll */}
         {isStarted && !isTask && !isResidential && (
