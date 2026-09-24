@@ -28,6 +28,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { fmtDateTime } from '../lib/timezone'
 import { useLang } from '../contexts/LangContext'
+import { tv } from '../lib/vocab'
 import { PhotoViewer } from '../components/PhotoViewer'
 import { StagingPhotoGroups, stagingViewerPhotos } from '../components/StagingPhotoGroups'
 import type { StagingPhotoRow } from '../lib/stagingRooms'
@@ -77,7 +78,7 @@ interface Props {
 }
 
 export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Props) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   // The dashboard/schedule queries do not select job.tenant_id, so the crew's
   // own tenant is the reliable source — same reasoning as JobInventoryScreen.
   const tenantId = user?.tenant_id || job.tenant_id
@@ -310,7 +311,7 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
                 if (!r.item_id) continue
                 const key = r.room_id ?? '__other__'
                 let g = groups.find(x => x.key === key)
-                if (!g) { g = { key, name: r.room_name, items: [] }; groups.push(g) }
+                if (!g) { g = { key, name: tv(lang, r.room_name), items: [] }; groups.push(g) }
                 g.items.push(r)
               }
               return groups.map(g => {
@@ -352,7 +353,7 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
                             <View key={i.item_id} style={{ flexDirection: 'row', gap: 7, paddingVertical: 2 }}>
                               <Text style={{ width: 22, textAlign: 'center', color, fontSize: 12 }}>{icon}</Text>
                               <Text style={{ flex: 1, fontSize: 12, color: '#374151' }}>
-                                {i.body}
+                                {tv(lang, i.body)}
                                 {i.result === 'issue' && i.issue_note ? ` — ${i.issue_note}` : ''}
                               </Text>
                             </View>

@@ -19,6 +19,7 @@ import { IncidentReportCard } from '../components/IncidentReportCard'
 import { uploadImageToJobPhotos } from '../lib/chatAttachments'
 import { InspectionResultCard } from '../components/InspectionResultCard'
 import { useLang } from '../contexts/LangContext'
+import { tv } from '../lib/vocab'
 import { ti } from '../lib/i18n'
 import { captureRequiredPhoto } from '../lib/requiredPhotoCapture'
 
@@ -214,7 +215,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const notOwed = (reqId: string, required: boolean) =>
     !!owedReqs && required && !owedReqs.has(reqId)
 
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const addr = job.client_addresses as any
   const client = job.clients as any
   // Laundry + "how did the guests leave it" are STR/PM turnover features — a
@@ -1049,7 +1050,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           .map((b: any) => checklist.find((i: any) => i.jobItemId === b.checklist_item_id))
         const lines = missingBlockers.map((b: any, idx: number) => {
           const item = missingItems[idx]
-          return item ? (item.labelKey ? t(item.labelKey) : (item.label || item.title)) : (b.room ? `${b.room} — ${b.task}` : b.task)
+          return item ? (item.labelKey ? t(item.labelKey) : (item.room ? `${tv(lang, item.room)} — ${tv(lang, item.title)}` : tv(lang, item.title))) : (b.room ? `${tv(lang, b.room)} — ${tv(lang, b.task)}` : tv(lang, b.task))
         })
         const firstItem = missingItems.find(Boolean)
         Alert.alert(
@@ -1068,7 +1069,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       // straight into the shot list rather than a generic photo screen.
       const missingAreas = blockers.filter((b: any) => b.code === 'missing_required_area_photo')
       if (missingAreas.length > 0) {
-        const lines = missingAreas.map((b: any) => (b.room ? `${b.room} — ${b.task}` : b.task))
+        const lines = missingAreas.map((b: any) => (b.room ? `${tv(lang, b.room)} — ${tv(lang, b.task)}` : tv(lang, b.task)))
         Alert.alert(
           `📸 ${t('photo_required_alert')}`,
           `${t('required_area_photos_missing_msg')}\n\n• ${lines.join('\n• ')}`,
@@ -1089,7 +1090,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       // issue). List the rooms and pop them open — the work is on this screen.
       const requiredLeft = blockers.filter((b: any) => b.code === 'unchecked_required_item')
       if (requiredLeft.length > 0) {
-        const roomsLeft = [...new Set(requiredLeft.map((b: any) => b.room).filter(Boolean))] as string[]
+        const roomsLeft = [...new Set(requiredLeft.map((b: any) => tv(lang, b.room)).filter(Boolean))] as string[]
         const affected = checklist.filter((i: any) => requiredLeft.some((b: any) => b.checklist_item_id === i.jobItemId))
         Alert.alert(
           `☑️ ${t('required_items_missing_title')}`,
@@ -1658,7 +1659,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                         <TouchableOpacity onPress={() => setOpenRooms(prev => ({ ...prev, [g.key]: !isOpen }))}
                           style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, backgroundColor: st.complete ? '#ECFDF5' : '#F9FAFB' }}>
                           <Text style={{ flex: 1, fontSize: 14, fontWeight: '800', color: '#111827' }} numberOfLines={1}>
-                            {st.complete ? '✓ ' : ''}{g.name}
+                            {st.complete ? '✓ ' : ''}{tv(lang, g.name)}
                           </Text>
                           {st.issues > 0 && <Text style={{ fontSize: 11, fontWeight: '800', color: '#DC2626' }}>⚠ {st.issues}</Text>}
                           <Text style={{ fontSize: 11, color: '#6B7280' }}>
@@ -1681,7 +1682,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                                       <Text style={{ color: '#B45309', width: 16, textAlign: 'center' }}>◇</Text>
                                       <View style={{ flex: 1 }}>
-                                        <Text style={styles.checkLabel}>{item.title}</Text>
+                                        <Text style={styles.checkLabel}>{tv(lang, item.title)}</Text>
                                         {item.result === 'issue' && item.issue_note && issueForId !== item.id && (
                                           <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>⚠ {item.issue_note}</Text>
                                         )}
@@ -1722,7 +1723,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                                 return (
                                   <View key={item.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}>
                                     <Text style={{ color: '#9CA3AF', width: 16, textAlign: 'center' }}>•</Text>
-                                    <Text style={[styles.checkLabel, { flex: 1 }]}>{item.labelKey ? t(item.labelKey) : item.title}</Text>
+                                    <Text style={[styles.checkLabel, { flex: 1 }]}>{item.labelKey ? t(item.labelKey) : tv(lang, item.title)}</Text>
                                   </View>
                                 )
                               }
@@ -1744,7 +1745,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                                       {checked[item.id] && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
                                     </View>
                                     <View style={{ flex: 1 }}>
-                                      <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.labelKey ? t(item.labelKey) : item.title}</Text>
+                                      <Text style={[styles.checkLabel, checked[item.id] && { color: '#9CA3AF', textDecorationLine: 'line-through' }]}>{item.labelKey ? t(item.labelKey) : tv(lang, item.title)}</Text>
                                       {item.requires_photo && !itemPhotos[item.id] && (
                                         <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>{t('photo_required_short')}</Text>
                                       )}
@@ -1792,7 +1793,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                             {g.key !== '__other__' && !isTask && (
                               <TouchableOpacity onPress={() => reportIssueIn(g.key, g.name)}
                                 style={{ marginTop: 6, alignSelf: 'flex-start', borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E7EB', borderRadius: 8, paddingVertical: 5, paddingHorizontal: 10 }}>
-                                <Text style={{ fontSize: 11, fontWeight: '700', color: '#6B7280' }}>⚠ {ti(t('ir_report_in_room'), { room: g.name })}</Text>
+                                <Text style={{ fontSize: 11, fontWeight: '700', color: '#6B7280' }}>⚠ {ti(t('ir_report_in_room'), { room: tv(lang, g.name) })}</Text>
                               </TouchableOpacity>
                             )}
                             {g.mode === 'room_complete' && g.key !== '__other__' && (
