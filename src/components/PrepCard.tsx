@@ -142,9 +142,16 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
         const lines = Object.entries(totals).filter(([, v]) => v.qty > 0)
           .sort((a, b) => (a[1].order - b[1].order) || a[0].localeCompare(b[0]))
           .map(([name, v]) => ({ text: `${v.qty} × ${lx(name)}` }))
-        const bags = [...new Set(props.map(p => p.job.client_addresses.id))]
-          .filter(id => addrById[id]?.laundry_bag_color)
-          .map(id => ({ text: `${nameByAddr[id]}: ${ti(t('prep_bags'), { color: addrById[id].laundry_bag_color })}`, job: jobByAddr[id] }))
+        // Owner-typed and almost never a bare color in practice ("Blue laundry
+        // bags", "Labelled bag - GP6"): translate the phrase; only wrap a bare
+        // color in the "{color} bags" template.
+        const bagIds = [...new Set(props.map(p => p.job.client_addresses.id))].filter(id => addrById[id]?.laundry_bag_color)
+        const bx = await mtx(bagIds.map(id => String(addrById[id].laundry_bag_color)))
+        const bags = bagIds.map(id => {
+          const raw = String(addrById[id].laundry_bag_color).trim()
+          const shown = /bag|bolsa|saco|sacola/i.test(raw) ? bx(raw) : ti(t('prep_bags'), { color: bx(raw) })
+          return { text: `${nameByAddr[id]}: ${shown}`, job: jobByAddr[id] }
+        })
         if (lines.length) out.push({
           key: 'linens', icon: '🧺', title: t('prep_linens_title'),
           sub: ti(t('prep_linens_sub'), { n: String(cleansWithLinen) }), lines: [...lines, ...bags],
