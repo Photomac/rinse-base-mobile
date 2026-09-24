@@ -28,7 +28,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { fmtDateTime } from '../lib/timezone'
 import { useLang } from '../contexts/LangContext'
-import { tv } from '../lib/vocab'
+import { useMachineTranslation } from '../lib/machineTranslate'
 import { PhotoViewer } from '../components/PhotoViewer'
 import { StagingPhotoGroups, stagingViewerPhotos } from '../components/StagingPhotoGroups'
 import type { StagingPhotoRow } from '../lib/stagingRooms'
@@ -94,6 +94,9 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   // state), room by room. §7.9's point: a score is only fair against the
   // standard, so put the standard on the inspector's screen.
   const [standard, setStandard] = useState<any[]>([])
+  // Room names and item bodies in the crew's language: seeded strings resolve
+  // locally (vocab.ts), owner-written ones via translate-crew-text.
+  const tx = useMachineTranslation(lang, [...standard.map((r: any) => r.room_name), ...standard.map((r: any) => r.body)])
   const [parentJob, setParentJob] = useState<any>(null)
   // The owner's reference shots for this property — how it should LOOK when
   // finished. §7.9 puts the executed checklist here because a score is only
@@ -311,7 +314,7 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
                 if (!r.item_id) continue
                 const key = r.room_id ?? '__other__'
                 let g = groups.find(x => x.key === key)
-                if (!g) { g = { key, name: tv(lang, r.room_name), items: [] }; groups.push(g) }
+                if (!g) { g = { key, name: tx(r.room_name), items: [] }; groups.push(g) }
                 g.items.push(r)
               }
               return groups.map(g => {
@@ -353,7 +356,7 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
                             <View key={i.item_id} style={{ flexDirection: 'row', gap: 7, paddingVertical: 2 }}>
                               <Text style={{ width: 22, textAlign: 'center', color, fontSize: 12 }}>{icon}</Text>
                               <Text style={{ flex: 1, fontSize: 12, color: '#374151' }}>
-                                {tv(lang, i.body)}
+                                {tx(i.body)}
                                 {i.result === 'issue' && i.issue_note ? ` — ${i.issue_note}` : ''}
                               </Text>
                             </View>

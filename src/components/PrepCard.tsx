@@ -30,6 +30,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { tv } from '../lib/vocab'
+import { translateTexts, normalizeText } from '../lib/machineTranslate'
 import { ti, localeFor } from '../lib/i18n'
 import { cachedQuery } from '../lib/dataCache'
 import { todayKey } from '../lib/timezone'
@@ -87,6 +88,13 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
 
       // Each read is cached like the rest of the day, so the card survives a
       // dead zone. A failed read just drops its section — never the card.
+      // Owner-typed names (custom linens, custom supplies) in the crew's
+      // language via translate-crew-text; seeded names resolve locally through
+      // vocab.ts and are never sent. Falls back to English on any failure.
+      const mtx = async (names: string[]) => {
+        const m = await translateTexts(lang, names)
+        return (s: string) => m.get(normalizeText(s)) ?? tv(lang, s)
+      }
       const [tenRes, addrRes, resvRes, restockRes] = await Promise.all([
         cachedQuery(`prep:ten:${user.tenant_id}`, supabase.from('tenants')
           .select('crew_prep_linens, default_checkin_time').eq('id', user.tenant_id).maybeSingle()),
@@ -129,9 +137,11 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
             cur.order = Math.min(cur.order, l.sort_order ?? 9999)
           }
         }
+        // Custom linen names (owner-typed) → crew language; seeded ones resolve locally.
+        const lx = await mtx(Object.keys(totals))
         const lines = Object.entries(totals).filter(([, v]) => v.qty > 0)
           .sort((a, b) => (a[1].order - b[1].order) || a[0].localeCompare(b[0]))
-          .map(([name, v]) => ({ text: `${v.qty} × ${tv(lang, name)}` }))
+          .map(([name, v]) => ({ text: `${v.qty} × ${lx(name)}` }))
         const bags = [...new Set(props.map(p => p.job.client_addresses.id))]
           .filter(id => addrById[id]?.laundry_bag_color)
           .map(id => ({ text: `${nameByAddr[id]}: ${ti(t('prep_bags'), { color: addrById[id].laundry_bag_color })}`, job: jobByAddr[id] }))
@@ -164,7 +174,8 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
         const id = r.jobs?.address_id
         if (id && r.item_name) (low[id] ||= new Set()).add(r.item_name)
       })
-      const restockLines = Object.entries(low).map(([id, items]) => ({ text: `${nameByAddr[id]}: ${[...items].map(n => tv(lang, n)).join(', ')}`, job: jobByAddr[id] }))
+      const rx = await mtx(Object.values(low).flatMap(s => [...s]))
+      const restockLines = Object.entries(low).map(([id, items]) => ({ text: `${nameByAddr[id]}: ${[...items].map(n => rx(n)).join(', ')}`, job: jobByAddr[id] }))
       if (restockLines.length) out.push({ key: 'restock', icon: '🧴', title: t('prep_restock_title'), sub: t('prep_restock_sub'), lines: restockLines })
 
       // 🔑 Access — only judge properties we actually loaded, so an offline
