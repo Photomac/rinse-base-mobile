@@ -1,19 +1,28 @@
-// Test doubles for sosQueue.ts, swapped in by scripts/test-sos.mjs.
+// Test doubles for sosQueue.ts (and sosTracker.ts), swapped in by
+// scripts/test-sos.mjs and scripts/test-sos-tracker.mjs.
 //
-// Unlike outbox.mocks.ts this does NOT fake the supabase client. The runner
-// builds the REAL @supabase/supabase-js client and hands it `fakeFetch` below,
+// Unlike outbox.mocks.ts this does NOT fake the supabase client. The runners
+// build the REAL @supabase/supabase-js client and hand it `fakeFetch` below,
 // so "offline" here is the real postgrest-js turning a rejected fetch into
 // { error, status: 0 }, the discriminator every offline path in the app relies
 // on, not a fake returning status 0 because it was told to. The Expo push goes
 // through the same fetch.
 
-// ── AsyncStorage, in memory. failWrites simulates a full phone; onRead lets a
-// test act at an exact point between a read and what the reader does next. ──
+// ── AsyncStorage, in memory ──
+// failWrites: a full phone. failReads: a read that throws (Android can fail one
+// under memory pressure). onRead: act at an exact point between a read and
+// what the reader does next.
 const store = new Map<string, string>()
-export const storage = { store, failWrites: false, onRead: null as null | (() => void) }
+export const storage = {
+  store,
+  failWrites: false,
+  failReads: false,
+  onRead: null as null | (() => void),
+}
 
 export const AsyncStorage = {
   async getItem(k: string) {
+    if (storage.failReads) throw new Error('CursorWindow: Could not allocate')
     const v = store.has(k) ? store.get(k)! : null
     storage.onRead?.()
     return v
@@ -23,6 +32,10 @@ export const AsyncStorage = {
     store.set(k, v)
   },
   async removeItem(k: string) { store.delete(k) },
+  async getAllKeys() {
+    if (storage.failReads) throw new Error('CursorWindow: Could not allocate')
+    return [...store.keys()]
+  },
 }
 
 // ── errorReporter ──
@@ -40,12 +53,15 @@ export const net = {
   rest: 'online' as Mode,
   expo: 'online' as Mode,
   delayMs: 40,
+  // Per-request mode, checked first: return null to fall through to rest/expo.
+  override: null as null | ((method: string, url: URL) => Mode | null),
   refuse: new Set<string>(),   // tables that answer 403 (row-level security)
-  calls: [] as { host: string; method: string; path: string }[],
+  calls: [] as { host: string; method: string; path: string; query: string; id?: string }[],
 }
 
 export const server = {
   sos_alerts: new Map<string, Record<string, any>>(),
+  sos_pings: [] as Record<string, any>[],
   push_tokens: [] as { tenant_id: string; user_id: string; token: string; role: string }[],
   pushes: [] as any[][],       // one entry per Expo request: its message array
 }
@@ -61,7 +77,7 @@ function eqFilters(url: URL): [string, string][] {
   return out
 }
 
-// Just enough PostgREST for the calls sosQueue makes.
+// Just enough PostgREST for the calls sosQueue and sosTracker make.
 function postgrest(url: URL, method: string, headers: Headers, body: any): Response {
   const table = url.pathname.replace('/rest/v1/', '')
   if (net.refuse.has(table)) {
@@ -85,6 +101,17 @@ function postgrest(url: URL, method: string, headers: Headers, body: any): Respo
     }
     return new Response(null, { status: 204 })
   }
+  if (table === 'sos_alerts' && method === 'GET') {
+    const filters = eqFilters(url)
+    return json(200, [...server.sos_alerts.values()].filter(row => filters.every(([k, v]) => String(row[k]) === v)))
+  }
+  if (table === 'sos_pings' && method === 'POST') {
+    // RLS sos_pings_insert: the parent alert must exist.
+    const row = Array.isArray(body) ? body[0] : body
+    if (!server.sos_alerts.has(row.alert_id)) return json(403, { code: '42501', message: 'new row violates row-level security policy for table "sos_pings"' })
+    server.sos_pings.push(row)
+    return new Response(null, { status: 201 })
+  }
   if (table === 'push_tokens' && method === 'GET') {
     const filters = eqFilters(url)
     const rows = server.push_tokens.filter(r => filters.every(([k, v]) => String((r as any)[k]) === v))
@@ -104,9 +131,13 @@ export async function fakeFetch(input: any, init: any = {}): Promise<Response> {
   const url = new URL(typeof input === 'string' ? input : input?.url ?? String(input))
   const method = String(init.method || 'GET').toUpperCase()
   const isExpo = url.hostname === 'exp.host'
-  const mode = isExpo ? net.expo : net.rest
+  const mode = net.override?.(method, url) ?? (isExpo ? net.expo : net.rest)
   const signal: AbortSignal | undefined = init.signal
-  net.calls.push({ host: url.hostname, method, path: url.pathname })
+  const body = init.body ? JSON.parse(String(init.body)) : undefined
+  net.calls.push({
+    host: url.hostname, method, path: url.pathname, query: url.search,
+    id: body ? (Array.isArray(body) ? body[0]?.id : body.id) : undefined,
+  })
 
   if (signal?.aborted) throw aborted()
   if (mode === 'offline') throw new TypeError('Network request failed')
@@ -119,7 +150,6 @@ export async function fakeFetch(input: any, init: any = {}): Promise<Response> {
       signal?.addEventListener('abort', () => { clearTimeout(t); reject(aborted()) })
     })
   }
-  const body = init.body ? JSON.parse(String(init.body)) : undefined
   const res = isExpo ? expo(body) : postgrest(url, method, new Headers(init.headers), body)
   if (mode === 'lose-ack') throw new TypeError('Network request failed')
   return res

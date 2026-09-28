@@ -1,12 +1,15 @@
 #!/usr/bin/env node
-// Runs the SOS delivery scenario (src/lib/__tests__/sos.scenario.ts) against
-// the REAL src/lib/sosQueue.ts and the REAL @supabase/supabase-js from
-// node_modules, with only fetch replaced (src/lib/__tests__/sos.mocks.ts).
+// Runs the SOS scenarios against the REAL shipped code:
+//   src/lib/__tests__/sos.scenario.ts        src/lib/sosQueue.ts (delivery queue)
+//   src/lib/__tests__/sosTracker.scenario.ts src/lib/sosTracker.ts (location trail)
+// with the REAL @supabase/supabase-js from node_modules and only fetch replaced
+// (src/lib/__tests__/sos.mocks.ts). The trail's platform modules (expo-location,
+// expo-task-manager, permissions, i18n) are faked by sosTracker.mocks.ts.
 //
 // Same zero-dependency approach as test-outbox.mjs (esbuild via npx, no test
-// runner), except the scenario is bundled so the real supabase-js is compiled
-// in. The one change to shipped code is a shorter request timeout, so the
-// stalled-request case takes milliseconds instead of 20 seconds.
+// runner), except each scenario is bundled so the real supabase-js is compiled
+// in. The one change to shipped code is shorter request timeouts, so the
+// stalled-request cases take milliseconds instead of 15-20 seconds.
 //
 // Needs node_modules. Usage: node scripts/test-sos.mjs
 import { execSync } from 'node:child_process'
@@ -32,26 +35,46 @@ function rewrite(text, pairs, file) {
 const libMocks = [
   [`import AsyncStorage from '@react-native-async-storage/async-storage'`, `import { AsyncStorage } from './sos.mocks'`],
   [`from './supabase'`, `from './sos.supabase'`],
-  [`from './errorReporter'`, `from './sos.mocks'`],
 ]
 
 try {
   writeFileSync(join(work, 'sosQueue.ts'), rewrite(read('src/lib/sosQueue.ts'), [
     ...libMocks,
+    [`from './errorReporter'`, `from './sos.mocks'`],
     ['const REQUEST_TIMEOUT_MS = 20_000', 'const REQUEST_TIMEOUT_MS = 150'],
   ], 'sosQueue.ts'))
-  writeFileSync(join(work, 'outbox.ts'), rewrite(read('src/lib/outbox.ts'), libMocks, 'outbox.ts'))
-  writeFileSync(join(work, 'sos.mocks.ts'), read('src/lib/__tests__/sos.mocks.ts'))
-  writeFileSync(join(work, 'sos.supabase.ts'), read('src/lib/__tests__/sos.supabase.ts'))
-  writeFileSync(join(work, 'scenario.ts'), rewrite(read('src/lib/__tests__/sos.scenario.ts'), [
+  writeFileSync(join(work, 'outbox.ts'), rewrite(read('src/lib/outbox.ts'), [
+    ...libMocks,
+    [`from './errorReporter'`, `from './sos.mocks'`],
+  ], 'outbox.ts'))
+  writeFileSync(join(work, 'sosTracker.ts'), rewrite(read('src/lib/sosTracker.ts'), [
+    ...libMocks,
+    [`import * as Location from 'expo-location'`, `import * as Location from './sosTracker.mocks'`],
+    [`import * as TaskManager from 'expo-task-manager'`, `import * as TaskManager from './sosTracker.mocks'`],
+    [`from './permissions'`, `from './sosTracker.mocks'`],
+    [`from './i18n'`, `from './sosTracker.mocks'`],
+    ['const REQUEST_TIMEOUT_MS = 15_000', 'const REQUEST_TIMEOUT_MS = 150'],
+  ], 'sosTracker.ts'))
+  for (const f of ['sos.mocks.ts', 'sos.supabase.ts', 'sosTracker.mocks.ts']) {
+    writeFileSync(join(work, f), read(`src/lib/__tests__/${f}`))
+  }
+  writeFileSync(join(work, 'queue.scenario.ts'), rewrite(read('src/lib/__tests__/sos.scenario.ts'), [
     [`from '../sosQueue'`, `from './sosQueue'`],
-    [`from '../supabase'`, `from './sos.supabase'`],
   ], 'sos.scenario.ts'))
+  writeFileSync(join(work, 'tracker.scenario.ts'), rewrite(read('src/lib/__tests__/sosTracker.scenario.ts'), [
+    [`from '../sosTracker'`, `from './sosTracker'`],
+    [`from '../sosQueue'`, `from './sosQueue'`],
+  ], 'sosTracker.scenario.ts'))
 
-  execSync('npx --yes esbuild scenario.ts --bundle --format=cjs --platform=node --outfile=out/scenario.js --log-level=warning', {
-    cwd: work, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, NODE_PATH: join(repo, 'node_modules') },
-  })
-  execSync('node out/scenario.js', { cwd: work, stdio: 'inherit' })
+  // Each scenario is its own process: module state (the queue's chain, the
+  // trail's timer) never leaks from one into the other.
+  for (const scenario of ['queue', 'tracker']) {
+    execSync(`npx --yes esbuild ${scenario}.scenario.ts --bundle --format=cjs --platform=node --outfile=out/${scenario}.js --log-level=warning`, {
+      cwd: work, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, NODE_PATH: join(repo, 'node_modules') },
+    })
+    console.log(`\n── ${scenario} ──`)
+    execSync(`node out/${scenario}.js`, { cwd: work, stdio: 'inherit' })
+  }
 } finally {
   rmSync(work, { recursive: true, force: true })
 }

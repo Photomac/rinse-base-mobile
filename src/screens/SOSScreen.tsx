@@ -53,7 +53,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
   const pulseAnim = useRef(new Animated.Value(1)).current
 
   const alertId = alert?.id ?? null
-  const delivery = alert ? sosDeliveryState(alert) : 'sending'
+  const delivery = alert ? sosDeliveryState(alert, now) : 'sending'
   const officePhone: string | null = user?._contact?.dispatchPhone || null
 
   useEffect(() => { alertRef.current = alert }, [alert])
@@ -96,18 +96,13 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     return () => { alive = false }
   }, [])
 
-  // Follow the queue: every delivery step lands here.
+  // Follow the queue: every delivery step lands here. A failed read keeps what
+  // the screen last showed rather than guessing.
   useEffect(() => onSOSChange(() => {
     setFlushing(isSOSFlushing())
     const id = alertRef.current?.id
     if (!id) return
-    getSOS(id).then(e => {
-      // A cancel that reached the server is dropped from the queue; keep the
-      // last copy, marked synced, so the screen knows it went through.
-      const last = alertRef.current
-      const next = e ?? (last?.id === id && last.cancelled_at ? { ...last, cancel_synced: true } : null)
-      if (next) { alertRef.current = next; setAlert(next) }
-    }).catch(() => {})
+    getSOS(id).then(e => { if (e) { alertRef.current = e; setAlert(e) } }).catch(() => {})
   }), [])
 
   // "I'm OK" answered "the office still sees your SOS" because there was no
@@ -132,7 +127,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     const needsWork = () => {
       const a = alertRef.current
       if (!a) return false
-      return a.cancelled_at ? !a.cancel_synced : !a.landed_at || a.push === 'pending'
+      return a.cancelled_at ? !a.cancel_synced : !a.landed_at || a.push === 'pending' || a.coords_pending
     }
     const tick = async () => {
       if (stopped) return
@@ -249,21 +244,24 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
   }
 
   async function markOK() {
-    const id = alertRef.current?.id
-    if (!id) return
+    const last = alertRef.current
+    if (!last) return
     setResponding(true)
     // Stop the trail first and unconditionally: "I'm OK" has to stop the phone
     // broadcasting its location, network or no network.
     try { await stopSOSTrail() } catch { /* best-effort */ }
-    const landedBefore = !!alertRef.current?.landed_at
     // Don't hold someone on a spinner for a whole network timeout. The cancel
     // is stored before this returns and keeps trying in the background.
-    await Promise.race([cancelSOS(id).catch(() => {}), new Promise(r => setTimeout(r, CANCEL_WAIT_MS))])
-    const after = await getSOS(id).catch(() => null)
-    const landed = landedBefore || !!after?.landed_at
-    const synced = !after || after.cancel_synced // dropped from the queue = the server has it
+    await Promise.race([cancelSOS(last.id, last).catch(() => {}), new Promise(r => setTimeout(r, CANCEL_WAIT_MS))])
+    const after = await getSOS(last.id).catch(() => null)
     if (after) { alertRef.current = after; setAlert(after) }
-    setOutcome(!landed ? 'cancelled_unsent' : synced ? 'resolved' : 'resolve_queued')
+    // Say only what is known. "No one was alerted" only when nothing ever left
+    // the phone; an attempt that went out may have landed, so until the server
+    // has the cancel, the office may still see an active SOS.
+    setOutcome(
+      after && after.attempts === 0 && !after.landed_at ? 'cancelled_unsent'
+        : after?.cancel_synced ? 'resolved'
+          : 'resolve_queued')
     try { Vibration.cancel() } catch(e) {}
     setResponding(false)
     setPhase('responded')

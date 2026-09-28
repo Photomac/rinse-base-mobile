@@ -11,9 +11,9 @@
 // an alert, never raises two, and pushes the office once the row exists.
 import {
   raiseSOS, flushSOSQueue, getSOS, cancelSOS, resumableSOS, updateSOSLocation,
-  sosLanded, sosDeliveryState, onSOSChange, isSOSFlushing,
+  sosLanded, sosDeliveryState, onSOSChange, isSOSFlushing, SENDING_GRACE_MS,
 } from '../sosQueue'
-import { supabase } from '../supabase'
+import { supabase, session } from './sos.supabase'
 import { net, server, storage, reported } from './sos.mocks'
 
 let failures = 0
@@ -33,10 +33,14 @@ process.on('exit', () => {
 const TENANT = 't-cks'
 const CREW = 'u-mia'
 const base = { tenant_id: TENANT, user_id: CREW, crew_name: 'Mia Evans', lat: 34.86, lng: -111.79 }
+const KEY = (id: string) => `sosAlert.v1:${id}`
+const stored = (id: string) => { const raw = storage.store.get(KEY(id)); return raw ? JSON.parse(raw) : null }
+const clearQueue = () => { for (const k of [...storage.store.keys()]) if (k.startsWith('sosAlert.v1:')) storage.store.delete(k) }
 const rowsFor = (id: string) => [...server.sos_alerts.values()].filter(r => r.id === id)
 const pushesFor = (id: string) => server.pushes.filter(p => p[0]?.data?.alertId === id)
 const insertsSoFar = () => net.calls.filter(c => c.method === 'POST' && c.path.endsWith('/sos_alerts')).length
 const state = async (id: string) => { const e = await getSOS(id); return e ? sosDeliveryState(e) : 'gone' }
+const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
 
 ;(async () => {
   server.push_tokens.push(
@@ -56,9 +60,11 @@ const state = async (id: string) => { const e = await getSOS(id); return e ? sos
   // ── Dead zone ─────────────────────────────────────────────────────────────
   const callsBefore = net.calls.length
   const a = await raiseSOS({ ...base, lat: null, lng: null })
-  ok('the alert is stored on the phone before any network call',
-    net.calls.length === callsBefore && (storage.store.get('sosQueue.v1') || '').includes(a.id))
+  ok('the alert is stored on the phone before any network call', net.calls.length === callsBefore && !!stored(a.id))
   ok('a fresh alert reads "sending", never "sent"', sosDeliveryState(a) === 'sending')
+  const t0 = Date.parse(a.triggered_at)
+  ok('with no answer after 5 s the screen stops saying "Sending…"',
+    sosDeliveryState(a, t0 + 1000) === 'sending' && sosDeliveryState(a, t0 + SENDING_GRACE_MS + 1) === 'offline')
 
   await flushSOSQueue()
   ok('no signal: state is "offline" (has NOT reached anyone)', (await state(a.id)) === 'offline')
@@ -78,7 +84,7 @@ const state = async (id: string) => { const e = await getSOS(id); return e ? sos
   await flushSOSQueue()
   ok('signal back: exactly one sos_alerts row, with the id the phone minted',
     rowsFor(a.id).length === 1 && server.sos_alerts.get(a.id)?.status === 'active')
-  ok('... carrying the late GPS fix', server.sos_alerts.get(a.id)?.lat === 34.87)
+  ok('... carrying the late GPS fix, with nothing left to send', server.sos_alerts.get(a.id)?.lat === 34.87 && !(await getSOS(a.id))?.coords_pending)
   ok('signal back: only now does the state read "sent"', (await state(a.id)) === 'sent')
   ok('the office push fired once the row landed, as one request', pushesFor(a.id).length === 1)
   const to = pushesFor(a.id)[0].map((m: any) => m.to).sort()
@@ -105,10 +111,10 @@ const state = async (id: string) => { const e = await getSOS(id); return e ? sos
   // ── One weak bar: the request never answers ───────────────────────────────
   const c = await raiseSOS(base)
   net.rest = 'hang'
-  const t0 = Date.now()
+  const tHang = Date.now()
   await flushSOSQueue()
   ok('a stalled request times out and reports "offline" instead of hanging',
-    Date.now() - t0 < 2000 && (await state(c.id)) === 'offline')
+    Date.now() - tHang < 2000 && (await state(c.id)) === 'offline')
   net.rest = 'online'
   await flushSOSQueue()
   ok('after the stall: delivered', (await state(c.id)) === 'sent')
@@ -144,6 +150,17 @@ const state = async (id: string) => { const e = await getSOS(id); return e ? sos
     e2s?.push === 'failed' && sosDeliveryState(e2s) === 'sent' && reported.some(r => r.includes(`office push failed for alert ${e2.id}`)))
   net.refuse.clear()
 
+  // ── Signed out: the token read would come back empty as anon ──────────────
+  session.drop()
+  const ns = await raiseSOS(base)
+  await flushSOSQueue()
+  const ns1 = await getSOS(ns.id)
+  ok('signed out: the push is held, not recorded as "nobody at the office has the app"',
+    !!ns1?.landed_at && ns1.push === 'pending' && ns1.push_recipients === null && pushesFor(ns.id).length === 0)
+  session.restore()
+  await flushSOSQueue()
+  ok('... and goes out once signed back in', pushesFor(ns.id).length === 1 && (await getSOS(ns.id))?.push === 'sent')
+
   // ── A manager presses SOS: their own phone is not "the office" ────────────
   const mgr = await raiseSOS({ ...base, user_id: 'u-manager', crew_name: 'The manager' })
   await flushSOSQueue()
@@ -160,23 +177,42 @@ const state = async (id: string) => { const e = await getSOS(id); return e ? sos
   ok('no office phone has the app: recorded as 0 recipients, no Expo call',
     n1?.push === 'sent' && n1?.push_recipients === 0 && server.pushes.length === expoBefore)
 
+  // ── A GPS fix after the insert went out still reaches the row ─────────────
+  const g0 = await raiseSOS({ ...base, lat: null, lng: null })
+  await flushSOSQueue()
+  ok('pressed before the first fix: the row lands without a position', server.sos_alerts.get(g0.id)?.lat === null)
+  await updateSOSLocation(g0.id, 34.9, -111.7)
+  await flushSOSQueue()
+  ok('a fix after landing is sent to the row', server.sos_alerts.get(g0.id)?.lat === 34.9 && !(await getSOS(g0.id))?.coords_pending)
+
+  net.rest = 'slow'
+  const g1 = await raiseSOS({ ...base, lat: null, lng: null })
+  const g1Flush = flushSOSQueue()
+  await sleep(5)                                  // the insert is on the wire
+  await updateSOSLocation(g1.id, 35.0, -111.6)
+  await g1Flush
+  net.rest = 'online'
+  ok('a fix that arrives mid-insert still reaches the row', server.sos_alerts.get(g1.id)?.lat === 35.0)
+  ok('... and the office push carried it', String(pushesFor(g1.id)[0]?.[0]?.body).includes('35.00000, -111.60000'))
+
   // ── "I'm OK" ──────────────────────────────────────────────────────────────
   net.rest = 'offline'
   const f = await raiseSOS(base)
   const callsF = net.calls.length
   await cancelSOS(f.id)
-  ok("I'm OK before the first attempt: no request at all, gone from the phone",
-    net.calls.length === callsF && (await getSOS(f.id)) === null && rowsFor(f.id).length === 0)
+  const f1 = await getSOS(f.id)
+  ok("I'm OK before the first attempt: no request at all, nothing to take back",
+    net.calls.length === callsF && !!f1?.cancel_synced && f1.attempts === 0 && rowsFor(f.id).length === 0)
 
   const g = await raiseSOS(base)
   await flushSOSQueue()           // one failed attempt: it may have reached the server
   await cancelSOS(g.id)
-  const g1 = await getSOS(g.id)
-  ok("I'm OK with no signal: kept on the phone until the server hears it", !!g1 && !!g1.cancelled_at && !g1.cancel_synced)
+  const g2 = await getSOS(g.id)
+  ok("I'm OK with no signal: kept on the phone until the server hears it", !!g2 && !!g2.cancelled_at && !g2.cancel_synced)
   net.rest = 'online'
   await flushSOSQueue()
-  ok("I'm OK synced: the row exists as false_alarm and the phone lets it go",
-    server.sos_alerts.get(g.id)?.status === 'false_alarm' && (await getSOS(g.id)) === null)
+  ok("I'm OK synced: the row exists as false_alarm and the phone knows it",
+    server.sos_alerts.get(g.id)?.status === 'false_alarm' && (await getSOS(g.id))?.cancel_synced === true)
   await supabase.from('sos_alerts').upsert(
     { id: g.id, tenant_id: TENANT, user_id: CREW, status: 'active' }, { onConflict: 'id', ignoreDuplicates: true })
   ok('a late copy of the original insert cannot bring it back to active', server.sos_alerts.get(g.id)?.status === 'false_alarm')
@@ -203,19 +239,37 @@ const state = async (id: string) => { const e = await getSOS(id); return e ? sos
     !!rf1 && !rf1.cancel_synced && reported.filter(x => x.includes(`false_alarm`) && x.includes(rf.id)).length === 1)
   net.refuse.clear()
   await flushSOSQueue()
-  ok("... and lands once the server takes it", server.sos_alerts.get(rf.id)?.status === 'false_alarm' && (await getSOS(rf.id)) === null)
+  ok("... and lands once the server takes it", server.sos_alerts.get(rf.id)?.status === 'false_alarm' && (await getSOS(rf.id))?.cancel_synced === true)
 
   const r = await raiseSOS(base)
   await flushSOSQueue()
   server.sos_alerts.get(r.id)!.status = 'resolved'   // the office closed it from the dashboard
   await cancelSOS(r.id)
   ok("I'm OK never overwrites the office's own resolution",
-    server.sos_alerts.get(r.id)?.status === 'resolved' && (await getSOS(r.id)) === null)
+    server.sos_alerts.get(r.id)?.status === 'resolved' && (await getSOS(r.id))?.cancel_synced === true)
+
+  const pr = await raiseSOS(base)
+  await flushSOSQueue()
+  const prCopy = await getSOS(pr.id)
+  storage.store.delete(KEY(pr.id))                   // pruned: delivered more than 4 h ago
+  await cancelSOS(pr.id, prCopy)
+  ok("I'm OK after the phone let go of a delivered alert still takes it back (from the screen's copy)",
+    server.sos_alerts.get(pr.id)?.status === 'false_alarm')
+
+  const pc = await raiseSOS(base)
+  net.override = (m, u) => (m === 'GET' && u.pathname.endsWith('/push_tokens') ? 'slow' : null)
+  const pcFlush = flushSOSQueue()
+  await sleep(15)                                    // landed; the push's token read is out
+  await cancelSOS(pc.id)
+  await pcFlush
+  net.override = null
+  ok("I'm OK while the push is being prepared: the push never goes out",
+    rowsFor(pc.id).length === 1 && pushesFor(pc.id).length === 0 && server.sos_alerts.get(pc.id)?.status === 'false_alarm')
 
   // "I'm OK" landing in the gap after the flush has read the alert (not yet
   // cancelled) and before it counts the attempt. Start from an empty queue so
   // the flush's second read is this alert's; cancel right as it returns.
-  storage.store.delete('sosQueue.v1')
+  clearQueue()
   const sameInstant = await raiseSOS(base)
   let reads = 0
   let cancelling: Promise<void> | null = null
@@ -223,16 +277,16 @@ const state = async (id: string) => { const e = await getSOS(id); return e ? sos
   await flushSOSQueue()
   await cancelling
   ok("I'm OK in the gap before the first attempt: nothing reaches the server",
-    reads === 2 && rowsFor(sameInstant.id).length === 0 && pushesFor(sameInstant.id).length === 0 && (await getSOS(sameInstant.id)) === null)
+    reads === 2 && rowsFor(sameInstant.id).length === 0 && pushesFor(sameInstant.id).length === 0 && (await getSOS(sameInstant.id))?.cancel_synced === true)
 
   net.rest = 'slow'
   const q = await raiseSOS(base)
   const inFlight = flushSOSQueue()
-  await new Promise(res => setTimeout(res, 5))    // the insert is on the wire
+  await sleep(5)                  // the insert is on the wire
   await cancelSOS(q.id)
   await inFlight
   ok("I'm OK while the insert is on the wire: ends false_alarm, never pushed",
-    server.sos_alerts.get(q.id)?.status === 'false_alarm' && pushesFor(q.id).length === 0 && (await getSOS(q.id)) === null)
+    server.sos_alerts.get(q.id)?.status === 'false_alarm' && pushesFor(q.id).length === 0 && (await getSOS(q.id))?.cancel_synced === true)
   net.rest = 'online'
 
   // ── Three triggers at once: screen loop, app drain, background task ───────
@@ -241,27 +295,58 @@ const state = async (id: string) => { const e = await getSOS(id); return e ? sos
   await Promise.all([flushSOSQueue(), flushSOSQueue(), flushSOSQueue()])
   ok('concurrent flushes: one insert request, one push', insertsSoFar() - insertsBefore === 1 && pushesFor(k.id).length === 1)
 
+  // ── Most urgent first, and a dead network ends the pass ───────────────────
+  const old = await raiseSOS(base)
+  await flushSOSQueue()                              // lands
+  net.refuse.add('sos_alerts')
+  await cancelSOS(old.id)                            // refused: the cancel stays queued
+  net.refuse.clear()
+  const fresh = await raiseSOS(base)
+  net.rest = 'hang'
+  const mark = net.calls.length
+  await flushSOSQueue()
+  const passCalls = net.calls.slice(mark)
+  ok('the new alert goes before an old queued cancel, and no signal ends the pass after one try',
+    passCalls.length === 1 && passCalls[0].method === 'POST' && passCalls[0].id === fresh.id)
+  net.rest = 'online'
+  await flushSOSQueue()
+  ok('... then both catch up', rowsFor(fresh.id).length === 1 && server.sos_alerts.get(old.id)?.status === 'false_alarm')
+
   // ── A late delivery says so in the push ───────────────────────────────────
   net.rest = 'offline'
   const late = await raiseSOS(base)
   await flushSOSQueue()
-  const stored = JSON.parse(storage.store.get('sosQueue.v1')!)
-  stored.find((x: any) => x.id === late.id).triggered_at = new Date(Date.now() - 7 * 60_000).toISOString()
-  storage.store.set('sosQueue.v1', JSON.stringify(stored))
+  const lateCopy = stored(late.id)
+  lateCopy.triggered_at = new Date(Date.now() - 7 * 60_000).toISOString()
+  storage.store.set(KEY(late.id), JSON.stringify(lateCopy))
   net.rest = 'online'
   await flushSOSQueue()
   const body = String(pushesFor(late.id)[0]?.[0]?.body || '')
   ok('the push carries the GPS position', body.includes('34.86000, -111.79000'))
   ok('an alert that sat on the phone tells the office how late it is', /Pressed 7 min ago/.test(body))
 
-  // ── The phone's storage is full at the moment of the press ────────────────
+  // ── Storage trouble ───────────────────────────────────────────────────────
   storage.failWrites = true
   const m = await raiseSOS(base)
   await flushSOSQueue()
-  ok('storage full: the alert still goes out from memory', rowsFor(m.id).length === 1 && (await state(m.id)) === 'sent')
+  ok('storage full at the press: the alert still goes out from memory', rowsFor(m.id).length === 1 && (await state(m.id)) === 'sent')
   storage.failWrites = false
   await flushSOSQueue()
-  ok('... and is written to storage once it can be', (storage.store.get('sosQueue.v1') || '').includes(m.id))
+  ok('... and is written to storage once it can be', !!stored(m.id) && !!stored(m.id).landed_at)
+
+  net.rest = 'offline'
+  const w1 = await raiseSOS(base)
+  await flushSOSQueue()                              // queued, one attempt
+  storage.failReads = true
+  const w2 = await raiseSOS(base)                    // written whole: needs no read
+  await flushSOSQueue()                              // can't read: the pass is skipped
+  await updateSOSLocation(w1.id, 1, 1).catch(() => {}) // can't read: nothing is written
+  storage.failReads = false
+  ok('a failed storage read loses nothing and overwrites nothing',
+    stored(w1.id)?.attempts === 1 && stored(w1.id)?.lat === 34.86 && !!stored(w2.id))
+  net.rest = 'online'
+  await flushSOSQueue()
+  ok('... and both alerts go out once reads work again', rowsFor(w1.id).length === 1 && rowsFor(w2.id).length === 1)
 
   // ── The screen hears about it ─────────────────────────────────────────────
   let heard = 0
