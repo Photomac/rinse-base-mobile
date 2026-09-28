@@ -333,8 +333,15 @@ export async function flushQueue(opts?: { force?: boolean }): Promise<QueueStatu
         nextAttemptAt: result.kind === 'server' ? Date.now() + backoffMs(attempts) : undefined,
       })
     }
-    await writeQueue(survivors)
-    return summarize(uploaded, survivors)
+    // A photo taken WHILE this pass was uploading is not in `q` (enqueuePhoto
+    // appends to the stored list). Writing `survivors` alone erased it: the file
+    // stayed in pending_photos but nothing would ever upload it. On one weak
+    // bar a pass runs for minutes, so a second shot mid-upload was enough.
+    // Merge those entries back from a fresh read, as the outbox does.
+    const seen = new Set(q.map(e => e.id))
+    const next = [...survivors, ...(await readQueue()).filter(e => !seen.has(e.id))]
+    await writeQueue(next)
+    return summarize(uploaded, next)
   } finally {
     flushing = false
   }
