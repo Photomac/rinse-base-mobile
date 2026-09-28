@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { cachedQuery } from '../lib/dataCache'
+import { writeThrough, overlayPending, uuid4 } from '../lib/outbox'
 import { useLang } from '../contexts/LangContext'
 import { tv } from '../lib/vocab'
 import { ti } from '../lib/i18n'
@@ -53,6 +55,8 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   const [log, setLog] = useState<LogState>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
+  // Showing the phone's saved copy (no signal), not live data.
+  const [offline, setOffline] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   // inventory_id → delta against par for this turnover (turnover_linen_extras).
@@ -62,35 +66,40 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
 
   async function load() {
     setLoading(true)
+    // Reads go through cachedQuery like the rest of the job: with no signal the
+    // screen shows the last copy this phone saw instead of "no supplies".
     const [invRes, logRes, roomsRes, extraRes] = await Promise.all([
-      supabase.from('address_inventory')
+      cachedQuery(`inv:items:${addrId}`, supabase.from('address_inventory')
         .select('id, item_name, category, par_level, unit, room_id')
         .eq('address_id', addrId)
         .order('category', { nullsFirst: false })
-        .order('item_name'),
-      supabase.from('job_inventory_log')
-        .select('inventory_id, qty_used, qty_remaining, needs_restock, notes, incident_id')
-        .eq('job_id', job.id),
-      supabase.from('property_rooms')
+        .order('item_name')),
+      cachedQuery(`inv:log:${job.id}`, supabase.from('job_inventory_log')
+        .select('id, job_id, inventory_id, qty_used, qty_remaining, needs_restock, notes, incident_id')
+        .eq('job_id', job.id)),
+      cachedQuery(`inv:rooms:${addrId}`, supabase.from('property_rooms')
         .select('id, room_type, instance_no, name, sort_order')
         .eq('address_id', addrId)
         .is('archived_at', null)
-        .order('sort_order'),
+        .order('sort_order')),
       // Extra linen the office added for THIS booking on the Linen Pull Sheet —
       // e.g. a 14-guest group in a house whose par is 10 bath towels. Without
       // this the phone would say "6/6 packed" on a turnover the office says
       // needs four more, and the crew would leave short.
-      supabase.from('turnover_linen_extras')
+      cachedQuery(`inv:extras:${job.id}`, supabase.from('turnover_linen_extras')
         .select('inventory_id, extra_qty')
-        .eq('job_id', job.id),
+        .eq('job_id', job.id)),
     ])
-    setItems(invRes.data ?? [])
-    setRooms(roomsRes.data ?? [])
+    setOffline(invRes.fromCache || logRes.fromCache)
+    setItems((invRes.data ?? []) as Item[])
+    setRooms((roomsRes.data ?? []) as any[])
     setExtras(Object.fromEntries(
       ((extraRes.data ?? []) as any[]).map(x => [x.inventory_id, x.extra_qty])
     ))
+    // A save still waiting in the outbox shows as saved, not as the old rows.
+    const logRows = await overlayPending('job_inventory_log', (logRes.data ?? []) as any[], v => v.job_id === job.id)
     const map: LogState = {}
-    ;(logRes.data ?? []).forEach((l: any) => {
+    logRows.forEach((l: any) => {
       map[l.inventory_id] = {
         qty_used: l.qty_used ?? 0,
         qty_remaining: l.qty_remaining != null ? String(l.qty_remaining) : '',
@@ -144,12 +153,20 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
 
   async function save() {
     setSaving(true)
-    // Replace all rows for this job — same pattern as the web JobPanel
-    // InventoryTab so the crew can edit and resave without duplicating.
-    await supabase.from('job_inventory_log').delete().eq('job_id', job.id)
+    // Replace all rows for this job — same result as the web JobPanel
+    // InventoryTab, so the crew can edit and resave without duplicating.
+    //
+    // It used to delete first and insert second, live only. On a flaky
+    // connection the delete could land and the insert fail — the job's supply
+    // log gone — and with no signal nothing saved at all. Now the new rows go
+    // first, under ids minted here (a replay can't double them), then the rows
+    // they replace are deleted; both through the outbox, so with no signal the
+    // save queues and replays in order. A rejected write leaves the previous
+    // save intact, and the delete is grouped with it so it can never run alone.
     const rows = Object.entries(log)
       .filter(([, v]) => v.qty_used > 0 || v.needs_restock || v.qty_remaining !== '')
       .map(([inventory_id, v]) => ({
+        id: uuid4(),
         tenant_id: tenantId,
         job_id: job.id,
         inventory_id,
@@ -160,11 +177,20 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
         notes: v.notes?.trim() || null,
         incident_id: v.incident_id ?? null,
       }))
+    const group = uuid4()
+    let queued = false
     if (rows.length > 0) {
-      const { error } = await supabase.from('job_inventory_log').insert(rows)
-      if (error) { setSaving(false); Alert.alert(t('could_not_save'), error.message); return }
+      const w = await writeThrough({ table: 'job_inventory_log', op: 'upsert', onConflict: 'id', values: rows, group })
+      if (w.error) { setSaving(false); Alert.alert(t('could_not_save'), w.error.message); return }
+      queued = w.queued
     }
+    const d = await writeThrough({
+      table: 'job_inventory_log', op: 'delete', match: { job_id: job.id }, values: {},
+      keep: rows.length ? { column: 'id', values: rows.map(r => r.id) } : undefined, group,
+    })
+    if (d.error) { setSaving(false); Alert.alert(t('could_not_save'), d.error.message); return }
     setSaving(false); setSaved(true)
+    if (queued || d.queued) Alert.alert('📡', t('queued_offline'))
     setTimeout(() => setSaved(false), 2200)
   }
 
@@ -232,6 +258,11 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+          {offline && (
+            <View style={styles.lowBanner}>
+              <Text style={styles.lowBannerText}>📡 {t('offline_cached')}</Text>
+            </View>
+          )}
           <Text style={styles.helper}>{t('supplies_helper')}</Text>
           {lowCount > 0 && (
             <View style={styles.lowBanner}>

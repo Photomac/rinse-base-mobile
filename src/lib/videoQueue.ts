@@ -14,7 +14,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as FileSystem from 'expo-file-system/legacy'
-import { supabase } from './supabase'
+import { supabase, usableAccessToken } from './supabase'
 import { uuid4 } from './outbox'
 import type { UploadErrorKind } from './photoQueue'
 
@@ -145,10 +145,11 @@ async function describeHttpError(res: Response): Promise<string> {
 }
 
 async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
-  let token: string | undefined
+  let token: string | null
   try {
-    const { data: { session } } = await supabase.auth.getSession()
-    token = session?.access_token ?? undefined
+    // Null while the hour-long token has lapsed and can't be renewed (no
+    // signal) — same reasoning as photoQueue.
+    token = await usableAccessToken()
   } catch (e: any) {
     return { ok: false, kind: 'network', message: e?.message || 'Could not read session' }
   }

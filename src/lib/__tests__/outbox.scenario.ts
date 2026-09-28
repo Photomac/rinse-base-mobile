@@ -61,6 +61,59 @@ const settle = () => new Promise(r => setTimeout(r, 10))
   ok('ops behind the poison proceed once it parks', (await pendingOpCount()) === 0 &&
     net.applied.some(a => a.table === 'jobs' && a.values.status === 'completed'))
 
+  // ── Supplies save: new rows first, then delete what they replace ─────────
+  // (JobInventoryScreen.save). The delete must never run on its own.
+  net.rejectTables.clear()
+  r = await writeThrough({ table: 'job_inventory_log', op: 'delete', match: {}, values: {} })
+  ok('a delete with no filter is refused, not queued', !!r.error && !r.queued && (await pendingOpCount()) === 0)
+
+  net.online = false
+  const before = rejectedOps().then(x => x.length)
+  const idA = uuid4(), idB = uuid4()
+  const saveRows = [
+    { id: idA, job_id: 'J3', inventory_id: 'TP', qty_used: 2, needs_restock: false },
+    { id: idB, job_id: 'J3', inventory_id: 'SOAP', qty_used: 0, needs_restock: true },
+  ]
+  const g = uuid4()
+  r = await writeThrough({ table: 'job_inventory_log', op: 'upsert', onConflict: 'id', values: saveRows, group: g })
+  ok('offline supplies save: new rows queue (one op, both rows)', r.queued === true && (await pendingOpCount()) === 1)
+  r = await writeThrough({ table: 'job_inventory_log', op: 'delete', match: { job_id: 'J3' }, values: {},
+    keep: { column: 'id', values: [idA, idB] }, group: g })
+  ok('…then the delete of the old rows queues behind it', r.queued === true && (await pendingOpCount()) === 2)
+
+  const oldRows = [{ id: 'OLD1', job_id: 'J3', inventory_id: 'TP', qty_used: 9 }, { id: 'OLD2', job_id: 'J3', inventory_id: 'BAGS', qty_used: 1 }]
+  const shown = await overlayPending('job_inventory_log', oldRows, v => v.job_id === 'J3')
+  ok('reopened offline, the screen shows the queued save — not the old rows, not both',
+    shown.length === 2 && shown.every(x => x.id === idA || x.id === idB))
+
+  await settle()
+  net.online = true
+  net.applied.length = 0
+  await flushOutbox()
+  ok('online: upsert lands before the delete', net.applied[0]?.op === 'upsert' && net.applied[1]?.op === 'delete')
+  ok('…the upsert carries both rows in one request', Array.isArray(net.applied[0]?.values) && net.applied[0].values.length === 2)
+  ok('…the delete is scoped to the job and spares the new rows',
+    net.applied[1]?.filters.includes('job_id=eq.J3') && net.applied[1]?.filters.includes(`id=not.in.(${idA},${idB})`))
+
+  // Grouped parking: if the new rows are rejected for good, the delete that
+  // assumes they landed must park with them, or the job's log is wiped.
+  net.online = false
+  const g2 = uuid4(), idC = uuid4()
+  await writeThrough({ table: 'job_inventory_log', op: 'upsert', onConflict: 'id', values: [{ id: idC, job_id: 'J4' }], group: g2 })
+  await writeThrough({ table: 'job_inventory_log', op: 'delete', match: { job_id: 'J4' }, values: {}, keep: { column: 'id', values: [idC] }, group: g2 })
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'J4' }, values: { status: 'completed' } })
+  await settle()
+  net.online = true
+  net.rejectTables.add('job_inventory_log')
+  net.rejectOp = 'upsert'
+  net.applied.length = 0
+  for (let i = 0; i < 5; i++) { await settle(); await flushOutbox() }
+  const parked = (await rejectedOps()).length - (await before)
+  ok('rejected supplies rows park after 5 flushes, their delete parks WITH them', parked === 2)
+  ok('…the delete never ran', !net.applied.some(a => a.op === 'delete'))
+  ok('…and the unrelated op behind them still lands', (await pendingOpCount()) === 0 &&
+    net.applied.some(a => a.table === 'jobs' && a.values.status === 'completed'))
+
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }
   console.log('\nAll outbox invariants hold.')
 })()

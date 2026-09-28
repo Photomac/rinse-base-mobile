@@ -27,7 +27,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [closingBlockers, setClosingBlockers] = useState<Record<string, number>>({})
   const [activeJob, setActiveJob] = useState<any>(null)
   const [nextJob, setNextJob] = useState<any>(null)
-  const [monthStats, setMonthStats] = useState({ completed: 0, hours: 0, earnings: 0 })
+  // earnings null = the pay read hasn't landed yet (shown as "—", not $0.00).
+  const [monthStats, setMonthStats] = useState<{ completed: number; hours: number; earnings: number | null }>({ completed: 0, hours: 0, earnings: null })
+  // Bumped per load(): an older load's late answers must not overwrite a newer one's.
+  const loadGen = useRef(0)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [offline, setOffline] = useState(false)
@@ -56,10 +59,29 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     const monthStart = startOfMonthInTz(now)
 
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
+    const gen = ++loadGen.current
+
+    // Earnings via the crew_pay_for_period RPC — the same canonical pay
+    // hierarchy the owner Payroll page uses (property crew rate → property
+    // default w/ pooled split + lead rate → turnover/per-job flat → hourly).
+    // The old hourly×hours / jobs×rate calc here showed $0 for
+    // property-flat-rate and mixed-pay crews. Falls back to 0 on error so an
+    // app update ahead of the DB migration can't crash the dashboard.
+    // Started now and applied when it lands: the day must not wait on it.
+    // (The pay read and the shift read used to run AFTER the three below, one
+    // after another — on one bar of signal the spinner sat through all five.)
+    cachedQuery(`dash:pay:${user.id}`, supabase.rpc('crew_pay_for_period', {
+      p_start: monthStart.toISOString(), p_end: now.toISOString(), p_user_id: user.id,
+    })).then(({ data: pay }) => {
+      if (gen !== loadGen.current) return
+      const earnings = Number((pay as any[])?.[0]?.labor_total || 0)
+      setMonthStats(s => ({ ...s, earnings: Math.round(earnings * 100) / 100 }))
+    }).catch(() => { /* keep what's shown */ })
 
     // Reads go through cachedQuery: last good result survives in AsyncStorage,
     // so a crew member who loaded their day online keeps it when signal drops.
-    const [todayRes, monthRes, strandedRes] = await Promise.all([
+    // All in parallel: the slowest one sets the wait, not the sum of them.
+    const [todayRes, monthRes, strandedRes, shiftRes] = await Promise.all([
       cachedQuery(`dash:today:${user.id}`, supabase.from('jobs')
         .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
         .eq('tenant_id', user.tenant_id)
@@ -99,7 +121,16 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         .lt('scheduled_start', todayStart.toISOString())
         .order('scheduled_start')
         .limit(50)),
+
+      // Open shift (daily mode) — a job_time_entries row with no job and no clock-out.
+      user._timeMode === 'daily'
+        ? cachedQuery(`dash:shift:${user.id}`, supabase.from('job_time_entries')
+            .select('id, clocked_in_at')
+            .eq('user_id', user.id).is('job_id', null).eq('entry_type', 'shift').is('clocked_out_at', null)
+            .order('clocked_in_at', { ascending: false }).limit(1).maybeSingle())
+        : Promise.resolve(null),
     ])
+    if (gen !== loadGen.current) return
     setOffline(todayRes.fromCache)
 
     // Cached rows can be from an EARLIER day — re-filter to the current window
@@ -148,27 +179,11 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       if (!j.scheduled_end) return s
       return s + (new Date(j.scheduled_end).getTime() - new Date(j.scheduled_start).getTime()) / 3600000
     }, 0)
-    // Earnings via the crew_pay_for_period RPC — the same canonical pay
-    // hierarchy the owner Payroll page uses (property crew rate → property
-    // default w/ pooled split + lead rate → turnover/per-job flat → hourly).
-    // The old hourly×hours / jobs×rate calc here showed $0 for
-    // property-flat-rate and mixed-pay crews. Falls back to 0 on error so an
-    // app update ahead of the DB migration can't crash the dashboard.
-    let earnings = 0
-    try {
-      const { data: pay } = await cachedQuery(`dash:pay:${user.id}`, supabase.rpc('crew_pay_for_period', {
-        p_start: monthStart.toISOString(), p_end: now.toISOString(), p_user_id: user.id,
-      }))
-      earnings = Number((pay as any[])?.[0]?.labor_total || 0)
-    } catch { /* keep 0 */ }
-    setMonthStats({ completed: myMonth.length, hours: Math.round(hours * 10) / 10, earnings: Math.round(earnings * 100) / 100 })
+    // Earnings are filled in by the pay read started above.
+    setMonthStats(s => ({ ...s, completed: myMonth.length, hours: Math.round(hours * 10) / 10 }))
 
-    // Open shift (daily mode) — a job_time_entries row with no job and no clock-out.
-    if (user._timeMode === 'daily') {
-      const { data: shift } = await cachedQuery(`dash:shift:${user.id}`, supabase.from('job_time_entries')
-        .select('id, clocked_in_at')
-        .eq('user_id', user.id).is('job_id', null).eq('entry_type', 'shift').is('clocked_out_at', null)
-        .order('clocked_in_at', { ascending: false }).limit(1).maybeSingle())
+    if (shiftRes) {
+      const shift = shiftRes.data as any
       // Overlay queued shift punches (start/end made offline) so a relaunch in
       // a dead zone still shows the running shift — or its queued end.
       const shiftRows = await overlayPending('job_time_entries', shift ? [shift] : [],
@@ -504,7 +519,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             {user.role !== 'owner' && (
               <View style={styles.earningsCard}>
                 <Text style={styles.earningsLabel}>💰 {t('my_earnings')}</Text>
-                <Text style={styles.earningsValue}>${monthStats.earnings.toLocaleString('en-US', { minimumFractionDigits: 2 })}</Text>
+                <Text style={styles.earningsValue}>{monthStats.earnings == null ? '—' : `$${monthStats.earnings.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}</Text>
                 <View style={styles.earningsStats}>
                   <View style={styles.earningStat}>
                     <Text style={styles.earningStatValue}>{monthStats.completed}</Text>

@@ -17,7 +17,9 @@
 //   live: a pause must never land before the clock-in it pauses.
 // - Replay is strict FIFO for the same reason. A server-rejected op is retried
 //   across MAX_REJECTS flushes, then moved to a rejected list so one poisoned
-//   op can't dam the queue forever.
+//   op can't dam the queue forever. Ops sharing a `group` park together.
+// - A delete is idempotent by nature, but must name what it deletes: one with
+//   no filter is refused outright.
 // - The outbox is NOT cleared on sign-out (unlike the read caches): queued ops
 //   are unpaid time entries, and RLS rejects them anyway if a different
 //   account replays them.
@@ -32,18 +34,28 @@ const MAX_REJECTS = 5
 export interface OutboxOp {
   id: string
   table: string
-  op: 'upsert' | 'update'
-  /** update only: equality filters (null values match with IS NULL) */
+  op: 'upsert' | 'update' | 'delete'
+  /** update/delete: equality filters (null values match with IS NULL).
+   *  A delete must have at least one — "delete everything I can see" is refused. */
   match?: Record<string, any>
-  values: Record<string, any>
+  /** delete only: spare the rows whose `column` is in `values` (e.g. the ids
+   *  just upserted by the same save). */
+  keep?: { column: string; values: string[] }
+  /** upsert: one row or several (sent as one request); update: the new
+   *  values; delete: unused ({}). */
+  values: Record<string, any> | Record<string, any>[]
   /** upsert only: conflict target, e.g. 'id' or 'job_id,task,room' */
   onConflict?: string
+  /** Ops that only make sense together (a save's new rows, then the delete of
+   *  the rows they replace). If one is parked after repeated rejections, the
+   *  others still queued are parked with it rather than applied on their own. */
+  group?: string
   created_at: number
   rejects?: number
   lastError?: string
 }
 
-export type OutboxWrite = Pick<OutboxOp, 'table' | 'op' | 'match' | 'values' | 'onConflict'>
+export type OutboxWrite = Pick<OutboxOp, 'table' | 'op' | 'match' | 'keep' | 'values' | 'onConflict' | 'group'>
 
 // RFC-4122-shaped v4 from Math.random — no crypto dep (OTA-safe). These ids
 // only need uniqueness for idempotent replay, not unguessability.
@@ -82,8 +94,9 @@ async function applyOp(w: OutboxWrite): Promise<{ error: any; status?: number }>
   if (w.op === 'upsert') {
     return await supabase.from(w.table).upsert(w.values, w.onConflict ? { onConflict: w.onConflict } : undefined) as any
   }
-  let q: any = supabase.from(w.table).update(w.values)
+  let q: any = w.op === 'delete' ? supabase.from(w.table).delete() : supabase.from(w.table).update(w.values)
   for (const [k, v] of Object.entries(w.match || {})) q = v === null ? q.is(k, null) : q.eq(k, v)
+  if (w.op === 'delete' && w.keep?.values.length) q = q.not(w.keep.column, 'in', `(${w.keep.values.join(',')})`)
   return await q
 }
 
@@ -93,6 +106,9 @@ async function applyOp(w: OutboxWrite): Promise<{ error: any; status?: number }>
  * keep the optimistic UI state); a non-null error is a real server answer.
  */
 export async function writeThrough(w: OutboxWrite): Promise<{ error: any; queued: boolean }> {
+  if (w.op === 'delete' && !Object.keys(w.match || {}).length) {
+    return { error: { message: 'outbox: refusing a delete with no filter' }, queued: false }
+  }
   const pending = await readQueue()
   if (pending.length) {
     // Ordering: never let a live write overtake queued ops it depends on.
@@ -129,17 +145,23 @@ export async function flushOutbox(): Promise<void> {
       const cur = await readQueue()
       if (rejects >= MAX_REJECTS) {
         console.warn('outbox: dropping op after repeated server rejections', op.table, msg)
+        // Ops grouped with it assume it landed (a delete of the rows it was
+        // replacing): applying them alone would lose data, so they park too.
+        const groupMates = op.group ? cur.filter(x => x.group === op.group && x.id !== op.id) : []
         // A parked op may be somebody's pay, and the crew was told "queued" —
         // it must not vanish into a list nothing reads. Report it to
         // admin_error_log (admin System Health) and leave it visible on the
         // crew's Profile screen via rejectedOps() until dismissed.
         reportClientError(
-          `outbox: dropped ${op.op} on ${op.table} after ${rejects} rejections — ${msg}`,
+          `outbox: dropped ${op.op} on ${op.table} after ${rejects} rejections — ${msg}` +
+            (groupMates.length ? ` (+${groupMates.length} grouped op${groupMates.length > 1 ? 's' : ''} parked with it)` : ''),
           JSON.stringify({ id: op.id, values: op.values, match: op.match }).slice(0, 2000),
           'outbox',
         )
         await appendRejected({ ...op, rejects, lastError: msg })
-        await writeQueue(cur.filter(x => x.id !== op.id))
+        for (const mate of groupMates) await appendRejected({ ...mate, lastError: `parked with ${op.op} on ${op.table}: ${msg}` })
+        const parked = new Set([op.id, ...groupMates.map(x => x.id)])
+        await writeQueue(cur.filter(x => !parked.has(x.id)))
         continue
       }
       await writeQueue(cur.map(x => x.id === op.id ? { ...x, rejects, lastError: msg } : x))
@@ -167,9 +189,10 @@ export async function clearRejected(): Promise<void> {
  * Merge pending ops into rows read from cache/server, so a relaunch mid-outage
  * still shows queued state (the tick you made, the clock-in that's queued).
  * `includeUpsert` gates which queued upserts belong in this row set — callers
- * pass the same scoping their query used. Update-op match keys that a row
- * doesn't carry are treated as matching (callers pass rows already scoped to
- * the entity the op targets).
+ * pass the same scoping their query used. Update- and delete-op match keys
+ * that a row doesn't carry are treated as matching (callers pass rows already
+ * scoped to the entity the op targets). A queued delete removes the rows it
+ * matches, sparing its `keep` list.
  */
 export async function overlayPending(
   table: string,
@@ -178,19 +201,23 @@ export async function overlayPending(
 ): Promise<any[]> {
   const q = await readQueue()
   let out = rows.slice()
+  const matches = (r: any, match?: Record<string, any>) =>
+    Object.entries(match || {}).every(([k, v]) => (k in r ? r[k] === v : true))
   for (const o of q) {
     if (o.table !== table) continue
     if (o.op === 'upsert') {
-      if (includeUpsert && !includeUpsert(o.values)) continue
       const keys = (o.onConflict || 'id').split(',')
-      const i = out.findIndex(r => keys.every(k => (k in r ? r[k] === o.values[k] : true)))
-      if (i >= 0) out[i] = { ...out[i], ...o.values }
-      else out.push({ ...o.values })
+      for (const values of Array.isArray(o.values) ? o.values : [o.values]) {
+        if (includeUpsert && !includeUpsert(values)) continue
+        const i = out.findIndex(r => keys.every(k => (k in r ? r[k] === values[k] : true)))
+        if (i >= 0) out[i] = { ...out[i], ...values }
+        else out.push({ ...values })
+      }
+    } else if (o.op === 'delete') {
+      const kept = new Set(o.keep?.values ?? [])
+      out = out.filter(r => !(matches(r, o.match) && !(o.keep && kept.has(r[o.keep.column]))))
     } else {
-      out = out.map(r => {
-        const m = Object.entries(o.match || {}).every(([k, v]) => (k in r ? r[k] === v : true))
-        return m ? { ...r, ...o.values } : r
-      })
+      out = out.map(r => (matches(r, o.match) ? { ...r, ...(o.values as Record<string, any>) } : r))
     }
   }
   return out
