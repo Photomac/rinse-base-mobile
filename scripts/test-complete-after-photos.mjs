@@ -72,13 +72,15 @@ function run(files, { quiet }) {
   try {
     for (const [name, text] of Object.entries(files)) writeFileSync(join(work, name), text)
     cpSync(join(repo, 'src/lib/sha256.ts'), join(work, 'sha256.ts'))
+    // outbox.ts imports ./timezone (dayKey) as-is: it has no imports of its own.
+    cpSync(join(repo, 'src/lib/timezone.ts'), join(work, 'timezone.ts'))
     cpSync(join(repo, 'src/lib/__tests__/photoQueue.mocks.ts'), join(work, 'photoQueue.mocks.ts'))
     cpSync(join(repo, 'src/lib/__tests__/completeAfterPhotos.mocks.ts'), join(work, 'completeAfterPhotos.mocks.ts'))
     writeFileSync(join(work, 'scenario.ts'), rewrite(read('src/lib/__tests__/completeAfterPhotos.scenario.ts'), [
       [`'../outbox'`, `'./outbox'`],
       [`'../photoQueue'`, `'./photoQueue'`],
     ], 'completeAfterPhotos.scenario.ts'))
-    execSync('npx --yes esbuild outbox.ts photoQueue.ts sha256.ts photoQueue.mocks.ts completeAfterPhotos.mocks.ts scenario.ts --format=cjs --platform=node --outdir=out --log-level=warning', {
+    execSync('npx --yes esbuild outbox.ts photoQueue.ts sha256.ts timezone.ts photoQueue.mocks.ts completeAfterPhotos.mocks.ts scenario.ts --format=cjs --platform=node --outdir=out --log-level=warning', {
       cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
     })
     execSync('node out/scenario.js', { cwd: work, stdio: quiet ? 'pipe' : 'inherit' })

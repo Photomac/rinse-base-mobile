@@ -57,6 +57,8 @@ try {
     [`from './i18n'`, `from './sosTracker.mocks'`],
     ['const REQUEST_TIMEOUT_MS = 15_000', 'const REQUEST_TIMEOUT_MS = 150'],
   ], 'sosTracker.ts'))
+  // outbox.ts imports ./timezone (dayKey) as-is: it has no imports of its own.
+  writeFileSync(join(work, 'timezone.ts'), read('src/lib/timezone.ts'))
   for (const f of ['sos.mocks.ts', 'sos.supabase.ts', 'sosTracker.mocks.ts']) {
     writeFileSync(join(work, f), read(`src/lib/__tests__/${f}`))
   }
