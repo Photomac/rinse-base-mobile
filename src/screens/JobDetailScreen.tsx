@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase'
 // Job times render in the tenant's zone, not the phone's — src/lib/timezone.ts.
 import { fmtTime } from '../lib/timezone'
 import { JobPhotosScreen } from './JobPhotosScreen'
+import { WalkthroughScreen } from './WalkthroughScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
 import { LaundryRunScreen } from './LaundryRunScreen'
 import { JobInspectionScreen } from './JobInspectionScreen'
@@ -144,6 +145,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // true = plain open; { roomId } = opened from a room's Restock task, the
   // supplies screen fronts that room's section.
   const [showInventory, setShowInventory] = useState<boolean | { roomId: string }>(false)
+  const [showWalkthrough, setShowWalkthrough] = useState(false)
+  // Per-company switch (tenants.video_walkthroughs_enabled), off by default.
+  const [videoEnabled, setVideoEnabled] = useState(false)
   const [showMessages, setShowMessages] = useState(false)
   const [showLaundry, setShowLaundry] = useState(false)
   const [showInspection, setShowInspection] = useState(false)
@@ -310,6 +314,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // deliberately excluded — pause closes the entry too, and that state already
   // has its Resume action.
   const isStrandedInProgress = job.status === 'in_progress' && !activeEntry && !isPaused
+
+  useEffect(() => {
+    // Fails closed: offline with nothing cached, or a server without the column
+    // yet, just leaves the Walkthrough button hidden.
+    cachedQuery(`tenvideo:${user.tenant_id}`, supabase.from('tenants')
+      .select('video_walkthroughs_enabled').eq('id', user.tenant_id).maybeSingle())
+      .then(({ data }) => setVideoEnabled(!!(data as any)?.video_walkthroughs_enabled))
+      .catch(() => {})
+  }, [user.tenant_id])
 
   useEffect(() => {
     // Drain queued offline writes first chance we get (same trigger set as the
@@ -1259,6 +1272,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     />
   )
   if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} requiredOutstanding={Math.max(0, reqTotal - reqDone)} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
+  if (showWalkthrough) {
+    // Arrival until the clean is ~15 minutes in, finished after that. The crew
+    // can switch it on the recorder.
+    const firstIn = timeEntries[0]?.clocked_in_at || activeEntry?.clocked_in_at
+    const arriving = !isStarted || (!!firstIn && Date.now() - new Date(firstIn).getTime() < 15 * 60_000)
+    return <WalkthroughScreen job={job} user={user} defaultType={arriving ? 'before' : 'after'} onBack={() => setShowWalkthrough(false)} />
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -1461,6 +1481,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <TouchableOpacity style={styles.actionChip} onPress={() => { setActivePhotoItem(null); setShowPhotos(true) }}>
                 <Text style={styles.actionChipIcon}>📸</Text>
                 <Text style={styles.actionChipLabel} numberOfLines={1}>{t('job_photos')}</Text>
+              </TouchableOpacity>
+            )}
+            {!isTask && videoEnabled && (
+              <TouchableOpacity style={styles.actionChip} onPress={() => setShowWalkthrough(true)}>
+                <Text style={styles.actionChipIcon}>🎥</Text>
+                <Text style={styles.actionChipLabel} numberOfLines={1}>{t('walkthrough_chip')}</Text>
               </TouchableOpacity>
             )}
             {/* Reference shots, with the count on the chip. The photo-requirement

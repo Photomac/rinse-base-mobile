@@ -23,6 +23,7 @@ import { resumeSOSTrailIfOpen } from './src/lib/sosTracker'
 // eval so headless OS launches (region crossings) find the handler.
 import './src/lib/arrivalGeofence'
 import { flushQueue } from './src/lib/photoQueue'
+import { flushVideoQueue } from './src/lib/videoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
 import { clearDataCache } from './src/lib/dataCache'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
@@ -240,7 +241,12 @@ function AppInner() {
     if (!user) return
     // Incident heads-ups last: they wait for the report (outbox) and its photos
     // (queue) to have landed.
-    const drain = () => { flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}).then(() => flushIncidentNotifies()).catch(() => {}) }
+    // Walkthrough videos drain on their own, alongside: one can take many
+    // minutes on a weak bar, and nothing in the chain below should wait on it.
+    const drain = () => {
+      flushVideoQueue().catch(() => {})
+      flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}).then(() => flushIncidentNotifies()).catch(() => {})
+    }
     drain()
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') drain()
