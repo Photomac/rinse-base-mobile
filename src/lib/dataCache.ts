@@ -33,6 +33,14 @@ export async function cachedQuery<T = any>(
   return { data: res.data, error: res.error, fromCache: false }
 }
 
+// Record state this device just wrote as the last good read, so a later read
+// that falls back to the cache (no signal) can't bring back what the crew
+// just changed. Without it, "Start my day" followed by a dead-zone reload
+// served the pre-start "no shift open" and offered Start again.
+export async function setCached(key: string, data: any): Promise<void> {
+  try { await AsyncStorage.setItem(PREFIX + key, JSON.stringify(data ?? null)) } catch { /* best effort */ }
+}
+
 // Sign-out hygiene: drop every cached read (jobs, checklists, property info
 // carry addresses and lockbox codes — they must not outlive the account on a
 // shared device).
