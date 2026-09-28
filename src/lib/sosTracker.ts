@@ -18,12 +18,19 @@
 // one of which backgrounds the app and freezes a JS timer. That is the same
 // failure that made foreground-only mileage tracking die mid-drive. The JS
 // interval below is only a fallback for phones that never granted "Always".
+//
+// Since 2026-09-28 the trail starts at the press, before the alert has reached
+// the server, and every tick flushes the SOS queue first. With the app
+// backgrounded this task is the only code that runs, so it is what gets a
+// dead-zone alert out when the crew member walks back into signal. Pings wait
+// until the alert has landed: sos_pings needs its row.
 
 import * as Location from 'expo-location'
 import * as TaskManager from 'expo-task-manager'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { getBackgroundLocationStatus, getForegroundLocationStatus } from './permissions'
+import { flushSOSQueue, sosLanded } from './sosQueue'
 
 const SOS_PING_TASK = 'sos-ping-task'
 const ACTIVE_KEY = 'sos:active'
@@ -101,6 +108,9 @@ async function pingOnce(): Promise<void> {
     return
   }
 
+  await flushSOSQueue().catch(() => {})
+  if (!(await sosLanded(active.alertId))) return
+
   try {
     const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
     await recordPing(active.alertId, loc.coords)
@@ -111,8 +121,8 @@ async function pingOnce(): Promise<void> {
   }
 }
 
-// Begin trailing. Called right after the alert row lands. Never throws: the
-// alert itself is already delivered by this point and nothing here is allowed
+// Begin trailing. Called at the press, with the id the SOS queue minted. Never
+// throws: delivering the alert is the queue's job, and nothing here is allowed
 // to take the SOS screen down with it.
 export async function startSOSTrail(alertId: string) {
   try {
@@ -176,19 +186,6 @@ export async function resumeSOSTrailIfOpen() {
   } catch { /* best-effort */ }
 }
 
-// Look up the alert this device just raised. Kept as a separate read rather
-// than adding .select() to sendSOS's insert, so that nothing about resolving
-// the trail's alert id can throw on the insert path — delivering the alert is
-// the part that must not fail, and the trail is best-effort on top of it.
-export async function findMyOpenAlertId(userId: string): Promise<string | null> {
-  try {
-    const { data } = await supabase
-      .from('sos_alerts').select('id').eq('user_id', userId).eq('status', 'active')
-      .order('triggered_at', { ascending: false }).limit(1).maybeSingle()
-    return data?.id ?? null
-  } catch { return null }
-}
-
 // ── BACKGROUND TASK ──
 // Runs even with the app backgrounded or killed — the whole point of this file.
 TaskManager.defineTask(SOS_PING_TASK, async ({ data, error }: any) => {
@@ -199,6 +196,10 @@ TaskManager.defineTask(SOS_PING_TASK, async ({ data, error }: any) => {
 
   if (Date.now() - active.startedAt > MAX_TRAIL_MS) { await stopSOSTrail(); return }
   if (!(await isAlertStillOpen(active.alertId))) { await stopSOSTrail(); return }
+
+  // Backgrounded, this is the only code running: deliver a queued alert first.
+  await flushSOSQueue().catch(() => {})
+  if (!(await sosLanded(active.alertId))) return
 
   const { locations } = (data ?? {}) as { locations?: Location.LocationObject[] }
   if (!locations?.length) return
