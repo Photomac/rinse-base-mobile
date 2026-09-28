@@ -90,14 +90,59 @@ async function isActivelyWorking(userId: string): Promise<boolean> {
   const now = new Date()
   const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
   const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
+  // The embed names its FK: a second jobs↔job_assignments FK would make an
+  // unhinted embed ambiguous (HTTP 300), this would read false, and tracking
+  // would stop for anyone not clocked in right now (en route, or paused).
   const { data: active } = await supabase
-    .from('jobs').select('id, job_assignments!inner(user_id)')
+    .from('jobs').select('id, job_assignments!job_assignments_job_id_fkey!inner(user_id)')
     .eq('job_assignments.user_id', userId)
     .in('status', ['en_route', 'in_progress'])
     .gte('scheduled_start', todayStart.toISOString())
     .lte('scheduled_start', todayEnd.toISOString())
     .limit(1)
   return (active?.length ?? 0) > 0
+}
+
+// The clean this crew member is on right now: the job the dispatch dot reports,
+// and the property the left-site check measures against.
+//
+// Matched on the server by an inner join on their own assignment. This used to
+// read every job_assignments row they had EVER had, unranged, then send all of
+// those ids back in one `id=in.(…)` URL. PostgREST's silent 1,000-row cap would
+// hand back an arbitrary 1,000, and the URL outgrows length limits at a few
+// hundred ids (max was 165 per person on 2026-09-28, about one more per clean).
+// Either way activeJob came back null, the dot read 'idle', and the geofence
+// silently never ran. The embed names its FK for the reason isActivelyWorking
+// gives: an ambiguous embed would turn every ping into 'idle'.
+//
+// Two cleans in progress at once is normal: a crew member pauses one with
+// "Going to another job", or the completion gate holds one open after they
+// clock out, and then they start the next. Without the limit, .maybeSingle()
+// errors on the second row and the result is null again. The pick is the LAST
+// in-progress clean in their day order (byCrewDayOrder, reversed): they work the
+// day in that order, so that is the one they are most likely standing at. The
+// earliest would pin the fence to a property they already left until someone
+// closes that clean. (Of 1,091 clock-ins on record at 2026-09-28, 72 started
+// while another of that person's cleans that day was still in progress. It was
+// scheduled earlier 37 times, later 6, and in the same slot 29.)
+async function findActiveJob(userId: string): Promise<any> {
+  const now = new Date()
+  const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
+  const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
+  const { data, error } = await supabase
+    .from('jobs')
+    .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street), job_assignments!job_assignments_job_id_fkey!inner(user_id)')
+    .eq('job_assignments.user_id', userId)
+    .eq('status', 'in_progress')
+    .gte('scheduled_start', todayStart.toISOString())
+    .lte('scheduled_start', todayEnd.toISOString())
+    .order('scheduled_start', { ascending: false })
+    .order('route_order', { ascending: false, nullsFirst: true })
+    .order('job_number', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) console.warn('Active job lookup failed:', error.message)
+  return data
 }
 
 export async function startLocationTracking(user: any, opts?: { requestBackground?: boolean }) {
@@ -281,27 +326,7 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
     }
 
     // Find this crew member's active job
-    const now = new Date()
-    const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
-    const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
-
-    // Get this user's assigned jobs that are in_progress
-    const { data: myAssignments } = await supabase
-      .from('job_assignments').select('job_id').eq('user_id', user.id)
-    const myJobIds = (myAssignments ?? []).map((a: any) => a.job_id)
-
-    let activeJob: any = null
-    if (myJobIds.length > 0) {
-      const { data } = await supabase
-        .from('jobs')
-        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)')
-        .in('id', myJobIds)
-        .eq('status', 'in_progress')
-        .gte('scheduled_start', todayStart.toISOString())
-        .lte('scheduled_start', todayEnd.toISOString())
-        .maybeSingle()
-      activeJob = data
-    }
+    const activeJob = await findActiveJob(user.id)
 
     // Update crew location
     await supabase.from('crew_locations').upsert({
@@ -347,26 +372,7 @@ async function pingLocation(user: any) {
     })
 
     // Find this crew member's active job with address coordinates
-    const now = new Date()
-    const todayStart = new Date(now); todayStart.setHours(0,0,0,0)
-    const todayEnd = new Date(now); todayEnd.setHours(23,59,59,999)
-
-    const { data: myAssignments } = await supabase
-      .from('job_assignments').select('job_id').eq('user_id', user.id)
-    const myJobIds = (myAssignments ?? []).map((a: any) => a.job_id)
-
-    let activeJob: any = null
-    if (myJobIds.length > 0) {
-      const { data } = await supabase
-        .from('jobs')
-        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)')
-        .in('id', myJobIds)
-        .eq('status', 'in_progress')
-        .gte('scheduled_start', todayStart.toISOString())
-        .lte('scheduled_start', todayEnd.toISOString())
-        .maybeSingle()
-      activeJob = data
-    }
+    const activeJob = await findActiveJob(user.id)
 
     const jobId = activeJob?.id || null
     const status = activeJob ? 'active' : 'idle'
