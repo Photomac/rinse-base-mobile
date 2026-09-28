@@ -102,7 +102,10 @@ export async function enqueueVideo(p: {
   const entry: PendingVideo = {
     id,
     localUri: persisted,
-    storagePath: `${p.tenant_id}/${p.job_id}/walkthrough_${Date.now()}_${Math.floor(Math.random() * 1e6)}.${ext}`,
+    // The bucket is public, so the name is the only secret: the row's uuid
+    // rather than a timestamp plus six random digits. The database requires
+    // this <tenant>/<job>/ prefix and the exact public URL of this path.
+    storagePath: `${p.tenant_id}/${p.job_id}/walkthrough_${id}.${ext}`,
     mimeType: 'video/mp4',
     tenant_id: p.tenant_id,
     job_id: p.job_id,
