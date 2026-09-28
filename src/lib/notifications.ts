@@ -57,46 +57,7 @@ export async function registerPushToken(user: any) {
   }
 }
 
-export async function sendSOSNotification(tenantId: string, crewName: string, location: string) {
-  // Get all owner and manager tokens for this tenant
-  const { data: tokens } = await supabase
-    .from('push_tokens')
-    .select('token, users!push_tokens_user_id_fkey(role)')
-    .eq('tenant_id', tenantId)
-
-  if (!tokens?.length) return
-
-  // Filter to owners and managers only
-  const alertTokens = tokens
-    .filter((t: any) => ['owner', 'manager', 'dispatcher'].includes(t.users?.role))
-    .map((t: any) => t.token)
-
-  if (!alertTokens.length) return
-
-  // Send via Expo Push API
-  const messages = alertTokens.map(token => ({
-    to: token,
-    sound: 'default',
-    title: '🆘 SOS ALERT',
-    body: `${crewName} needs help! Location: ${location}`,
-    data: { type: 'sos', tenantId },
-    priority: 'high',
-    channelId: 'sos-alerts',
-  }))
-
-  // SOS push goes through Expo's push gateway. If this throws, we want
-  // the failure logged loud — the SMS fallback (cron-based, server-side)
-  // still goes out, but we should know push didn't reach.
-  try {
-    const res = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(messages),
-    })
-    if (!res.ok) {
-      console.warn('Expo push send failed:', res.status, await res.text())
-    }
-  } catch (e) {
-    console.warn('Expo push send threw:', e)
-  }
-}
+// The SOS push to the office moved to src/lib/sosQueue.ts (2026-09-28), where
+// it goes out once the alert row has landed instead of alongside an unchecked
+// insert. There is no SMS fallback for SOS on the server; an earlier comment
+// here said there was.

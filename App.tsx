@@ -29,6 +29,7 @@ import { clearDataCache } from './src/lib/dataCache'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
 import { flushOutbox } from './src/lib/outbox'
 import { flushIncidentNotifies } from './src/lib/incidentNotify'
+import { flushSOSQueue, resumableSOS } from './src/lib/sosQueue'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
 import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
@@ -244,6 +245,9 @@ function AppInner() {
     // Walkthrough videos drain on their own, alongside: one can take many
     // minutes on a weak bar, and nothing in the chain below should wait on it.
     const drain = () => {
+      // An SOS goes first and on its own: it must never wait behind a photo
+      // upload that can take minutes on one bar.
+      flushSOSQueue().catch(() => {})
       flushVideoQueue().catch(() => {})
       flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}).then(() => flushIncidentNotifies()).catch(() => {})
     }
@@ -258,6 +262,14 @@ function AppInner() {
     const iv = setInterval(() => { if (AppState.currentState === 'active') drain() }, 120_000)
     return () => { sub.remove(); clearInterval(iv) }
   }, [user])
+
+  // An SOS this phone never got to the server (app killed in a dead zone, dead
+  // battery) reopens its screen at launch, so the crew member sees it still
+  // hasn't gone and the screen's fast retry takes over from the drain.
+  useEffect(() => {
+    if (!user) return
+    resumableSOS(user.id).then(open => { if (open) setShowSOS(true) }).catch(() => {})
+  }, [user?.id])
 
   if (loading) {
     return (

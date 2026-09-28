@@ -1,14 +1,23 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Pressable, Alert, Vibration, ActivityIndicator, Animated, Platform, Linking } from 'react-native'
+import React, { useState, useEffect, useRef } from 'react'
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert, Vibration, ActivityIndicator, Animated, Platform, Linking, AccessibilityInfo } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
-import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
-import { sendSOSNotification } from '../lib/notifications'
+import { ti } from '../lib/i18n'
 import { ensureForegroundLocation } from '../lib/permissions'
-import { startSOSTrail, stopSOSTrail, findMyOpenAlertId } from '../lib/sosTracker'
+import { startSOSTrail, stopSOSTrail } from '../lib/sosTracker'
+import {
+  QueuedSOS, raiseSOS, flushSOSQueue, cancelSOS, getSOS, resumableSOS,
+  updateSOSLocation, onSOSChange, isSOSFlushing, sosDeliveryState,
+} from '../lib/sosQueue'
 
 const HOLD_DURATION = 3000
+// Until the alert reaches the server, try again this often. Each try is capped
+// by the queue's own request timeout, and tries never overlap.
+const RETRY_EVERY_MS = 10_000
+// How long "I'm OK" waits on the network before saying plainly that the office
+// hasn't been told yet. The cancel keeps trying after that.
+const CANCEL_WAIT_MS = 6_000
 
 interface Props {
   user: any
@@ -16,17 +25,38 @@ interface Props {
   onSent: () => void
 }
 
+type Outcome = 'cancelled_unsent' | 'resolved' | 'resolve_queued'
+
+// The screen never says "sent" on its own. What it shows after the hold comes
+// from the SOS queue (src/lib/sosQueue.ts): "sending" until the first answer,
+// "not reached anyone" on a network failure or a server refusal, and "sent"
+// only once the server has the row. Until 2026-09-28 it said "ALERT SENT"
+// before any network call, and in a dead zone nothing reached anyone.
 export function SOSScreen({ user, onCancel, onSent }: Props) {
   const { t } = useLang()
-  const [phase, setPhase] = useState<'ready' | 'holding' | 'sent' | 'responded'>('ready')
+  const [phase, setPhase] = useState<'ready' | 'holding' | 'active' | 'responded'>('ready')
   const [holdProgress, setHoldProgress] = useState(0)
   const [location, setLocation] = useState<any>(null)
   const [locationLabel, setLocationLabel] = useState('')
+  const [alert, setAlert] = useState<QueuedSOS | null>(null)
+  const [flushing, setFlushing] = useState(false)
+  const [nextTryAt, setNextTryAt] = useState<number | null>(null)
+  const [now, setNow] = useState(Date.now())
   const [responding, setResponding] = useState(false)
+  const [outcome, setOutcome] = useState<Outcome | null>(null)
 
   const holdTimer = useRef<any>(null)
   const holdInterval = useRef<any>(null)
+  const firedRef = useRef(false)
+  const alertRef = useRef<QueuedSOS | null>(null)
+  const announced = useRef<string | null>(null)
   const pulseAnim = useRef(new Animated.Value(1)).current
+
+  const alertId = alert?.id ?? null
+  const delivery = alert ? sosDeliveryState(alert, now) : 'sending'
+  const officePhone: string | null = user?._contact?.dispatchPhone || null
+
+  useEffect(() => { alertRef.current = alert }, [alert])
 
   // Get GPS on mount. Use the central permission helper so we don't
   // re-fire the OS prompt every time SOS is opened — silent mode reads
@@ -50,17 +80,106 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     getLocation()
   }, [])
 
-  // Pulse animation
+  // An alert this phone raised and never delivered (app killed, phone died,
+  // dead zone) picks up where it left off instead of a second one being raised.
   useEffect(() => {
-    if (phase === 'sent') {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.15, duration: 600, useNativeDriver: false }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: false }),
-        ])
-      ).start()
+    let alive = true
+    resumableSOS(user.id).then(e => {
+      if (!alive || !e || firedRef.current) return
+      firedRef.current = true
+      alertRef.current = e
+      setAlert(e)
+      setPhase('active')
+      flushSOSQueue().catch(() => {})
+      startSOSTrail(e.id).catch(() => {})
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+
+  // Follow the queue: every delivery step lands here. A failed read keeps what
+  // the screen last showed rather than guessing.
+  useEffect(() => onSOSChange(() => {
+    setFlushing(isSOSFlushing())
+    const id = alertRef.current?.id
+    if (!id) return
+    getSOS(id).then(e => { if (e) { alertRef.current = e; setAlert(e) } }).catch(() => {})
+  }), [])
+
+  // "I'm OK" answered "the office still sees your SOS" because there was no
+  // signal. When the cancel gets through, say so.
+  useEffect(() => {
+    if (outcome === 'resolve_queued' && alert?.cancel_synced) setOutcome('resolved')
+  }, [outcome, alert?.cancel_synced])
+
+  // A fix that arrives after the press still goes out with the alert, as long
+  // as the alert hasn't landed yet.
+  useEffect(() => {
+    if (alertId && location) updateSOSLocation(alertId, location.latitude, location.longitude).catch(() => {})
+  }, [alertId, location])
+
+  // Keep trying while the alert, its push to the office, or an "I'm OK" is
+  // still on the phone. The app-wide drain and the SOS location task flush
+  // too; the queue makes overlapping calls safe.
+  useEffect(() => {
+    if ((phase !== 'active' && phase !== 'responded') || !alertId) return
+    let stopped = false
+    let timer: any
+    const needsWork = () => {
+      const a = alertRef.current
+      if (!a) return false
+      return a.cancelled_at ? !a.cancel_synced : !a.landed_at || a.push === 'pending' || a.coords_pending
     }
-  }, [phase])
+    const tick = async () => {
+      if (stopped) return
+      if (needsWork()) {
+        setNextTryAt(null)
+        await flushSOSQueue().catch(() => {})
+        if (stopped) return
+      }
+      setNextTryAt(needsWork() ? Date.now() + RETRY_EVERY_MS : null)
+      timer = setTimeout(tick, RETRY_EVERY_MS)
+    }
+    setNextTryAt(Date.now() + RETRY_EVERY_MS)
+    timer = setTimeout(tick, RETRY_EVERY_MS)
+    return () => { stopped = true; clearTimeout(timer) }
+  }, [phase, alertId])
+
+  // Countdown to the next try while it hasn't gone through.
+  useEffect(() => {
+    if (phase !== 'active' || delivery === 'sent') return
+    const iv = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [phase, delivery])
+
+  // Pulse once the office has it.
+  useEffect(() => {
+    if (phase !== 'active' || delivery !== 'sent') return
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.15, duration: 600, useNativeDriver: false }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 600, useNativeDriver: false }),
+      ])
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [phase, delivery])
+
+  // Say each change out loud for screen readers, and buzz when it goes through:
+  // someone in trouble may not be looking at the screen.
+  useEffect(() => {
+    if (phase !== 'active' || announced.current === delivery) return
+    const wasWaiting = announced.current !== null
+    announced.current = delivery
+    if (delivery === 'sent') {
+      onSent()
+      if (wasWaiting) { try { Vibration.vibrate([0, 80, 80, 80]) } catch (e) {} }
+      AccessibilityInfo.announceForAccessibility(t('sos_sent_office_has_it'))
+    } else if (delivery === 'offline') {
+      AccessibilityInfo.announceForAccessibility(t('sos_no_signal'))
+    } else if (delivery === 'refused') {
+      AccessibilityInfo.announceForAccessibility(t('sos_refused'))
+    }
+  }, [phase, delivery])
 
   // (Auto-911 countdown removed — the app does not auto-dial 911. Crews
   // can tap the explicit "Call 911" button in the sent-state UI to dial
@@ -88,6 +207,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
   }
 
   function cancelHold() {
+    if (firedRef.current) return
     clearTimeout(holdTimer.current)
     clearInterval(holdInterval.current)
     if (holdProgress < 100) {
@@ -97,91 +217,115 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
   }
 
   async function sendSOS() {
+    // onLongPress and the hold timer can both get here; one hold is one alert.
+    if (firedRef.current) return
+    firedRef.current = true
+    clearTimeout(holdTimer.current)
+    clearInterval(holdInterval.current)
     try { Vibration.vibrate([0, 200, 100, 200, 100, 200]) } catch(e) {}
-    // Set phase first so UI updates immediately
-    setPhase('sent')
     setHoldProgress(0)
-    // Send push to all owners/managers (fire-and-forget on the
-    // wrapper, which is a real Promise, so .catch is safe here)
-    sendSOSNotification(user.tenant_id, user.full_name, locationLabel).catch(console.warn)
-    // Supabase query builders return a PromiseLike — await in try/catch
-    // rather than chain .then/.catch, which crashes at runtime.
-    try {
-      // Bare insert, unchanged. The trail needs the new row's id, but this
-      // write stays exactly as it was — nothing about following the crew
-      // member afterwards is allowed to alter the path that delivers the
-      // alert. The id is looked up separately below.
-      await supabase.from('sos_alerts').insert({
-        tenant_id: user.tenant_id,
-        user_id: user.id,
-        triggered_at: new Date().toISOString(),
-        lat: location?.latitude || null,
-        lng: location?.longitude || null,
-        status: 'active',
-      })
-      onSent()
-    } catch (e: any) {
-      console.warn('SOS insert error:', e)
-    }
-    // Start the location trail. Strictly best-effort and strictly after the
-    // alert + push have gone out — a crew member in trouble gets the alert
-    // delivered whether or not we can follow them afterwards.
-    try {
-      const alertId = await findMyOpenAlertId(user.id)
-      if (alertId) await startSOSTrail(alertId)
-    } catch (e) {
-      console.warn('SOS trail start failed:', e)
-    }
+    setPhase('active')
+    // Onto the phone first, before any network. From here the alert survives
+    // a dead zone or a killed app until the office has it.
+    const entry = await raiseSOS({
+      tenant_id: user.tenant_id,
+      user_id: user.id,
+      crew_name: user.full_name || 'A crew member',
+      lat: location?.latitude ?? null,
+      lng: location?.longitude ?? null,
+    })
+    alertRef.current = entry
+    setAlert(entry)
+    flushSOSQueue().catch(() => {})
+    // The trail starts now, not after delivery: its background location task
+    // is what keeps retrying if the crew member locks the phone or switches to
+    // the dialer. It only records pings once the alert has landed.
+    startSOSTrail(entry.id).catch(() => {})
   }
 
   async function markOK() {
+    const last = alertRef.current
+    if (!last) return
     setResponding(true)
-    // Stop trailing first and unconditionally. If the status update below
-    // fails (no signal), the location trail must still stop — "I'm OK" has to
-    // mean the phone stops broadcasting, network or no network.
+    // Stop the trail first and unconditionally: "I'm OK" has to stop the phone
+    // broadcasting its location, network or no network.
     try { await stopSOSTrail() } catch { /* best-effort */ }
-    try {
-      await supabase.from('sos_alerts')
-        .update({ status: 'false_alarm', resolved_at: new Date().toISOString() })
-        .eq('user_id', user.id)
-        .eq('status', 'active')
-    } catch (e: any) {
-      console.warn('SOS markOK error:', e)
-      // Don't block the UI on a network failure — the local state still
-      // resets so the crew member isn't stuck on the alert screen.
-    }
+    // Don't hold someone on a spinner for a whole network timeout. The cancel
+    // is stored before this returns and keeps trying in the background.
+    await Promise.race([cancelSOS(last.id, last).catch(() => {}), new Promise(r => setTimeout(r, CANCEL_WAIT_MS))])
+    const after = await getSOS(last.id).catch(() => null)
+    if (after) { alertRef.current = after; setAlert(after) }
+    // Say only what is known. "No one was alerted" only when nothing ever left
+    // the phone; an attempt that went out may have landed, so until the server
+    // has the cancel, the office may still see an active SOS.
+    setOutcome(
+      after && after.attempts === 0 && !after.landed_at ? 'cancelled_unsent'
+        : after?.cancel_synced ? 'resolved'
+          : 'resolve_queued')
     try { Vibration.cancel() } catch(e) {}
     setResponding(false)
     setPhase('responded')
   }
 
+  const digits = (n: string) => n.replace(/[^\d+]/g, '')
+
+  // One tap. The phone itself still asks before dialing (iOS shows a call
+  // prompt, Android opens the dialer), so a pocket press can't place the call.
   function call911() {
-    Alert.alert(
-      t('call_911_title'),
-      t('call_911_msg'),
-      [
-        { text: t('cancel'), style: 'cancel' },
-        {
-          text: t('call_911_btn'),
-          style: 'destructive',
-          onPress: () => Linking.openURL('tel:911').catch(() => {
-            Alert.alert(t('location_error'), t('dial_911_manually'))
-          }),
-        },
-      ],
-    )
+    Linking.openURL('tel:911').catch(() => {
+      Alert.alert(t('call_911_btn'), t('dial_911_manually'))
+    })
   }
+
+  function callOffice() {
+    if (!officePhone) return
+    Linking.openURL(`tel:${digits(officePhone)}`).catch(() => {
+      Alert.alert(t('sos_call_office'), ti(t('sos_call_failed'), { phone: officePhone }))
+    })
+  }
+
+  // A text often gets out on a bar where data can't. Opens Messages with the
+  // position filled in; the crew member taps Send.
+  function textOffice() {
+    if (!officePhone) return
+    const lat = location?.latitude ?? alertRef.current?.lat
+    const lng = location?.longitude ?? alertRef.current?.lng
+    const loc = lat != null && lng != null
+      ? `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)} https://maps.google.com/?q=${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`
+      : t('sos_sms_no_gps')
+    const body = ti(t('sos_sms_body'), { name: user?.full_name || '', loc })
+    const sep = Platform.OS === 'ios' ? '&' : '?'
+    Linking.openURL(`sms:${digits(officePhone)}${sep}body=${encodeURIComponent(body)}`).catch(() => {
+      Alert.alert(t('sos_text_office'), ti(t('sos_call_failed'), { phone: officePhone }))
+    })
+  }
+
+  const retryLine = flushing || !nextTryAt
+    ? t('sos_retrying')
+    : ti(t('sos_next_try'), { s: String(Math.max(1, Math.ceil((nextTryAt - now) / 1000))) })
+
+  const pushLine = !alert || alert.push === 'pending'
+    ? t('sos_alerting_phones')
+    : alert.push === 'sent' && (alert.push_recipients ?? 0) > 0
+      ? ti(t('sos_phones_alerted'), { n: String(alert.push_recipients) })
+      : t('sos_no_office_push')
+
+  const responded = outcome === 'resolve_queued'
+    ? { title: t('sos_ok_queued_title'), sub: t('sos_ok_queued_sub') }
+    : outcome === 'resolved'
+      ? { title: t('false_alarm_title'), sub: t('false_alarm_sub') }
+      : { title: t('sos_cancelled_unsent_title'), sub: t('sos_cancelled_unsent_sub') }
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
 
       {/* Header */}
       <View style={styles.header}>
-        {phase !== 'sent' && (
+        {phase === 'ready' || phase === 'holding' ? (
           <TouchableOpacity onPress={onCancel} style={styles.cancelTopBtn}>
             <Text style={styles.cancelTopText}>← {t('cancel')}</Text>
           </TouchableOpacity>
-        )}
+        ) : <View style={{ width: 80 }} />}
         <Text style={styles.headerTitle}>{t('emergency_sos')}</Text>
         <View style={{ width: 80 }} />
       </View>
@@ -206,7 +350,7 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
             {/* Progress ring */}
             {phase === 'holding' && (
               <View style={styles.progressRing}>
-                <View style={[styles.progressFill, { 
+                <View style={[styles.progressFill, {
                   height: `${holdProgress}%` as any,
                   bottom: 0,
                   position: 'absolute',
@@ -246,16 +390,79 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.sentContent}>
-          {/* Pulsing alert */}
-          <Animated.View style={[styles.sentCircle, { transform: [{ scale: pulseAnim }] }]}>
-            <Text style={styles.sentEmoji}>🆘</Text>
-            <Text style={styles.sentTitle}>{t('alert_sent')}</Text>
-          </Animated.View>
+          {delivery === 'sent' ? (
+            <Animated.View style={[styles.sentCircle, { transform: [{ scale: pulseAnim }] }]}>
+              <Text style={styles.sentEmoji}>🆘</Text>
+              <Text style={styles.sentTitle}>{t('sos_sent_title')}</Text>
+            </Animated.View>
+          ) : delivery === 'sending' ? (
+            <View style={[styles.sentCircle, styles.sendingCircle]}>
+              <ActivityIndicator color="#fff" />
+              <Text style={styles.sentTitle}>{t('sos_sending_title')}</Text>
+            </View>
+          ) : (
+            <View style={[styles.sentCircle, styles.notSentCircle]}>
+              <Text style={styles.notSentMark}>!</Text>
+              <Text style={styles.notSentTitle}>{t('sos_not_sent_title')}</Text>
+            </View>
+          )}
 
-          <Text style={styles.sentMessage}>
-            {t('sos_sent_msg')}{'\n'}
-            {t('sos_sent_msg2')}
-          </Text>
+          {delivery === 'sending' && (
+            <>
+              <Text style={styles.statusHeadline}>{t('sos_sending_msg')}</Text>
+              <Text style={styles.statusSub}>{t('sos_saved_on_phone')}</Text>
+            </>
+          )}
+
+          {(delivery === 'offline' || delivery === 'refused') && (
+            <View style={styles.notSentCard} accessibilityLiveRegion="assertive">
+              <Text style={styles.notSentHeadline}>
+                {t(delivery === 'offline' ? 'sos_no_signal' : 'sos_refused')}
+              </Text>
+              <Text style={styles.notSentSub}>{t('sos_call_now_retrying')}</Text>
+              <View style={styles.retryRow}>
+                {flushing && <ActivityIndicator size="small" color="#1A1408" />}
+                <Text style={styles.retryText}>{retryLine}</Text>
+              </View>
+            </View>
+          )}
+
+          {delivery === 'sent' && (
+            <>
+              <Text style={styles.statusHeadline}>{t('sos_sent_office_has_it')}</Text>
+              <Text style={styles.statusSub}>{pushLine}</Text>
+              <Text style={styles.sentMessage}>{t('sos_sent_msg2')}</Text>
+            </>
+          )}
+
+          {/* If this is a real life-threatening emergency, dial 911 directly. */}
+          <TouchableOpacity onPress={call911} style={styles.call911Btn}
+            accessibilityRole="button"
+            accessibilityLabel="Call 911"
+            accessibilityHint="Dials 911 from your phone for a life-threatening emergency">
+            <Text style={styles.call911BtnText}>📞 {t('call_911_btn')}</Text>
+            <Text style={styles.call911Sub}>{t('call_911_sub')}</Text>
+          </TouchableOpacity>
+
+          {officePhone ? (
+            <>
+              <TouchableOpacity onPress={callOffice} style={styles.officeBtn}
+                accessibilityRole="button"
+                accessibilityLabel={t('sos_call_office')}>
+                <Text style={styles.officeBtnText}>📞 {t('sos_call_office')}</Text>
+                <Text style={styles.officeSub}>{officePhone}</Text>
+              </TouchableOpacity>
+              {delivery !== 'sent' && (
+                <TouchableOpacity onPress={textOffice} style={styles.textBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('sos_text_office')}>
+                  <Text style={styles.textBtnText}>💬 {t('sos_text_office')}</Text>
+                </TouchableOpacity>
+              )}
+            </>
+          ) : (
+            <Text style={styles.noOfficeText}>{t('sos_no_office_number')}</Text>
+          )}
 
           {/* GPS coordinates */}
           {location && (
@@ -268,20 +475,11 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
             </View>
           )}
 
-          {/* If this is a real life-threatening emergency, dial 911 directly. */}
-          <TouchableOpacity onPress={call911} style={styles.call911Btn}
-            accessibilityRole="button"
-            accessibilityLabel="Call 911"
-            accessibilityHint="Dials 911 from your phone for a life-threatening emergency">
-            <Text style={styles.call911BtnText}>📞 {t('call_911_btn')}</Text>
-            <Text style={styles.call911Sub}>{t('call_911_sub')}</Text>
-          </TouchableOpacity>
-
           {/* I'm OK button */}
           <TouchableOpacity
-            style={[styles.okBtn, responding && { opacity: 0.6 }]}
+            style={[styles.okBtn, (responding || !alert) && { opacity: 0.6 }]}
             onPress={markOK}
-            disabled={responding}
+            disabled={responding || !alert}
           >
             {responding
               ? <ActivityIndicator color="#fff" />
@@ -293,10 +491,17 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
 
       {phase === 'responded' && (
         <View style={styles.respondedOverlay}>
-          <View style={styles.respondedCard}>
-            <Text style={styles.respondedEmoji}>✓</Text>
-            <Text style={styles.respondedTitle}>{t('false_alarm_title')}</Text>
-            <Text style={styles.respondedSub}>{t('false_alarm_sub')}</Text>
+          <View style={[styles.respondedCard, outcome === 'resolve_queued' && styles.respondedCardWarn]}>
+            <Text style={[styles.respondedEmoji, outcome === 'resolve_queued' && styles.respondedEmojiWarn]}>
+              {outcome === 'resolve_queued' ? '!' : '✓'}
+            </Text>
+            <Text style={styles.respondedTitle}>{responded.title}</Text>
+            <Text style={styles.respondedSub}>{responded.sub}</Text>
+            {outcome === 'resolve_queued' && officePhone && (
+              <TouchableOpacity style={styles.respondedCallBtn} onPress={callOffice}>
+                <Text style={styles.respondedCallText}>📞 {t('sos_call_office')}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={styles.respondedBtn} onPress={onCancel}>
               <Text style={styles.respondedBtnText}>{t('close')}</Text>
             </TouchableOpacity>
@@ -328,25 +533,46 @@ const styles = StyleSheet.create({
   sosButtonText: { color: '#fff', fontSize: 28, fontWeight: '900', letterSpacing: 2 },
   sosHoldText: { color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: '600', marginTop: 4 },
   warningText: { color: 'rgba(255,200,0,0.8)', fontSize: 13, textAlign: 'center', fontWeight: '600' },
-  sentContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'flex-start', padding: 24, paddingTop: 40, paddingBottom: 60 },
+  sentContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'flex-start', padding: 24, paddingTop: 28, paddingBottom: 60 },
   sentCircle: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center', marginBottom: 16, shadowColor: '#EF4444', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 20 },
+  sendingCircle: { backgroundColor: '#7F1D1D', shadowOpacity: 0 },
+  notSentCircle: { backgroundColor: 'transparent', borderWidth: 4, borderColor: '#F59E0B', shadowOpacity: 0 },
   sentEmoji: { fontSize: 32 },
   sentTitle: { color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: 2, marginTop: 4 },
+  notSentMark: { color: '#F59E0B', fontSize: 40, fontWeight: '900', lineHeight: 44 },
+  notSentTitle: { color: '#F59E0B', fontSize: 13, fontWeight: '900', letterSpacing: 1, textAlign: 'center', paddingHorizontal: 8 },
+  statusHeadline: { color: '#fff', fontSize: 20, fontWeight: '900', textAlign: 'center', marginBottom: 6 },
+  statusSub: { color: 'rgba(255,255,255,0.75)', fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 12 },
+  notSentCard: { backgroundColor: '#F59E0B', borderRadius: 14, padding: 16, width: '100%', marginBottom: 16 },
+  notSentHeadline: { color: '#1A1408', fontSize: 20, fontWeight: '900', lineHeight: 26, marginBottom: 8 },
+  notSentSub: { color: '#1A1408', fontSize: 14, fontWeight: '600', lineHeight: 20 },
+  retryRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  retryText: { color: '#1A1408', fontSize: 13, fontWeight: '800' },
   sentMessage: { color: 'rgba(255,255,255,0.8)', fontSize: 14, textAlign: 'center', lineHeight: 22, marginBottom: 14 },
   coordsCard: { backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 14, padding: 12, width: '100%', marginBottom: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   coordsLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6 },
   coordsValue: { color: '#fff', fontSize: 16, fontWeight: '800', fontVariant: ['tabular-nums'], marginBottom: 4 },
   coordsAddress: { color: 'rgba(255,255,255,0.6)', fontSize: 12 },
-  call911Btn: { backgroundColor: '#DC2626', borderRadius: 14, padding: 16, width: '100%', alignItems: 'center', marginBottom: 16, borderWidth: 1, borderColor: '#B91C1C' },
+  call911Btn: { backgroundColor: '#DC2626', borderRadius: 14, padding: 16, width: '100%', alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: '#B91C1C' },
   call911BtnText: { color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: 0.5 },
   call911Sub: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 4, fontWeight: '600' },
+  officeBtn: { backgroundColor: '#fff', borderRadius: 14, padding: 16, width: '100%', alignItems: 'center', marginBottom: 12 },
+  officeBtnText: { color: '#1A1408', fontSize: 20, fontWeight: '900' },
+  officeSub: { color: '#6B5E42', fontSize: 13, marginTop: 4, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  textBtn: { borderRadius: 14, padding: 14, width: '100%', alignItems: 'center', marginBottom: 16, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.6)' },
+  textBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  noOfficeText: { color: 'rgba(255,255,255,0.6)', fontSize: 13, textAlign: 'center', marginBottom: 16 },
   okBtn: { backgroundColor: '#10B981', borderRadius: 14, padding: 18, width: '100%', alignItems: 'center' },
   okBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
   respondedOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', alignItems: 'center', justifyContent: 'center', padding: 32 },
   respondedCard: { backgroundColor: '#0F172A', borderRadius: 20, padding: 32, alignItems: 'center', width: '100%', borderWidth: 1, borderColor: '#10B981' },
+  respondedCardWarn: { borderColor: '#F59E0B' },
   respondedEmoji: { fontSize: 48, color: '#10B981', fontWeight: '900', marginBottom: 12 },
+  respondedEmojiWarn: { color: '#F59E0B' },
   respondedTitle: { color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 8, textAlign: 'center' },
   respondedSub: { color: 'rgba(255,255,255,0.6)', fontSize: 14, textAlign: 'center', lineHeight: 22, marginBottom: 24 },
+  respondedCallBtn: { backgroundColor: '#fff', borderRadius: 12, padding: 16, width: '100%', alignItems: 'center', marginBottom: 12 },
+  respondedCallText: { color: '#1A1408', fontSize: 16, fontWeight: '900' },
   respondedBtn: { backgroundColor: '#10B981', borderRadius: 12, padding: 16, width: '100%', alignItems: 'center' },
   respondedBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
 })
