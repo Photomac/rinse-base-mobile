@@ -177,6 +177,41 @@ const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
   ok('no office phone has the app: recorded as 0 recipients, no Expo call',
     n1?.push === 'sent' && n1?.push_recipients === 0 && server.pushes.length === expoBefore)
 
+  // ── The server tells the office (web notify-sos, fired by a trigger) ──────
+  ok('server fan-out not installed: the phone pushed the office itself, right away', (await getSOS(a.id))?.push_by === 'phone')
+
+  server.fanout = 'live'
+  const sv = await raiseSOS(base)
+  const expoBeforeSv = server.pushes.length
+  await flushSOSQueue()
+  const sv1 = await getSOS(sv.id)
+  ok('server fan-out live: the phone reads who was reached and does not push itself',
+    sv1?.push === 'sent' && sv1.push_by === 'server' && JSON.stringify(sv1.office) === JSON.stringify({ push: 2, sms: 1, email: 3 })
+      && sv1.push_recipients === 2 && server.pushes.length === expoBeforeSv)
+  ok('... and the screen says sent', !!sv1 && sosDeliveryState(sv1) === 'sent')
+
+  server.reach = { push: 0, sms: 0, email: 0 }
+  const sz = await raiseSOS(base)
+  await flushSOSQueue()
+  const sz1 = await getSOS(sz.id)
+  ok('server reached nobody: recorded as zero on every channel (so the screen says to call), not retried',
+    sz1?.push === 'sent' && sz1.push_by === 'server' && JSON.stringify(sz1.office) === JSON.stringify({ push: 0, sms: 0, email: 0 }))
+  server.reach = { push: 2, sms: 1, email: 3 }
+
+  server.fanout = 'silent'
+  const ss = await raiseSOS(base)
+  await flushSOSQueue()
+  const ss1 = await getSOS(ss.id)
+  ok('server installed but silent: the phone gives it time before pushing',
+    !!ss1?.landed_at && ss1.push === 'pending' && pushesFor(ss.id).length === 0)
+  await sleep(250)                                   // past the (test-shortened) grace
+  await flushSOSQueue()
+  const ss2 = await getSOS(ss.id)
+  ok('... then pushes the office itself, once', ss2?.push === 'sent' && ss2.push_by === 'phone' && pushesFor(ss.id).length === 1)
+  await flushSOSQueue()
+  ok('... and never again', pushesFor(ss.id).length === 1)
+  server.fanout = 'off'
+
   // ── A GPS fix after the insert went out still reaches the row ─────────────
   const g0 = await raiseSOS({ ...base, lat: null, lng: null })
   await flushSOSQueue()

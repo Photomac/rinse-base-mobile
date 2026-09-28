@@ -60,6 +60,12 @@ export const net = {
 }
 
 export const server = {
+  // The server-side SOS fan-out (web notify-sos + its trigger):
+  //   off     not installed: selecting office_* is a 42703, as before the migration
+  //   live    an active insert is fanned out at once and reports `reach` on the row
+  //   silent  installed, but nothing ever reports (a broken trigger or function)
+  fanout: 'off' as 'off' | 'live' | 'silent',
+  reach: { push: 2, sms: 1, email: 3 },
   sos_alerts: new Map<string, Record<string, any>>(),
   sos_pings: [] as Record<string, any>[],
   push_tokens: [] as { tenant_id: string; user_id: string; token: string; role: string }[],
@@ -90,7 +96,14 @@ function postgrest(url: URL, method: string, headers: Headers, body: any): Respo
       if (existing && prefer.includes('resolution=ignore-duplicates')) continue
       if (existing && prefer.includes('resolution=merge-duplicates')) { Object.assign(existing, row); continue }
       if (existing) return json(409, { code: '23505', message: 'duplicate key value violates unique constraint "sos_alerts_pkey"' })
-      server.sos_alerts.set(row.id, { status: 'active', ...row })
+      const stored: Record<string, any> = { status: 'active', ...row }
+      if (server.fanout === 'live' && stored.status === 'active') {
+        stored.office_notified_at = new Date().toISOString()
+        stored.office_push_count = server.reach.push
+        stored.office_sms_count = server.reach.sms
+        stored.office_email_count = server.reach.email
+      }
+      server.sos_alerts.set(row.id, stored)
     }
     return new Response(null, { status: 201 })
   }
@@ -102,6 +115,9 @@ function postgrest(url: URL, method: string, headers: Headers, body: any): Respo
     return new Response(null, { status: 204 })
   }
   if (table === 'sos_alerts' && method === 'GET') {
+    if (server.fanout === 'off' && (url.searchParams.get('select') || '').includes('office_')) {
+      return json(400, { code: '42703', message: 'column sos_alerts.office_notified_at does not exist' })
+    }
     const filters = eqFilters(url)
     return json(200, [...server.sos_alerts.values()].filter(row => filters.every(([k, v]) => String(row[k]) === v)))
   }

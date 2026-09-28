@@ -24,11 +24,16 @@
 //   so a replay after a lost acknowledgement can never raise a second alert.
 // - "Landed" means the insert came back without an error. It is the only state
 //   the screen may call sent.
-// - The office push goes out after the row lands, from whichever path landed
-//   it (the SOS screen's retry loop, the app-wide drain, or the SOS location
-//   task in the background), and is recorded so a later flush doesn't repeat
-//   it. A crash between the push and that record can repeat it once; a
-//   duplicate SOS push is the acceptable failure, a missing one is not.
+// - The office is told by the SERVER once the row lands: a trigger on the
+//   insert runs notify-sos, which pushes, texts and emails every owner,
+//   manager and dispatcher and writes who it reached onto the alert row
+//   (office_notified_at + counts). The phone reads that back to say who knows.
+// - If the server hasn't reported within SERVER_GRACE_MS, or isn't installed
+//   (no office_* columns), the phone pushes the office itself, from whichever
+//   path gets there (the SOS screen's retry loop, the app-wide drain, or the
+//   SOS location task in the background), and records it so a later flush
+//   doesn't repeat it. A crash between that push and the record can repeat it
+//   once; a duplicate SOS push is the acceptable failure, a missing one is not.
 // - Every request has a timeout. React Native's fetch has none on Android, and
 //   one stalled request on a weak bar would otherwise hold the queue forever
 //   (the photo queue's 2026-09-23 lesson).
@@ -60,6 +65,9 @@ export const SENDING_GRACE_MS = 5_000
 // can still read its final state. Same cap as the location trail.
 const KEEP_DONE_MS = 4 * 60 * 60 * 1000
 const MAX_PUSH_ERRORS = 5
+// How long the phone waits for the server's fan-out to report on the row
+// before pushing the office itself. The server normally reports in seconds.
+const SERVER_GRACE_MS = 30_000
 // An alert that sat on the phone longer than this says so in the office push.
 const LATE_AFTER_MS = 2 * 60 * 1000
 const DISPATCH_ROLES = ['owner', 'manager', 'dispatcher']
@@ -80,7 +88,9 @@ export interface QueuedSOS {
   reported: boolean           // first server rejection went to admin_error_log
   landed_at: number | null    // the server answered for the row
   push: 'pending' | 'sent' | 'failed'
-  push_recipients: number | null  // office phones Expo accepted; 0 = nobody gets app alerts
+  push_by: 'server' | 'phone' | null
+  push_recipients: number | null  // office phones reached by push; 0 = nobody gets app alerts
+  office: { push: number; sms: number; email: number } | null  // what the server reported reaching
   push_errors: number
   cancelled_at: number | null     // the crew member tapped "I'm OK"
   cancel_synced: boolean          // the server has the false_alarm, or never had the alert
@@ -198,7 +208,9 @@ export async function raiseSOS(input: {
     reported: false,
     landed_at: null,
     push: 'pending',
+    push_by: null,
     push_recipients: null,
+    office: null,
     push_errors: 0,
     cancelled_at: null,
     cancel_synced: false,
@@ -493,13 +505,57 @@ async function pushToOffice(e: QueuedSOS): Promise<PushResult> {
   }
 }
 
+type ServerReach =
+  | { kind: 'reached'; counts: { push: number; sms: number; email: number } }
+  | { kind: 'waiting' }
+  | { kind: 'absent' }
+  | { kind: 'retry' }
+
+// Has the server's fan-out reported on this alert yet? The crew member can read
+// their own alert row (RLS sos_select).
+async function serverReach(e: QueuedSOS): Promise<ServerReach> {
+  const res = await rest(signal =>
+    supabase.from('sos_alerts')
+      .select('office_notified_at, office_push_count, office_sms_count, office_email_count')
+      .eq('id', e.id)
+      .abortSignal(signal)
+      .maybeSingle())
+  if (res.error) {
+    if (res.status === 0) return { kind: 'retry' }
+    // 42703: the office_* columns don't exist, so the server fan-out isn't
+    // installed and nothing will ever report. Anything else, wait it out.
+    return res.error?.code === '42703' ? { kind: 'absent' } : { kind: 'waiting' }
+  }
+  const row: any = res.data
+  if (!row?.office_notified_at) return { kind: 'waiting' }
+  return {
+    kind: 'reached',
+    counts: { push: row.office_push_count ?? 0, sms: row.office_sms_count ?? 0, email: row.office_email_count ?? 0 },
+  }
+}
+
 async function tryPush(e: QueuedSOS): Promise<'ok' | 'network'> {
+  const server = await serverReach(e)
+  if (server.kind === 'retry') return 'network'
+  if (server.kind === 'reached') {
+    await patch(e.id, x => {
+      if (x.push !== 'pending') return
+      x.push = 'sent'
+      x.push_by = 'server'
+      x.office = server.counts
+      x.push_recipients = server.counts.push
+    })
+    return 'ok'
+  }
+  // Give the server its chance first; the next flush looks again.
+  if (server.kind === 'waiting' && Date.now() - (e.landed_at ?? 0) < SERVER_GRACE_MS) return 'ok'
+
   const r = await pushToOffice(e)
   if (r.kind === 'retry') return 'network'
   if (r.kind === 'cancelled') return 'ok'
   let failedNow = false as boolean
   await patch(e.id, x => {
-    if (r.kind === 'sent') { x.push = 'sent'; x.push_recipients = r.recipients; return }
+    if (r.kind === 'sent') { x.push = 'sent'; x.push_by = 'phone'; x.push_recipients = r.recipients; return }
     x.push_errors += 1
     if (x.push_errors >= MAX_PUSH_ERRORS && x.push === 'pending') { x.push = 'failed'; failedNow = true }
   })
