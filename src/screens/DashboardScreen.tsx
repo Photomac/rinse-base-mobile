@@ -8,6 +8,7 @@ import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
 import { cachedQuery } from '../lib/dataCache'
+import { fetchAllPages } from '../lib/fetchAll'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { PrepCard } from '../components/PrepCard'
@@ -56,32 +57,44 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     const monthStart = startOfMonthInTz(now)
 
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
+    // Crew rows are matched on the server, by an inner join on the crew
+    // member's own assignment, instead of fetching every tenant job and
+    // filtering below. ScheduleScreen explains the 1,000-row cap that shape ran
+    // into, and why the embed names its FK. Owners read the whole tenant, so
+    // their unbounded reads page past the cap (fetchAllPages).
+    const assignments = isOwner
+      ? 'job_assignments!job_assignments_job_id_fkey(user_id)'
+      : 'job_assignments!job_assignments_job_id_fkey!inner(user_id)'
+    const onlyMine = (q: any) => isOwner ? q : q.eq('job_assignments.user_id', user.id)
 
     // Reads go through cachedQuery: last good result survives in AsyncStorage,
     // so a crew member who loaded their day online keeps it when signal drops.
     const [todayRes, monthRes, strandedRes] = await Promise.all([
-      cachedQuery(`dash:today:${user.id}`, supabase.from('jobs')
-        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
+      cachedQuery(`dash:today:${user.id}`, fetchAllPages(() => onlyMine(supabase.from('jobs')
+        .select(`id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), ${assignments}`)
         .eq('tenant_id', user.tenant_id)
         .gte('scheduled_start', todayStart.toISOString())
-        .lte('scheduled_start', todayEnd.toISOString())
-        .order('scheduled_start')),
+        .lte('scheduled_start', todayEnd.toISOString()))
+        .order('scheduled_start').order('id'))),
       // Monthly stats. For crew, filter to THEIR jobs server-side (inner join)
       // — the old fetch-everything-then-filter pulled every tenant job of the
       // month, which silently truncates at PostgREST's 1,000-row cap on a busy
-      // tenant and understates the crew member's own hours/earnings.
-      cachedQuery(`dash:month:${user.id}`, isOwner
+      // tenant and understates the crew member's own hours/earnings. The
+      // owner's tenant-wide month pages past the same cap.
+      cachedQuery(`dash:month:${user.id}`, fetchAllPages(() => isOwner
         ? supabase.from('jobs')
             .select('id, status, scheduled_start, scheduled_end')
             .eq('tenant_id', user.tenant_id)
             .eq('status', 'completed')
             .gte('scheduled_start', monthStart.toISOString())
+            .order('scheduled_start').order('id')
         : supabase.from('jobs')
-            .select('id, status, scheduled_start, scheduled_end, job_assignments!inner(user_id)')
+            .select('id, status, scheduled_start, scheduled_end, job_assignments!job_assignments_job_id_fkey!inner(user_id)')
             .eq('tenant_id', user.tenant_id)
             .eq('job_assignments.user_id', user.id)
             .eq('status', 'completed')
-            .gte('scheduled_start', monthStart.toISOString())),
+            .gte('scheduled_start', monthStart.toISOString())
+            .order('scheduled_start').order('id'))),
 
       // Cleans left open on a PREVIOUS day. The dashboard above is a strict
       // today window and Schedule only reaches back a month, so a job that
@@ -91,12 +104,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       //
       // Deliberately has NO lower date bound: a stranded clean stays actionable
       // until it is closed. The status filter keeps this empty for a crew with
-      // nothing outstanding.
-      cachedQuery(`dash:stranded:${user.id}`, supabase.from('jobs')
-        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
+      // nothing outstanding. The 50 is per crew member: filtered after the
+      // limit, a tenant with 50+ open cleans could push theirs off the list.
+      cachedQuery(`dash:stranded:${user.id}`, onlyMine(supabase.from('jobs')
+        .select(`id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), ${assignments}`)
         .eq('tenant_id', user.tenant_id)
         .in('status', ['in_progress', 'en_route'])
-        .lt('scheduled_start', todayStart.toISOString())
+        .lt('scheduled_start', todayStart.toISOString()))
         .order('scheduled_start')
         .limit(50)),
     ])
@@ -104,7 +118,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     // Cached rows can be from an EARLIER day — re-filter to the current window
     // client-side so yesterday's cache never renders as today's jobs. No-op on
-    // live data (the server already filtered).
+    // live data (the server already filtered). The crew filters below are the
+    // same kind of guard: a cache written by an older build holds every tenant
+    // job, so an offline read must still narrow to the crew member's own.
     const today = todayKey()
     const inToday = (j: any) => dayKey(j.scheduled_start) === today
     // Queued offline status changes (en_route/in_progress/completed) overlay

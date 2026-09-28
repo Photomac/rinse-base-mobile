@@ -6,6 +6,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
+import { fetchAllPages } from '../lib/fetchAll'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { overlayPending } from '../lib/outbox'
 // Which day a clean falls on is the TENANT's day, not the phone's — see
@@ -52,17 +53,35 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const start = new Date(now); start.setMonth(now.getMonth() - 1); start.setHours(0,0,0,0)
     const end = new Date(now); end.setMonth(now.getMonth() + 2); end.setHours(23,59,59,999)
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
+    // Crew get their own cleans only, matched on the server by an inner join
+    // on their assignment. This used to pull every tenant job in the window and
+    // filter on the phone, which ran into PostgREST's silent 1,000-row cap: on
+    // 2026-09-28 Lee Concierge had 1,370 in the window, and owner and crew alike
+    // saw nothing after Oct 11. Owners still read the whole tenant, so the read
+    // pages past the cap (see fetchAll.ts).
+    //
+    // The embed names its FK: a second jobs↔job_assignments FK would make an
+    // unhinted embed ambiguous (HTTP 300) and blank this screen until an OTA
+    // reached every phone.
+    const assignments = isOwner
+      ? 'job_assignments!job_assignments_job_id_fkey(user_id)'
+      : 'job_assignments!job_assignments_job_id_fkey!inner(user_id)'
     // Cached read: an offline crew member still sees the schedule they loaded
     // online. Cached rows carry scheduled_start, so day placement stays right
     // even when the cache is a day or two old.
-    const { data, fromCache } = await cachedQuery(`sched:${user.id}`, supabase.from('jobs')
-      .select('id, job_number, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id)')
-      .eq('tenant_id', user.tenant_id)
-      .gte('scheduled_start', start.toISOString())
-      .lte('scheduled_start', end.toISOString())
-      .neq('status', 'cancelled')
-      .order('scheduled_start'))
+    const { data, fromCache } = await cachedQuery(`sched:${user.id}`, fetchAllPages(() => {
+      const q = supabase.from('jobs')
+        .select(`id, job_number, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), ${assignments}`)
+        .eq('tenant_id', user.tenant_id)
+        .gte('scheduled_start', start.toISOString())
+        .lte('scheduled_start', end.toISOString())
+        .neq('status', 'cancelled')
+      // id breaks ties, so a page boundary can't skip or repeat same-slot cleans.
+      return (isOwner ? q : q.eq('job_assignments.user_id', user.id)).order('scheduled_start').order('id')
+    }))
     setOffline(fromCache)
+    // Still filtered here: a cache written by an older build holds the whole
+    // tenant's window, and an offline read must stay the crew member's own.
     const myJobs = isOwner
       ? (data ?? [])
       : (data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
