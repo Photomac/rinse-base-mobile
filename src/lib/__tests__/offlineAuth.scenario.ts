@@ -104,6 +104,9 @@ const nowSec = () => Math.floor(Date.now() / 1000)
 function load() { return require(process.env.CLIENT_BUNDLE as string) }
 
 function localNoonToday() { const d = new Date(); d.setHours(12, 0, 0, 0); return d.toISOString() }
+function localAt(dayOffset: number, hour: number) {
+  const d = new Date(); d.setDate(d.getDate() + dayOffset); d.setHours(hour, 0, 0, 0); return d.toISOString()
+}
 
 // ── Scenarios ───────────────────────────────────────────────────────────────
 const scenarios: Record<string, () => Promise<void>> = {
@@ -280,6 +283,124 @@ const scenarios: Record<string, () => Promise<void>> = {
 
     w = await c.checkWork('U3')
     ok('offline with nothing ever saved → unknown (null), not "stopped"', w.working === null)
+  },
+
+  // Which cleans a ping names and fences, and when tracking stops. Per-job,
+  // "you're still clocked in" may only be said about a clean with an open
+  // punch, and a clean left in progress without one (paused, or held open by
+  // the completion gate) no longer keeps the phone on the map. Each ping below
+  // runs through the real startLocationTracking.
+  async trackerFollowsTheClock() {
+    seedSession(nowSec() + 3000)
+    server.mode = 'online'
+    const c = load()
+    const here = { lat: 47.2, lng: -121.8 }  // where the phone is
+    const away = { lat: 47.6, lng: -122.3 }  // ~50 km from here
+    h.position = { latitude: here.lat, longitude: here.lng, accuracy: 5 }
+    const job = (id: string, userId: string, status: string, hour: number, at: any, nickname: string, day = 0) => ({
+      id, status, scheduled_start: localAt(day, hour), route_order: null, job_number: hour,
+      job_assignments: [{ user_id: userId }],
+      client_addresses: { lat: at.lat, lng: at.lng, geocode_precision: null, nickname, street: '1 Main' },
+    })
+    const punch = (id: string, userId: string, jobId: string | null, hour: number, entryType = 'work', day = 0) => ({
+      id, user_id: userId, job_id: jobId, entry_type: entryType, clocked_in_at: localAt(day, hour), clocked_out_at: null,
+    })
+    const perJob = (id: string) => ({ id, tenant_id: 'T1', _timeMode: 'per_job' })
+    const daily = (id: string) => ({ id, tenant_id: 'T2', _timeMode: 'daily' })
+    // One ping: what reached crew_locations and notification_log, and which pushes fired.
+    const ping = async (user: any) => {
+      server.rest = []
+      h.pushes = []
+      await c.startLocationTracking(user)
+      const loc = server.rest.filter(r => r.table === 'crew_locations')
+      const res = {
+        dot: loc.find(r => r.method === 'POST')?.body ?? null,
+        stopped: loc.some(r => r.method === 'DELETE'),
+        pushes: h.pushes as any[],
+        logged: server.rest.filter(r => r.table === 'notification_log').map(r => r.body?.job_id),
+      }
+      await c.stopLocationTracking() // clears the ping timer
+      return res
+    }
+
+    // Per-job: clocked out of the last clean, the completion gate held it open, gone home.
+    server.tables.job_time_entries = []
+    server.tables.jobs = [job('A1', 'P1', 'in_progress', 10, away, 'Cabin A')]
+    let r = await ping(perJob('P1'))
+    ok('per-job, clean left in progress with no punch: tracking stops', r.stopped && !r.dot)
+    ok('…and no "still clocked in" push', r.pushes.length === 0)
+
+    // Per-job: paused A ("Going to another job"), clocked into B, standing at B.
+    server.tables.jobs = [job('A2', 'P2', 'in_progress', 10, away, 'Cabin A'), job('B2', 'P2', 'in_progress', 12, here, 'Cabin B')]
+    server.tables.job_time_entries = [punch('E2', 'P2', 'B2', 12)]
+    r = await ping(perJob('P2'))
+    ok('per-job, A paused and clocked into B: the dot names B', r.dot?.job_id === 'B2' && r.dot?.status === 'active')
+    ok('…and nothing is pushed about A', r.pushes.length === 0)
+
+    // Per-job: clocked into B, which is scheduled BEFORE the paused A.
+    server.tables.jobs = [job('A3', 'P3', 'in_progress', 14, away, 'Cabin A'), job('B3', 'P3', 'in_progress', 12, here, 'Cabin B')]
+    server.tables.job_time_entries = [punch('E3', 'P3', 'B3', 13)]
+    r = await ping(perJob('P3'))
+    ok('per-job, clocked into a clean scheduled before the paused one: the dot still names it', r.dot?.job_id === 'B3')
+    ok('…and no push (schedule order alone would have fenced A)', r.pushes.length === 0)
+
+    // Per-job: never clocked out of A, clocked into B, standing at B.
+    server.tables.jobs = [job('A4', 'P4', 'in_progress', 10, away, 'Cabin A'), job('B4', 'P4', 'in_progress', 12, here, 'Cabin B')]
+    server.tables.job_time_entries = [punch('E4a', 'P4', 'A4', 10), punch('E4b', 'P4', 'B4', 12)]
+    r = await ping(perJob('P4'))
+    ok('per-job, still clocked into A after starting B: the dot names B (newest punch)', r.dot?.job_id === 'B4')
+    ok('…one push, about A, saying they are still clocked in',
+      r.pushes.length === 1 && r.pushes[0]?.data?.jobId === 'A4' && r.pushes[0]?.title === 'Still clocked in!')
+    ok('…logged against A', r.logged.length === 1 && r.logged[0] === 'A4')
+
+    // Per-job: a punch left open on yesterday's clean. Not in today's read, so
+    // its clean comes embedded in the time entry.
+    server.tables.jobs = [job('B5', 'P5', 'in_progress', 12, here, 'Cabin B')]
+    server.tables.job_time_entries = [
+      { ...punch('E5a', 'P5', 'Y5', 15, 'work', -1), jobs: job('Y5', 'P5', 'in_progress', 15, away, 'Yesterday', -1) },
+      punch('E5b', 'P5', 'B5', 12),
+    ]
+    r = await ping(perJob('P5'))
+    ok('per-job, a punch still open from yesterday is fenced from the embedded clean',
+      r.pushes.length === 1 && r.pushes[0]?.data?.jobId === 'Y5')
+
+    // Per-job: en route to C, with A stranded in progress.
+    server.tables.jobs = [job('A6', 'P6', 'in_progress', 10, away, 'Cabin A'), job('C6', 'P6', 'en_route', 13, away, 'Cabin C')]
+    server.tables.job_time_entries = []
+    r = await ping(perJob('P6'))
+    ok('per-job, en route: still tracked, shown idle (the web map draws en route itself)',
+      !r.stopped && r.dot?.status === 'idle' && r.dot?.job_id === null)
+    ok('…and no push about the stranded clean', r.pushes.length === 0)
+
+    // Daily: on the day's shift, two cleans in progress, standing at the later one.
+    server.tables.jobs = [job('A7', 'D7', 'in_progress', 10, away, 'Cabin A'), job('B7', 'D7', 'in_progress', 12, here, 'Cabin B')]
+    server.tables.job_time_entries = [punch('S7', 'D7', null, 8, 'shift')]
+    r = await ping(daily('D7'))
+    ok('daily, two cleans in progress: the dot names the later one (was: none)', r.dot?.job_id === 'B7' && r.dot?.status === 'active')
+    ok('…and only it is fenced (standing there: no push)', r.pushes.length === 0)
+
+    // Daily is otherwise unchanged: a clean in progress counts, shift or not.
+    server.tables.jobs = [job('A8', 'D8', 'in_progress', 10, away, 'Cabin A')]
+    server.tables.job_time_entries = []
+    r = await ping(daily('D8'))
+    ok('daily, a clean in progress with no shift open: still tracked', !r.stopped && !!r.dot)
+    ok('…and leaving it draws "not marked complete", not "clocked in"',
+      r.pushes.length === 1 && r.pushes[0]?.title === 'Not marked complete')
+
+    // Offline: a pause queued in a dead zone ends the per-job clock right away.
+    server.tables.jobs = [job('A9', 'P9', 'in_progress', 10, here, 'Cabin A')]
+    server.tables.job_time_entries = [punch('E9', 'P9', 'A9', 10)]
+    let w = await c.checkWork('P9')
+    ok('per-job clocked in, online: working, fenced on that clean',
+      w.working === true && w.fenceJobs.map((j: any) => j.id).join() === 'A9')
+    server.mode = 'offline'
+    await c.writeThrough({ table: 'job_time_entries', op: 'update', match: { id: 'E9' },
+      values: { clocked_out_at: new Date().toISOString(), pause_reason: 'Going to another job' } })
+    w = await c.checkWork('P9')
+    ok('offline pause (queued) → off the clock, tracking may stop', w.working === false && w.fenceJobs.length === 0)
+    w = await c.checkWork('P9', true)
+    ok('…while the same clean in a daily company still counts', w.working === true && w.activeJob?.id === 'A9')
+    server.mode = 'online'
   },
 
   // Before the fix, same conditions as expiredColdStartThenReconnect. Opt-in

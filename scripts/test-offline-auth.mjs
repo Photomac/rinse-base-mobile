@@ -41,6 +41,7 @@ const SCENARIOS = [
   'fastPhoneClockStillWorks',
   'validTokenOffline',
   'trackerKeepsWorkingOffline',
+  'trackerFollowsTheClock',
 ]
 
 let failed = 0
