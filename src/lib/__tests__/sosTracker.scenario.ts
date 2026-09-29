@@ -53,14 +53,14 @@ const pingsFor = (id: string) => server.sos_pings.filter(p => p.alert_id === id)
   // Signal returns, but a status read would hang. The background task must
   // deliver first and must not be parked by that read.
   net.rest = 'online'
-  net.override = (m, u) => (m === 'GET' && u.pathname.endsWith('/sos_alerts') ? 'hang' : null)
+  net.override = (m, u) => (m === 'GET' && u.pathname.endsWith('/sos_alerts') && u.searchParams.get('select') === 'status' ? 'hang' : null)
   const mark = net.calls.length
   const t0 = Date.now()
   await runTask()
   net.override = null
   const calls = net.calls.slice(mark)
   const insertAt = calls.findIndex(c => c.method === 'POST' && c.path.endsWith('/sos_alerts'))
-  const statusAt = calls.findIndex(c => c.method === 'GET' && c.path.endsWith('/sos_alerts'))
+  const statusAt = calls.findIndex(c => c.method === 'GET' && c.path.endsWith('/sos_alerts') && c.query.includes('select=status'))
   ok('background task: the alert goes out before any status read', insertAt >= 0 && (statusAt === -1 || insertAt < statusAt))
   ok('background task: a hanging status read cannot park it', Date.now() - t0 < 3000)
   ok('background task: delivered and the office pushed, all from the background',

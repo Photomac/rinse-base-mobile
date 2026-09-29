@@ -304,11 +304,21 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
     ? t('sos_retrying')
     : ti(t('sos_next_try'), { s: String(Math.max(1, Math.ceil((nextTryAt - now) / 1000))) })
 
+  // Who at the office knows. The server reports push, text and email; if it
+  // never did, the phone pushed by itself and only knows about push.
+  const office = alert?.push_by === 'server' ? alert.office : null
+  const officeParts = office ? [
+    office.push ? ti(t('sos_by_push'), { n: String(office.push) }) : '',
+    office.sms ? ti(t('sos_by_text'), { n: String(office.sms) }) : '',
+    office.email ? ti(t('sos_by_email'), { n: String(office.email) }) : '',
+  ].filter(Boolean) : []
   const pushLine = !alert || alert.push === 'pending'
     ? t('sos_alerting_phones')
-    : alert.push === 'sent' && (alert.push_recipients ?? 0) > 0
-      ? ti(t('sos_phones_alerted'), { n: String(alert.push_recipients) })
-      : t('sos_no_office_push')
+    : office
+      ? (officeParts.length ? ti(t('sos_office_reached'), { parts: officeParts.join(', ') }) : t('sos_office_unreached'))
+      : alert.push === 'sent' && (alert.push_recipients ?? 0) > 0
+        ? ti(t('sos_phones_alerted'), { n: String(alert.push_recipients) })
+        : t('sos_no_office_push')
 
   const responded = outcome === 'resolve_queued'
     ? { title: t('sos_ok_queued_title'), sub: t('sos_ok_queued_sub') }

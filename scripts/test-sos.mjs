@@ -8,8 +8,8 @@
 //
 // Same zero-dependency approach as test-outbox.mjs (esbuild via npx, no test
 // runner), except each scenario is bundled so the real supabase-js is compiled
-// in. The one change to shipped code is shorter request timeouts, so the
-// stalled-request cases take milliseconds instead of 15-20 seconds.
+// in. The one change to shipped code is shorter timeouts, so the stalled-
+// request and server-grace cases take milliseconds instead of 15-30 seconds.
 //
 // Needs node_modules. Usage: node scripts/test-sos.mjs
 import { execSync } from 'node:child_process'
@@ -42,6 +42,7 @@ try {
     ...libMocks,
     [`from './errorReporter'`, `from './sos.mocks'`],
     ['const REQUEST_TIMEOUT_MS = 20_000', 'const REQUEST_TIMEOUT_MS = 150'],
+    ['const SERVER_GRACE_MS = 30_000', 'const SERVER_GRACE_MS = 200'],
   ], 'sosQueue.ts'))
   writeFileSync(join(work, 'outbox.ts'), rewrite(read('src/lib/outbox.ts'), [
     ...libMocks,
