@@ -8,6 +8,7 @@ import { supabase } from './src/lib/supabase'
 import { LoginScreen } from './src/screens/LoginScreen'
 import { DashboardScreen } from './src/screens/DashboardScreen'
 import { ScheduleScreen } from './src/screens/ScheduleScreen'
+import { OpenJobsScreen } from './src/screens/OpenJobsScreen'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
@@ -51,6 +52,10 @@ function AppInner() {
   const [loading, setLoading] = useState(true)
   const [selectedJob, setSelectedJob] = useState<any>(null)
   const [chatUnread, setChatUnread] = useState(0)
+  // Cleans on the crew job board right now (open_for_claims_at set, not yet
+  // full). Drives the Open jobs tab badge, and whether the tab shows at all
+  // for a company still on default-crew assignment.
+  const [openJobsCount, setOpenJobsCount] = useState(0)
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [showSOS, setShowSOS] = useState(false)
   const [activeChannel, setActiveChannel] = useState<any>(null)
@@ -87,7 +92,7 @@ function AppInner() {
       // (the cleaning company owns that relationship) — they reach dispatch.
       try {
         const { data: tenant } = await supabase.from('tenants')
-          .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, timezone, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus').eq('id', data.tenant_id).maybeSingle()
+          .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, timezone, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus, assignment_mode').eq('id', data.tenant_id).maybeSingle()
         let dispatchPhone = tenant?.dispatch_phone || null
         if (!dispatchPhone) {
           const { data: owner } = await supabase.from('users')
@@ -98,6 +103,9 @@ function AppInner() {
         data._contact = { crewCanContactClient: !!tenant?.crew_can_contact_client, dispatchPhone }
         // 'daily' → crew clock in once for the day (shift); 'per_job' (default) → per-clean timer.
         data._timeMode = tenant?.time_tracking_mode || 'per_job'
+        // Crew job board. 'default_crew' (the default) hides the Open jobs tab
+        // unless something is actually open; the broadcast modes always show it.
+        data._assignmentMode = tenant?.assignment_mode || 'default_crew'
         // The business's zone. Every job time and day bucket in the app renders
         // in THIS zone, not the phone's, so the crew and the owner read the same
         // clock for the same clean. Null → fall back to device-local.
@@ -107,7 +115,7 @@ function AppInner() {
         data._laundryBonus = Math.max(
           Number(tenant?.laundry_takehome_bonus || 0), Number(tenant?.laundry_onsite_bonus || 0),
           Number(tenant?.laundry_office_bonus || 0), Number(tenant?.laundry_laundromat_bonus || 0))
-      } catch (e) { data._contact = { crewCanContactClient: false, dispatchPhone: null }; data._timeMode = 'per_job'; data._tz = null; data._laundryBonus = 0 }
+      } catch (e) { data._contact = { crewCanContactClient: false, dispatchPhone: null }; data._timeMode = 'per_job'; data._assignmentMode = 'default_crew'; data._tz = null; data._laundryBonus = 0 }
       saveCachedProfile(authId, data)
     }
     // Offline fallback: a fetch ERROR (no signal, server down) is not proof the
@@ -214,9 +222,27 @@ function AppInner() {
     } catch { /* badge is best-effort */ }
   }
 
+  // Open-jobs count — refreshed with the chat badge and on every foreground
+  // (the drain below), never on a claim, so the tab doesn't vanish under
+  // someone who is standing on it.
+  const refreshOpenJobs = async () => {
+    if (!user) return
+    try {
+      const { count } = await supabase.from('jobs')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', user.tenant_id)
+        .not('open_for_claims_at', 'is', null)
+        .in('status', ['pending_approval', 'scheduled'])
+        .eq('crew_filled', false)
+        .gt('scheduled_start', new Date().toISOString())
+      setOpenJobsCount(count ?? 0)
+    } catch { /* badge is best-effort */ }
+  }
+
   useEffect(() => {
     if (!user) return
     refreshChatUnread()
+    refreshOpenJobs()
     const ch = supabase
       .channel(`chat-unread-${user.id}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'message_channels', filter: `tenant_id=eq.${user.tenant_id}` }, () => { refreshChatUnread() })
@@ -245,6 +271,7 @@ function AppInner() {
     // Walkthrough videos drain on their own, alongside: one can take many
     // minutes on a weak bar, and nothing in the chain below should wait on it.
     const drain = () => {
+      refreshOpenJobs()
       // An SOS goes first and on its own: it must never wait behind a photo
       // upload that can take minutes on one bar.
       flushSOSQueue().catch(() => {})
@@ -344,6 +371,23 @@ function AppInner() {
         >
           {() => <ScheduleScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
         </Tab.Screen>
+
+        {/* Crew job board. Always there for companies that broadcast cleans;
+            for everyone else it appears only while something is open (an
+            owner can open a single clean from the job panel in any mode). */}
+        {(user._assignmentMode !== 'default_crew' || openJobsCount > 0) && (
+          <Tab.Screen
+            name="OpenJobs"
+            options={{
+              tabBarLabel: 'Open jobs',
+              tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>🙋</Text>,
+              tabBarBadge: openJobsCount > 0 ? (openJobsCount > 9 ? '9+' : openJobsCount) : undefined,
+              tabBarBadgeStyle: { backgroundColor: GOLD, color: SLATE_DARK, fontSize: 10, fontWeight: '800' },
+            }}
+          >
+            {() => <OpenJobsScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
+          </Tab.Screen>
+        )}
 
         <Tab.Screen
           name="Mileage"
