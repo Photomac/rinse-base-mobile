@@ -18,12 +18,22 @@
 // one of which backgrounds the app and freezes a JS timer. That is the same
 // failure that made foreground-only mileage tracking die mid-drive. The JS
 // interval below is only a fallback for phones that never granted "Always".
+//
+// Since 2026-09-28 the trail starts at the press, before the alert has reached
+// the server, and every tick flushes the SOS queue before doing anything else
+// on the network. With the app backgrounded this task is the only code that
+// runs, so it is what gets a dead-zone alert out when the crew member walks
+// back into signal. Pings wait until the alert has landed: sos_pings needs its
+// row. Every request here is time-limited (RN's fetch has no timeout on
+// Android), so a stalled one can't park the task.
 
 import * as Location from 'expo-location'
 import * as TaskManager from 'expo-task-manager'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { getBackgroundLocationStatus, getForegroundLocationStatus } from './permissions'
+import { flushSOSQueue, sosLanded } from './sosQueue'
+import { tStatic } from './i18n'
 
 const SOS_PING_TASK = 'sos-ping-task'
 const ACTIVE_KEY = 'sos:active'
@@ -33,6 +43,7 @@ const PING_INTERVAL = 60 * 1000 // 1 minute — an emergency, not a commute
 // app is killed mid-incident) the trail must not ping the crew member's
 // location forever. Four hours is far longer than any real response window.
 const MAX_TRAIL_MS = 4 * 60 * 60 * 1000
+const REQUEST_TIMEOUT_MS = 15_000
 
 interface ActiveSOS {
   alertId: string
@@ -57,9 +68,16 @@ async function writeActive(v: ActiveSOS | null) {
   } catch { /* best-effort */ }
 }
 
+// Settles within REQUEST_TIMEOUT_MS no matter what the connection does.
+async function bounded<T>(work: PromiseLike<T>, onTimeout: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expired = new Promise<T>(resolve => { timer = setTimeout(() => resolve(onTimeout), REQUEST_TIMEOUT_MS) })
+  try { return await Promise.race([Promise.resolve(work), expired]) } finally { clearTimeout(timer) }
+}
+
 // Does this alert still need a trail? Returns false ONLY on a positive read of
-// a non-active status. Anything else — offline, request error, no row — counts
-// as still open.
+// a non-active status. Anything else — offline, request error, timeout, no
+// row — counts as still open.
 //
 // Failing open is the deliberate choice here: the cost of a false "resolved"
 // is that a crew member in trouble silently stops being tracked, while the
@@ -67,8 +85,9 @@ async function writeActive(v: ActiveSOS | null) {
 // MAX_TRAIL_MS. Those are not close.
 async function isAlertStillOpen(alertId: string): Promise<boolean> {
   try {
-    const { data, error } = await supabase
-      .from('sos_alerts').select('status').eq('id', alertId).maybeSingle()
+    const { data, error } = await bounded<any>(
+      supabase.from('sos_alerts').select('status').eq('id', alertId).maybeSingle(),
+      { data: null, error: 'timed out' })
     if (error || !data) return true // unreadable ≠ resolved
     return data.status === 'active'
   } catch {
@@ -80,14 +99,14 @@ async function isAlertStillOpen(alertId: string): Promise<boolean> {
 // belongs to the caller's tenant, which holds for the crew member who raised
 // it. lat/lng/recorded_at are NOT NULL in the DB; recorded_at defaults to now().
 async function recordPing(alertId: string, coords: { latitude: number; longitude: number }) {
-  await supabase.from('sos_pings').insert({
+  await bounded<any>(supabase.from('sos_pings').insert({
     alert_id: alertId,
     lat: coords.latitude,
     lng: coords.longitude,
-  })
+  }), null)
 }
 
-// Shared by the JS fallback timer and the OS background task.
+// The JS fallback timer's tick.
 async function pingOnce(): Promise<void> {
   const active = await readActive()
   if (!active) { await stopSOSTrail(); return }
@@ -96,6 +115,10 @@ async function pingOnce(): Promise<void> {
     await stopSOSTrail()
     return
   }
+  // Deliver first. An alert that hasn't landed can't have been resolved, and
+  // no status read gets to hold delivery up.
+  await flushSOSQueue().catch(() => {})
+  if (!(await sosLanded(active.alertId))) return
   if (!(await isAlertStillOpen(active.alertId))) {
     await stopSOSTrail()
     return
@@ -103,6 +126,8 @@ async function pingOnce(): Promise<void> {
 
   try {
     const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+    // "I'm OK" may have stopped the trail while we were getting here.
+    if ((await readActive())?.alertId !== active.alertId) return
     await recordPing(active.alertId, loc.coords)
   } catch (e) {
     // A single missed fix is not a reason to tear the trail down — the next
@@ -111,12 +136,17 @@ async function pingOnce(): Promise<void> {
   }
 }
 
-// Begin trailing. Called right after the alert row lands. Never throws: the
-// alert itself is already delivered by this point and nothing here is allowed
+// Begin trailing. Called at the press, with the id the SOS queue minted. Never
+// throws: delivering the alert is the queue's job, and nothing here is allowed
 // to take the SOS screen down with it.
 export async function startSOSTrail(alertId: string) {
   try {
-    await writeActive({ alertId, startedAt: Date.now() })
+    // Resuming the same alert keeps its start, so MAX_TRAIL_MS still counts
+    // from the press and not from the latest app launch.
+    const prev = await readActive()
+    await writeActive({ alertId, startedAt: prev?.alertId === alertId ? prev.startedAt : Date.now() })
+    // "I'm OK" can land during any await below; a stopped trail stays stopped.
+    const stillMine = async () => (await readActive())?.alertId === alertId
 
     if (await getForegroundLocationStatus() !== 'granted') return
 
@@ -125,7 +155,7 @@ export async function startSOSTrail(alertId: string) {
     // someone mid-emergency is the wrong moment to ask, and a denial tap would
     // cost them seconds. Crews who clocked in through JobDetailScreen have
     // already been asked at the right moment.
-    if (await getBackgroundLocationStatus() === 'granted') {
+    if (await getBackgroundLocationStatus() === 'granted' && await stillMine()) {
       const registered = await TaskManager.isTaskRegisteredAsync(SOS_PING_TASK)
       if (!registered) {
         await Location.startLocationUpdatesAsync(SOS_PING_TASK, {
@@ -134,9 +164,11 @@ export async function startSOSTrail(alertId: string) {
           distanceInterval: 25, // also fire on movement — being moved is the signal
           showsBackgroundLocationIndicator: true,
           pausesUpdatesAutomatically: false,
+          // Shown from the press, before anything may have reached anyone, so
+          // it must not claim the location is being shared.
           foregroundService: {
-            notificationTitle: 'Rinsebase — SOS active',
-            notificationBody: 'Sharing your location with your team',
+            notificationTitle: tStatic('sos_trail_title'),
+            notificationBody: tStatic('sos_trail_body'),
             notificationColor: '#EF4444',
           },
         })
@@ -145,10 +177,14 @@ export async function startSOSTrail(alertId: string) {
 
     // Foreground fallback runs regardless. On an "Always" phone it is harmless
     // redundancy; on a "While Using" phone it is the only trail there is, for
-    // as long as the screen stays on.
+    // as long as the screen stays on. Armed before the first ping (which now
+    // waits on delivery), with no await between the check and the arming, so
+    // a stop in between can't leave a timer behind and two starts can't leave
+    // two.
+    if (!(await stillMine())) return
     if (pingTimer) clearInterval(pingTimer)
-    await pingOnce()
     pingTimer = setInterval(() => { pingOnce().catch(() => {}) }, PING_INTERVAL)
+    pingOnce().catch(() => {})
   } catch (e) {
     console.warn('startSOSTrail failed:', e)
   }
@@ -176,19 +212,6 @@ export async function resumeSOSTrailIfOpen() {
   } catch { /* best-effort */ }
 }
 
-// Look up the alert this device just raised. Kept as a separate read rather
-// than adding .select() to sendSOS's insert, so that nothing about resolving
-// the trail's alert id can throw on the insert path — delivering the alert is
-// the part that must not fail, and the trail is best-effort on top of it.
-export async function findMyOpenAlertId(userId: string): Promise<string | null> {
-  try {
-    const { data } = await supabase
-      .from('sos_alerts').select('id').eq('user_id', userId).eq('status', 'active')
-      .order('triggered_at', { ascending: false }).limit(1).maybeSingle()
-    return data?.id ?? null
-  } catch { return null }
-}
-
 // ── BACKGROUND TASK ──
 // Runs even with the app backgrounded or killed — the whole point of this file.
 TaskManager.defineTask(SOS_PING_TASK, async ({ data, error }: any) => {
@@ -198,12 +221,18 @@ TaskManager.defineTask(SOS_PING_TASK, async ({ data, error }: any) => {
   if (!active) { await stopSOSTrail(); return }
 
   if (Date.now() - active.startedAt > MAX_TRAIL_MS) { await stopSOSTrail(); return }
+
+  // Backgrounded, this is the only code running: deliver a queued alert
+  // before anything else touches the network.
+  await flushSOSQueue().catch(() => {})
+  if (!(await sosLanded(active.alertId))) return
   if (!(await isAlertStillOpen(active.alertId))) { await stopSOSTrail(); return }
 
   const { locations } = (data ?? {}) as { locations?: Location.LocationObject[] }
   if (!locations?.length) return
 
   try {
+    if ((await readActive())?.alertId !== active.alertId) return // "I'm OK" meanwhile
     const loc = locations[locations.length - 1]
     await recordPing(active.alertId, loc.coords)
   } catch (e) {

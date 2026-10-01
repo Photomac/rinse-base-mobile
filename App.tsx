@@ -8,6 +8,7 @@ import { supabase, isSignedOut } from './src/lib/supabase'
 import { LoginScreen } from './src/screens/LoginScreen'
 import { DashboardScreen } from './src/screens/DashboardScreen'
 import { ScheduleScreen } from './src/screens/ScheduleScreen'
+import { OpenJobsScreen } from './src/screens/OpenJobsScreen'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
@@ -29,6 +30,7 @@ import { clearDataCache } from './src/lib/dataCache'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
 import { flushOutbox } from './src/lib/outbox'
 import { flushIncidentNotifies } from './src/lib/incidentNotify'
+import { flushSOSQueue, resumableSOS } from './src/lib/sosQueue'
 import * as Notifications from 'expo-notifications'
 import { LangProvider } from './src/contexts/LangContext'
 import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
@@ -45,15 +47,17 @@ initErrorReporting()
 type CompanySettings = {
   _contact: { crewCanContactClient: boolean; dispatchPhone: string | null }
   _timeMode: string
+  _assignmentMode: string
   _tz: string | null
   _laundryBonus: number
 }
 const defaultSettings = (): CompanySettings => ({
-  _contact: { crewCanContactClient: false, dispatchPhone: null }, _timeMode: 'per_job', _tz: null, _laundryBonus: 0,
+  _contact: { crewCanContactClient: false, dispatchPhone: null }, _timeMode: 'per_job', _assignmentMode: 'default_crew', _tz: null, _laundryBonus: 0,
 })
 const settingsFrom = (p: any): CompanySettings => ({
   _contact: p._contact ?? defaultSettings()._contact,
   _timeMode: p._timeMode ?? 'per_job',
+  _assignmentMode: p._assignmentMode ?? 'default_crew',
   _tz: p._tz ?? null,
   _laundryBonus: p._laundryBonus ?? 0,
 })
@@ -61,7 +65,7 @@ const settingsFrom = (p: any): CompanySettings => ({
 // Null when they couldn't be read (no signal, timeout) — never a guess.
 async function companySettings(tenantId: string): Promise<CompanySettings | null> {
   const { data: tenant, error } = await supabase.from('tenants')
-    .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, timezone, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus').eq('id', tenantId).maybeSingle()
+    .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, timezone, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus, assignment_mode').eq('id', tenantId).maybeSingle()
   if (error) return null
   // Crew→client contact policy. Default: crew can't call the host directly
   // (the cleaning company owns that relationship) — they reach dispatch.
@@ -77,6 +81,9 @@ async function companySettings(tenantId: string): Promise<CompanySettings | null
     _contact: { crewCanContactClient: !!tenant?.crew_can_contact_client, dispatchPhone },
     // 'daily' → crew clock in once for the day (shift); 'per_job' (default) → per-clean timer.
     _timeMode: tenant?.time_tracking_mode || 'per_job',
+    // Crew job board. 'default_crew' (the default) hides the Open jobs tab
+    // unless something is actually open; the broadcast modes always show it.
+    _assignmentMode: tenant?.assignment_mode || 'default_crew',
     // The business's zone. Every job time and day bucket in the app renders
     // in THIS zone, not the phone's, so the crew and the owner read the same
     // clock for the same clean. Null → fall back to device-local.
@@ -98,6 +105,10 @@ function AppInner() {
   const [loading, setLoading] = useState(true)
   const [selectedJob, setSelectedJob] = useState<any>(null)
   const [chatUnread, setChatUnread] = useState(0)
+  // Cleans on the crew job board right now (open_for_claims_at set, not yet
+  // full). Drives the Open jobs tab badge, and whether the tab shows at all
+  // for a company still on default-crew assignment.
+  const [openJobsCount, setOpenJobsCount] = useState(0)
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [showSOS, setShowSOS] = useState(false)
   const [activeChannel, setActiveChannel] = useState<any>(null)
@@ -258,9 +269,27 @@ function AppInner() {
     } catch { /* badge is best-effort */ }
   }
 
+  // Open-jobs count — refreshed with the chat badge and on every foreground
+  // (the drain below), never on a claim, so the tab doesn't vanish under
+  // someone who is standing on it.
+  const refreshOpenJobs = async () => {
+    if (!user) return
+    try {
+      const { count } = await supabase.from('jobs')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', user.tenant_id)
+        .not('open_for_claims_at', 'is', null)
+        .in('status', ['pending_approval', 'scheduled'])
+        .eq('crew_filled', false)
+        .gt('scheduled_start', new Date().toISOString())
+      setOpenJobsCount(count ?? 0)
+    } catch { /* badge is best-effort */ }
+  }
+
   useEffect(() => {
     if (!user) return
     refreshChatUnread()
+    refreshOpenJobs()
     const ch = supabase
       .channel(`chat-unread-${user.id}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'message_channels', filter: `tenant_id=eq.${user.tenant_id}` }, () => { refreshChatUnread() })
@@ -289,6 +318,10 @@ function AppInner() {
     // Walkthrough videos drain on their own, alongside: one can take many
     // minutes on a weak bar, and nothing in the chain below should wait on it.
     const drain = () => {
+      refreshOpenJobs()
+      // An SOS goes first and on its own: it must never wait behind a photo
+      // upload that can take minutes on one bar.
+      flushSOSQueue().catch(() => {})
       flushVideoQueue().catch(() => {})
       flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}).then(() => flushIncidentNotifies()).catch(() => {})
     }
@@ -303,6 +336,14 @@ function AppInner() {
     const iv = setInterval(() => { if (AppState.currentState === 'active') drain() }, 120_000)
     return () => { sub.remove(); clearInterval(iv) }
   }, [user])
+
+  // An SOS this phone never got to the server (app killed in a dead zone, dead
+  // battery) reopens its screen at launch, so the crew member sees it still
+  // hasn't gone and the screen's fast retry takes over from the drain.
+  useEffect(() => {
+    if (!user) return
+    resumableSOS(user.id).then(open => { if (open) setShowSOS(true) }).catch(() => {})
+  }, [user?.id])
 
   if (loading) {
     return (
@@ -377,6 +418,23 @@ function AppInner() {
         >
           {() => <ScheduleScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
         </Tab.Screen>
+
+        {/* Crew job board. Always there for companies that broadcast cleans;
+            for everyone else it appears only while something is open (an
+            owner can open a single clean from the job panel in any mode). */}
+        {(user._assignmentMode !== 'default_crew' || openJobsCount > 0) && (
+          <Tab.Screen
+            name="OpenJobs"
+            options={{
+              tabBarLabel: 'Open jobs',
+              tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>🙋</Text>,
+              tabBarBadge: openJobsCount > 0 ? (openJobsCount > 9 ? '9+' : openJobsCount) : undefined,
+              tabBarBadgeStyle: { backgroundColor: GOLD, color: SLATE_DARK, fontSize: 10, fontWeight: '800' },
+            }}
+          >
+            {() => <OpenJobsScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
+          </Tab.Screen>
+        )}
 
         <Tab.Screen
           name="Mileage"
