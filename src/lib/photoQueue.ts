@@ -8,7 +8,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as FileSystem from 'expo-file-system/legacy'
-import { supabase } from './supabase'
+import { supabase, usableAccessToken } from './supabase'
 
 const QUEUE_KEY = 'rinsebase.photoQueue.v1'
 const DIR = FileSystem.documentDirectory + 'pending_photos/'
@@ -199,10 +199,12 @@ async function describeHttpError(res: Response): Promise<string> {
 // after BOTH the upload and the db insert succeed. Failures are classified so
 // the UI can tell "no signal" apart from "the server is rejecting uploads".
 async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
-  let token: string | undefined
+  let token: string | null
   try {
-    const { data: { session } } = await supabase.auth.getSession()
-    token = session?.access_token ?? undefined
+    // Null while the hour-long token has lapsed and can't be renewed (no
+    // signal): storage would refuse it, and that 4xx read as "the server is
+    // rejecting uploads" — red badge, minutes of backoff.
+    token = await usableAccessToken()
   } catch (e: any) {
     return { ok: false, kind: 'network', message: e?.message || 'Could not read session' }
   }
@@ -241,11 +243,12 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
   // Incident-report photo: attach to its report rather than job_photos.
   if (entry.incident_report_id) {
     try {
-      const { data, error } = await supabase.rpc('append_incident_report_photo', {
+      const { data, error, status } = await supabase.rpc('append_incident_report_photo', {
         p_report_id: entry.incident_report_id, p_url: urlData.publicUrl,
       })
-      // A network failure here surfaces as a postgrest error with status 0.
-      if (error) return { ok: false, kind: (error as any)?.status === 0 ? 'network' : 'server', message: error.message, stored: true }
+      // A network failure here surfaces as status 0 on the RESPONSE (the error
+      // object has no status — reading it there classed every miss as server).
+      if (error) return { ok: false, kind: status === 0 ? 'network' : 'server', message: error.message, stored: true }
       // The report itself can still be waiting in the outbox; the drain runs
       // photos before the outbox, so this is expected on the first pass after
       // signal returns. Short backoff, file stays stored, no re-upload.
@@ -259,7 +262,7 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
   }
 
   try {
-    const { error } = await supabase.from('job_photos').insert({
+    const { error, status } = await supabase.from('job_photos').insert({
       tenant_id: entry.tenant_id,
       job_id: entry.job_id,
       user_id: entry.user_id,
@@ -270,7 +273,9 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
       photo_requirement_id: entry.photo_requirement_id ?? null,
       visible_to_client: entry.visible_to_client,
     })
-    if (error) return { ok: false, kind: 'server', message: error.message, stored: true }
+    // status 0 = no signal (the photo is stored; only the row is missing) —
+    // retry on the next trigger, not after a server-rejection backoff.
+    if (error) return { ok: false, kind: status === 0 ? 'network' : 'server', message: error.message, stored: true }
   } catch (e: any) {
     return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
   }

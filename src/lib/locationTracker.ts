@@ -7,7 +7,10 @@ import * as Location from 'expo-location'
 import * as TaskManager from 'expo-task-manager'
 import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { supabase } from './supabase'
+import { supabase, readStoredSession } from './supabase'
+import { cachedQuery } from './dataCache'
+import { overlayPending } from './outbox'
+import { loadCachedProfile } from './profileCache'
 import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
 
@@ -83,21 +86,65 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
 // (that was the "why am I on the map at home, with the app closed?" leak). This
 // gates BOTH starting tracking and continuing it, so tracking self-terminates
 // the moment someone goes off the clock.
-async function isActivelyWorking(userId: string): Promise<boolean> {
-  const { data: openEntry } = await supabase
-    .from('job_time_entries').select('id').eq('user_id', userId).is('clocked_out_at', null).limit(1)
-  if ((openEntry?.length ?? 0) > 0) return true
+//
+// With no signal the answer comes from the last good copy of the same reads
+// plus the punches and status changes still queued in the outbox. It used to
+// read a failed query as "not working", so walking into a dead zone mid-clean
+// switched tracking off — including the OS background task, which then stayed
+// off after signal came back. `working` is null only when there is no way to
+// tell (offline and nothing saved yet); each caller picks its safe side.
+//
+// Also returns the one in-progress job today, with its address, for the
+// geofence check — from the same read, so offline the "you left the property
+// while clocked in" reminder still fires.
+// Exported for scripts/test-offline-auth.mjs.
+export async function checkWork(userId: string): Promise<{ working: boolean | null; activeJob: any | null }> {
   const now = new Date()
   const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
   const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
-  const { data: active } = await supabase
-    .from('jobs').select('id, job_assignments!inner(user_id)')
-    .eq('job_assignments.user_id', userId)
-    .in('status', ['en_route', 'in_progress'])
-    .gte('scheduled_start', todayStart.toISOString())
-    .lte('scheduled_start', todayEnd.toISOString())
-    .limit(1)
-  return (active?.length ?? 0) > 0
+  const [entriesRes, jobsRes] = await Promise.all([
+    cachedQuery(`track:open:${userId}`, supabase
+      .from('job_time_entries').select('id, user_id, job_id, entry_type, clocked_out_at')
+      .eq('user_id', userId).is('clocked_out_at', null).limit(20)),
+    cachedQuery(`track:today:${userId}`, supabase
+      .from('jobs')
+      .select('id, status, scheduled_start, job_assignments!inner(user_id), client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)')
+      .eq('job_assignments.user_id', userId)
+      .gte('scheduled_start', todayStart.toISOString())
+      .lte('scheduled_start', todayEnd.toISOString())),
+  ])
+
+  if (entriesRes.data) {
+    // A clock-in made offline is a queued upsert; a clock-out or pause is a
+    // queued update that stamps clocked_out_at on it.
+    const entries = await overlayPending('job_time_entries', entriesRes.data as any[], v => v.user_id === userId)
+    if (entries.some((e: any) => !e.clocked_out_at)) {
+      return { working: true, activeJob: jobsRes.data ? await activeJobFrom(jobsRes.data as any[], todayStart, todayEnd) : null }
+    }
+  }
+  if (!jobsRes.data) return { working: null, activeJob: null }
+  // Saved rows can be from an earlier day: keep today's (the server already
+  // did that for live rows). Queued en-route / start / complete apply on top.
+  const todays = await overlayPending('jobs', (jobsRes.data as any[]).filter(j => inDay(j.scheduled_start, todayStart, todayEnd)))
+  const working = todays.some((j: any) => j.status === 'en_route' || j.status === 'in_progress')
+  if (!working && !entriesRes.data) return { working: null, activeJob: null }
+  return { working, activeJob: working ? pickActiveJob(todays) : null }
+}
+
+function inDay(iso: string, start: Date, end: Date): boolean {
+  const t = new Date(iso).getTime()
+  return t >= start.getTime() && t <= end.getTime()
+}
+
+async function activeJobFrom(rows: any[], start: Date, end: Date) {
+  return pickActiveJob(await overlayPending('jobs', rows.filter(j => inDay(j.scheduled_start, start, end))))
+}
+
+// The geofence needs exactly one clean in progress — with two it can't know
+// which property to fence, same as the old .maybeSingle() lookup.
+function pickActiveJob(todays: any[]) {
+  const inProgress = todays.filter((j: any) => j.status === 'in_progress')
+  return inProgress.length === 1 ? inProgress[0] : null
 }
 
 export async function startLocationTracking(user: any, opts?: { requestBackground?: boolean }) {
@@ -111,10 +158,14 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
   // job, or clocked out), make sure any prior tracking — including a lingering
   // background task from an earlier session — is fully stopped and the dispatch
   // dot is removed. Off the clock = off the map.
-  if (!(await isActivelyWorking(user.id))) {
+  const { working } = await checkWork(user.id)
+  if (working === false) {
     await stopLocationTracking()
     return
   }
+  // Offline with nothing saved to decide from: don't START broadcasting on a
+  // guess, and don't tear down tracking that may belong to a live shift.
+  if (working === null) return
 
   // Background ("Always") is a stronger ask, so we only escalate to the OS
   // prompt at a user-initiated work moment (clock-in / start-of-day) — never on
@@ -204,7 +255,10 @@ export async function stopLocationTracking() {
 export async function maybeStopLocationTracking(user: any) {
   try {
     currentUser = user // so stopLocationTracking clears the right row
-    if (await isActivelyWorking(user.id)) return // still working — keep tracking
+    // Stop only on a definite "not working" — which offline includes a
+    // clock-out that is still queued. Can't tell → keep tracking; the next
+    // ping re-checks.
+    if ((await checkWork(user.id)).working !== false) return
     await stopLocationTracking()
   } catch { /* best-effort — worst case tracking continues as before */ }
 }
@@ -254,53 +308,36 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
 
   // Module state dies with the process: when the OS relaunches us headless
   // for a location update, currentUser is null — rebuild it from the stored
-  // session instead of dropping the ping.
+  // session instead of dropping the ping. Read from storage, not getUser():
+  // getUser() is a network call (and with the hour-long token lapsed it first
+  // spends ~25 s trying to renew it), so in a dead zone every background wake
+  // used to end right here.
   let user = currentUser
   if (!user) {
     try {
-      const { data: auth } = await supabase.auth.getUser()
-      const authId = auth?.user?.id
+      const authId = (await readStoredSession())?.user?.id
       if (!authId) return
-      const { data: u } = await supabase.from('users')
+      const { data: u, error } = await supabase.from('users')
         .select('id, tenant_id')
         .or(`auth_user_id.eq.${authId},id.eq.${authId}`)
         .maybeSingle()
-      if (!u) return
-      currentUser = u
-      user = u
+      // Offline: the profile App.tsx saved at the last good load.
+      const found = u ?? (error ? await loadCachedProfile(authId) : null)
+      if (!found) return
+      currentUser = found
+      user = found
     } catch { return }
   }
 
   try {
     // Off the clock? Self-terminate: stop the background task, drop the dispatch
     // dot, and record nothing. This is what stops an Always-granted phone from
-    // reporting location after the crew member is done for the day.
-    if (!(await isActivelyWorking(user.id))) {
+    // reporting location after the crew member is done for the day. Only on a
+    // definite no: a dead zone mid-clean is not "off the clock".
+    const { working, activeJob } = await checkWork(user.id)
+    if (working === false) {
       await stopLocationTracking()
       return
-    }
-
-    // Find this crew member's active job
-    const now = new Date()
-    const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
-    const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
-
-    // Get this user's assigned jobs that are in_progress
-    const { data: myAssignments } = await supabase
-      .from('job_assignments').select('job_id').eq('user_id', user.id)
-    const myJobIds = (myAssignments ?? []).map((a: any) => a.job_id)
-
-    let activeJob: any = null
-    if (myJobIds.length > 0) {
-      const { data } = await supabase
-        .from('jobs')
-        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)')
-        .in('id', myJobIds)
-        .eq('status', 'in_progress')
-        .gte('scheduled_start', todayStart.toISOString())
-        .lte('scheduled_start', todayEnd.toISOString())
-        .maybeSingle()
-      activeJob = data
     }
 
     // Update crew location
@@ -337,7 +374,9 @@ async function pingLocation(user: any) {
   try {
     // Stop the moment they're no longer working — belt-and-suspenders with
     // maybeStopLocationTracking so a stray timer can't keep broadcasting.
-    if (!(await isActivelyWorking(user.id))) {
+    // Only on a definite no (see checkWork).
+    const { working, activeJob } = await checkWork(user.id)
+    if (working === false) {
       await stopLocationTracking()
       return
     }
@@ -345,28 +384,6 @@ async function pingLocation(user: any) {
     const loc = await Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced,
     })
-
-    // Find this crew member's active job with address coordinates
-    const now = new Date()
-    const todayStart = new Date(now); todayStart.setHours(0,0,0,0)
-    const todayEnd = new Date(now); todayEnd.setHours(23,59,59,999)
-
-    const { data: myAssignments } = await supabase
-      .from('job_assignments').select('job_id').eq('user_id', user.id)
-    const myJobIds = (myAssignments ?? []).map((a: any) => a.job_id)
-
-    let activeJob: any = null
-    if (myJobIds.length > 0) {
-      const { data } = await supabase
-        .from('jobs')
-        .select('id, status, client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)')
-        .in('id', myJobIds)
-        .eq('status', 'in_progress')
-        .gte('scheduled_start', todayStart.toISOString())
-        .lte('scheduled_start', todayEnd.toISOString())
-        .maybeSingle()
-      activeJob = data
-    }
 
     const jobId = activeJob?.id || null
     const status = activeJob ? 'active' : 'idle'

@@ -66,8 +66,14 @@ export async function flushIncidentNotifies(): Promise<void> {
           },
         })
         // Best-effort, as it always was: a function error is not retried (it
-        // could double-send); only an unreachable server is.
-        if (fnError && /fetch|network/i.test(String((fnError as any)?.message))) keep.push(n)
+        // could double-send); only an unreachable server is. functions-js
+        // reports "unreachable" as FunctionsFetchError, whose message ("Failed
+        // to send a request to the Edge Function") never matched the old
+        // /fetch|network/ test — so a dropped connection dropped the heads-up.
+        // A request that timed out may have been delivered: not retried.
+        const cause = String((fnError as any)?.context?.message ?? '')
+        const unreachable = (fnError as any)?.name === 'FunctionsFetchError' && !/timed out/i.test(cause)
+        if (fnError && (unreachable || /fetch|network/i.test(String((fnError as any)?.message)))) keep.push(n)
       } catch {
         keep.push(n)
       }

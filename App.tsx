@@ -4,7 +4,7 @@ import { View, Text, StyleSheet, ActivityIndicator, AppState } from 'react-nativ
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { NavigationContainer } from '@react-navigation/native'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
-import { supabase } from './src/lib/supabase'
+import { supabase, isSignedOut } from './src/lib/supabase'
 import { LoginScreen } from './src/screens/LoginScreen'
 import { DashboardScreen } from './src/screens/DashboardScreen'
 import { ScheduleScreen } from './src/screens/ScheduleScreen'
@@ -43,6 +43,59 @@ const Tab = createBottomTabNavigator()
 // Capture uncaught mobile errors into admin_error_log (admin System Health).
 initErrorReporting()
 
+// Company settings every screen reads off the profile (as `_`-prefixed fields).
+type CompanySettings = {
+  _contact: { crewCanContactClient: boolean; dispatchPhone: string | null }
+  _timeMode: string
+  _assignmentMode: string
+  _tz: string | null
+  _laundryBonus: number
+}
+const defaultSettings = (): CompanySettings => ({
+  _contact: { crewCanContactClient: false, dispatchPhone: null }, _timeMode: 'per_job', _assignmentMode: 'default_crew', _tz: null, _laundryBonus: 0,
+})
+const settingsFrom = (p: any): CompanySettings => ({
+  _contact: p._contact ?? defaultSettings()._contact,
+  _timeMode: p._timeMode ?? 'per_job',
+  _assignmentMode: p._assignmentMode ?? 'default_crew',
+  _tz: p._tz ?? null,
+  _laundryBonus: p._laundryBonus ?? 0,
+})
+
+// Null when they couldn't be read (no signal, timeout) — never a guess.
+async function companySettings(tenantId: string): Promise<CompanySettings | null> {
+  const { data: tenant, error } = await supabase.from('tenants')
+    .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, timezone, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus, assignment_mode').eq('id', tenantId).maybeSingle()
+  if (error) return null
+  // Crew→client contact policy. Default: crew can't call the host directly
+  // (the cleaning company owns that relationship) — they reach dispatch.
+  let dispatchPhone = tenant?.dispatch_phone || null
+  if (!dispatchPhone) {
+    const { data: owner, error: ownerErr } = await supabase.from('users')
+      .select('phone').eq('tenant_id', tenantId).eq('role', 'owner')
+      .not('phone', 'is', null).limit(1).maybeSingle()
+    if (ownerErr) return null
+    dispatchPhone = owner?.phone || null
+  }
+  return {
+    _contact: { crewCanContactClient: !!tenant?.crew_can_contact_client, dispatchPhone },
+    // 'daily' → crew clock in once for the day (shift); 'per_job' (default) → per-clean timer.
+    _timeMode: tenant?.time_tracking_mode || 'per_job',
+    // Crew job board. 'default_crew' (the default) hides the Open jobs tab
+    // unless something is actually open; the broadcast modes always show it.
+    _assignmentMode: tenant?.assignment_mode || 'default_crew',
+    // The business's zone. Every job time and day bucket in the app renders
+    // in THIS zone, not the phone's, so the crew and the owner read the same
+    // clock for the same clean. Null → fall back to device-local.
+    _tz: tenant?.timezone || null,
+    // >0 → tenant pays a laundry bonus for at least one destination
+    // (home / on-site / office / laundromat); gates the bag counter on cleans.
+    _laundryBonus: Math.max(
+      Number(tenant?.laundry_takehome_bonus || 0), Number(tenant?.laundry_onsite_bonus || 0),
+      Number(tenant?.laundry_office_bonus || 0), Number(tenant?.laundry_laundromat_bonus || 0)),
+  }
+}
+
 // ── Inner app — hooks called unconditionally here ─────────────────
 function AppInner() {
   const insets = useSafeAreaInsets() // ✅ always called, no early returns above it
@@ -63,24 +116,35 @@ function AppInner() {
   const lastAuthId = useRef<string | null>(null)
 
   useEffect(() => {
+    // Offline-tolerant (src/lib/supabase.ts): with the hour-long token lapsed
+    // and no signal, this hands back the stored sign-in instead of null.
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       if (session) { lastAuthId.current = session.user.id; loadUser(session.user.id) }
       else setLoading(false)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      if (session) { lastAuthId.current = session.user.id; loadUser(session.user.id) }
-      else {
-        // SIGNED_OUT is explicit sign-out or a server-invalidated session —
-        // never a network blip (those are retried without an event) — so it's
-        // safe to drop the offline profile copy here.
+      if (session) {
+        setSession(session)
+        lastAuthId.current = session.user.id; loadUser(session.user.id)
+        return
+      }
+      // No session with this event. SIGNED_OUT is an explicit sign-out or a
+      // session the server invalidated. Anything else — INITIAL_SESSION after
+      // a token renewal that couldn't reach the server — is a dead zone, not a
+      // sign-out: the sign-in is still on the phone, so stay in the app on it.
+      // (This event used to send a crew member with an expired token and no
+      // signal to the login screen, where nothing can be queued.)
+      isSignedOut(_event, session).then((signedOut) => {
+        if (!signedOut) return
+        setSession(null)
+        // Safe to drop the offline profile copy: this is never a network blip.
         if (_event === 'SIGNED_OUT' && lastAuthId.current) { clearCachedProfile(lastAuthId.current); clearDataCache() }
         // Shared devices: don't leave the previous tenant's zone armed for
         // whoever signs in next.
         setCurrentTz(null)
         setUser(null); setLoading(false)
-      }
+      })
     })
     return () => subscription.unsubscribe()
   }, [])
@@ -88,34 +152,17 @@ function AppInner() {
   async function loadUser(authId: string) {
     const { data, error } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
     if (data) {
-      // Crew→client contact policy. Default: crew can't call the host directly
-      // (the cleaning company owns that relationship) — they reach dispatch.
-      try {
-        const { data: tenant } = await supabase.from('tenants')
-          .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, timezone, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus, assignment_mode').eq('id', data.tenant_id).maybeSingle()
-        let dispatchPhone = tenant?.dispatch_phone || null
-        if (!dispatchPhone) {
-          const { data: owner } = await supabase.from('users')
-            .select('phone').eq('tenant_id', data.tenant_id).eq('role', 'owner')
-            .not('phone', 'is', null).limit(1).maybeSingle()
-          dispatchPhone = owner?.phone || null
-        }
-        data._contact = { crewCanContactClient: !!tenant?.crew_can_contact_client, dispatchPhone }
-        // 'daily' → crew clock in once for the day (shift); 'per_job' (default) → per-clean timer.
-        data._timeMode = tenant?.time_tracking_mode || 'per_job'
-        // Crew job board. 'default_crew' (the default) hides the Open jobs tab
-        // unless something is actually open; the broadcast modes always show it.
-        data._assignmentMode = tenant?.assignment_mode || 'default_crew'
-        // The business's zone. Every job time and day bucket in the app renders
-        // in THIS zone, not the phone's, so the crew and the owner read the same
-        // clock for the same clean. Null → fall back to device-local.
-        data._tz = tenant?.timezone || null
-        // >0 → tenant pays a laundry bonus for at least one destination
-        // (home / on-site / office / laundromat); gates the bag counter on cleans.
-        data._laundryBonus = Math.max(
-          Number(tenant?.laundry_takehome_bonus || 0), Number(tenant?.laundry_onsite_bonus || 0),
-          Number(tenant?.laundry_office_bonus || 0), Number(tenant?.laundry_laundromat_bonus || 0))
-      } catch (e) { data._contact = { crewCanContactClient: false, dispatchPhone: null }; data._timeMode = 'per_job'; data._assignmentMode = 'default_crew'; data._tz = null; data._laundryBonus = 0 }
+      let settings: CompanySettings | null = null
+      try { settings = await companySettings(data.tenant_id) } catch { /* unreadable, same as an error */ }
+      if (!settings) {
+        // The profile arrived but the company settings didn't (weak signal,
+        // timeout). Keep the last good ones instead of guessing: the guesses
+        // were a per-job clock for a daily-shift company and every time in the
+        // phone's zone, and they overwrote the good offline copy.
+        const prev = await loadCachedProfile(authId)
+        settings = prev && prev.tenant_id === data.tenant_id ? settingsFrom(prev) : defaultSettings()
+      }
+      Object.assign(data, settings)
       saveCachedProfile(authId, data)
     }
     // Offline fallback: a fetch ERROR (no signal, server down) is not proof the

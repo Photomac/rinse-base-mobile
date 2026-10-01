@@ -14,7 +14,7 @@ import * as Location from 'expo-location'
 import * as TaskManager from 'expo-task-manager'
 import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { supabase } from './supabase'
+import { supabase, readStoredSession } from './supabase'
 import { fmtTime, setCurrentTz } from './timezone'
 import { uuid4 } from './outbox'
 import { getBackgroundLocationStatus } from './permissions'
@@ -146,9 +146,11 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
     const prompted = await AsyncStorage.getItem(PROMPTED_KEY(jobId))
     if (prompted && Date.now() - Number(prompted) < ARRIVAL_FRESH_MS) return
 
-    // Rebuild the user (headless launch has no module state).
-    const { data: auth } = await supabase.auth.getUser()
-    const authId = auth?.user?.id
+    // Rebuild the user (headless launch has no module state). From the stored
+    // sign-in, not getUser(): that is a network call which, with the
+    // hour-long token lapsed, first spends ~25 s trying to renew it — most of
+    // the time iOS gives a background wake.
+    const authId = (await readStoredSession())?.user?.id
     if (!authId) return
     const { data: user } = await supabase.from('users')
       .select('id, tenant_id')
