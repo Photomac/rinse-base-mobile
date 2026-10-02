@@ -38,6 +38,7 @@ function builder(table: string, op: string, values: any) {
     eq: (k: string, v: any) => { filters.push(`${k}=eq.${v}`); return p },
     is: (k: string, v: any) => { filters.push(`${k}=is.${v}`); return p },
     not: (k: string, o: string, v: any) => { filters.push(`${k}=not.${o}.${v}`); return p },
+    in: (k: string, v: any[]) => { filters.push(`${k}=in.(${v.join(',')})`); return p },
     then: (f: any) => Promise.resolve(result(table, op, values, filters)).then(f),
   }
   return p

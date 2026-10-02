@@ -38,6 +38,10 @@ export interface OutboxOp {
   /** update/delete: equality filters (null values match with IS NULL).
    *  A delete must have at least one — "delete everything I can see" is refused. */
   match?: Record<string, any>
+  /** update/delete: column IN (values) filters. For writes that must only land
+   *  while a row is still in an expected state — a replayed "start" must never
+   *  pull a clean that was completed in the meantime back to in progress. */
+  matchIn?: Record<string, any[]>
   /** delete only: spare the rows whose `column` is in `values` (e.g. the ids
    *  just upserted by the same save). */
   keep?: { column: string; values: string[] }
@@ -55,7 +59,7 @@ export interface OutboxOp {
   lastError?: string
 }
 
-export type OutboxWrite = Pick<OutboxOp, 'table' | 'op' | 'match' | 'keep' | 'values' | 'onConflict' | 'group'>
+export type OutboxWrite = Pick<OutboxOp, 'table' | 'op' | 'match' | 'matchIn' | 'keep' | 'values' | 'onConflict' | 'group'>
 
 // RFC-4122-shaped v4 from Math.random — no crypto dep (OTA-safe). These ids
 // only need uniqueness for idempotent replay, not unguessability.
@@ -96,6 +100,7 @@ async function applyOp(w: OutboxWrite): Promise<{ error: any; status?: number }>
   }
   let q: any = w.op === 'delete' ? supabase.from(w.table).delete() : supabase.from(w.table).update(w.values)
   for (const [k, v] of Object.entries(w.match || {})) q = v === null ? q.is(k, null) : q.eq(k, v)
+  for (const [k, v] of Object.entries(w.matchIn || {})) q = q.in(k, v)
   if (w.op === 'delete' && w.keep?.values.length) q = q.not(w.keep.column, 'in', `(${w.keep.values.join(',')})`)
   return await q
 }
@@ -201,8 +206,9 @@ export async function overlayPending(
 ): Promise<any[]> {
   const q = await readQueue()
   let out = rows.slice()
-  const matches = (r: any, match?: Record<string, any>) =>
-    Object.entries(match || {}).every(([k, v]) => (k in r ? r[k] === v : true))
+  const matches = (r: any, match?: Record<string, any>, matchIn?: Record<string, any[]>) =>
+    Object.entries(match || {}).every(([k, v]) => (k in r ? r[k] === v : true)) &&
+    Object.entries(matchIn || {}).every(([k, v]) => (k in r ? v.includes(r[k]) : true))
   for (const o of q) {
     if (o.table !== table) continue
     if (o.op === 'upsert') {
@@ -215,9 +221,9 @@ export async function overlayPending(
       }
     } else if (o.op === 'delete') {
       const kept = new Set(o.keep?.values ?? [])
-      out = out.filter(r => !(matches(r, o.match) && !(o.keep && kept.has(r[o.keep.column]))))
+      out = out.filter(r => !(matches(r, o.match, o.matchIn) && !(o.keep && kept.has(r[o.keep.column]))))
     } else {
-      out = out.map(r => (matches(r, o.match) ? { ...r, ...(o.values as Record<string, any>) } : r))
+      out = out.map(r => (matches(r, o.match, o.matchIn) ? { ...r, ...(o.values as Record<string, any>) } : r))
     }
   }
   return out

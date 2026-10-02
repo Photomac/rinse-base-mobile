@@ -33,6 +33,17 @@ import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
+// Status writes only ever move a job FORWARD. A start or "On my way" can sit in
+// the offline outbox, and writeThrough queues every write behind an older stuck
+// one, so it can land minutes after the job was finished. Unfiltered, that
+// replay can pull a finished job back to in progress. CKS #1083, 2026-09-30:
+// the filed inspection closed it at 21:08:18, a crew-app status write (most
+// likely a queued start) reopened it 0.2 s later, and the inspector then got a
+// "you left the property" push every few minutes for two hours. Filtered, a
+// late replay matches no row and changes nothing.
+const STARTABLE = ['pending_approval', 'scheduled', 'en_route', 'in_progress']
+const EN_ROUTE_FROM = ['pending_approval', 'scheduled', 'en_route']
+
 const PAUSE_REASONS = [
   { value: 'Waiting for laundry', key: 'waiting_laundry' as const },
   { value: 'Going to another job', key: 'going_another_job' as const },
@@ -878,7 +889,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // so tracking keeps working with the phone in their pocket.
     if (!proxy) startLocationTracking(user, { requestBackground: true }).catch(() => {})
     // Update job status
-    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { status: 'in_progress' } })
+    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, matchIn: { status: STARTABLE }, values: { status: 'in_progress' } })
     onStatusChange(job, 'in_progress')
     loadTimeEntries()
     setSaving(false)
@@ -908,7 +919,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // time entry (hours come from the day's shift on the Dashboard).
   async function startJobDaily() {
     setSaving(true)
-    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { status: 'in_progress' } })
+    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, matchIn: { status: STARTABLE }, values: { status: 'in_progress' } })
     onStatusChange(job, 'in_progress')
     setSaving(false)
     announceRequiredPhotos()
@@ -923,7 +934,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Set en_route FIRST, then start tracking — location broadcasting is now
     // gated on being actively working (clocked in OR en_route/in_progress), so
     // the status must be committed before startLocationTracking checks it.
-    const { error } = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { status: 'en_route' } })
+    const { error } = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, matchIn: { status: EN_ROUTE_FROM }, values: { status: 'en_route' } })
     if (error) { setSaving(false); Alert.alert(t('error'), t('en_route_failed')); return }
     onStatusChange(job, 'en_route')
     startLocationTracking(user, { requestBackground: true }).catch(() => {})
