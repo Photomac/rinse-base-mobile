@@ -54,6 +54,7 @@ export function isOpenJob(j: any, now = Date.now()): boolean {
 export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
   const { t, lang } = useLang()
   const [jobs, setJobs] = useState<any[]>([])
+  const [mine, setMine] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [offline, setOffline] = useState(false)
@@ -66,7 +67,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const now = new Date()
     const res = await cachedQuery(`openjobs:${user.tenant_id}`, supabase
       .from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, max_crew, open_for_claims_at, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), service_types(name), job_assignments(user_id)')
+      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, max_crew, open_for_claims_at, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), service_types(name), job_assignments(user_id, claimed_at)')
       .eq('tenant_id', user.tenant_id)
       .not('open_for_claims_at', 'is', null)
       .in('status', ['pending_approval', 'scheduled'])
@@ -75,10 +76,14 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
       .order('scheduled_start')
       .limit(200))
     setOffline(res.fromCache)
-    setJobs((res.data ?? []).filter((j: any) => isOpenJob(j, now.getTime())))
+    const rows = res.data ?? []
+    setJobs(rows.filter((j: any) => isOpenJob(j, now.getTime())))
+    // Board cleans this person claimed. A full one drops out of the open list,
+    // so it needs its own row here — that is where "give back" lives.
+    setMine(rows.filter((j: any) => (j.job_assignments ?? []).some((a: any) => a.user_id === user.id && a.claimed_at)))
     setLoading(false)
     setRefreshing(false)
-  }, [user.tenant_id])
+  }, [user.tenant_id, user.id])
 
   useEffect(() => { load() }, [load])
 
@@ -105,6 +110,28 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
     ])
   }
 
+  // Give a claimed clean back. The server decides whether it is still allowed
+  // (tenants.unclaim_notice_hours before the start) and tells the rest of the
+  // crew it is open again. Owner-placed assignments cannot be released here.
+  function release(job: any) {
+    if (offline || busy) return
+    Alert.alert(t('open_jobs_release'), t('open_jobs_release_confirm'), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('open_jobs_release'), style: 'destructive', onPress: async () => {
+        setBusy(job.id)
+        const { data, error } = await supabase.rpc('release_claimed_job', { p_job_id: job.id })
+        setBusy(null)
+        const code = error ? 'error' : String(data)
+        await load()
+        if (code === 'released') {
+          Alert.alert(t('open_jobs_released_title'), t('open_jobs_released'))
+          return
+        }
+        Alert.alert(t('open_jobs_not_released'), t((code === 'too_late' ? 'open_jobs_r_too_late' : code === 'not_claimed' ? 'open_jobs_r_not_claimed' : 'open_jobs_r_other') as any))
+      } },
+    ])
+  }
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -120,6 +147,37 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
           <View style={styles.offlineBanner}>
             <Text style={styles.offlineBannerText}>📡 {t('open_jobs_offline')}</Text>
           </View>
+        )}
+
+        {!loading && mine.length > 0 && (
+          <View style={{ marginBottom: 14 }}>
+            <Text style={styles.sectionTitle}>✅ {t('open_jobs_yours_title')}</Text>
+            {mine.map((job: any) => {
+              const addr = job.client_addresses
+              return (
+                <View key={job.id} style={styles.mineRow}>
+                  <TouchableOpacity style={{ flex: 1 }} onPress={() => onJobPress(job)}>
+                    <Text style={styles.mineTitle} numberOfLines={1}>
+                      {addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street)}
+                      {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
+                    </Text>
+                    <Text style={styles.jobMeta}>{fmtDate(job.scheduled_start, localeFor(lang), { weekday: 'short', month: 'short', day: 'numeric' })} · {fmtTime(job.scheduled_start)}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.releaseBtn, (offline || busy === job.id) && { opacity: 0.5 }]}
+                    disabled={offline || busy === job.id}
+                    onPress={() => release(job)}
+                  >
+                    <Text style={styles.releaseBtnText}>{t('open_jobs_release')}</Text>
+                  </TouchableOpacity>
+                </View>
+              )
+            })}
+          </View>
+        )}
+
+        {!loading && (jobs.length > 0 || mine.length > 0) && (
+          <Text style={styles.sectionTitle}>🙋 {t('open_jobs_title')} · {jobs.length}</Text>
         )}
 
         {loading ? (
@@ -209,6 +267,11 @@ const styles = StyleSheet.create({
   badgeService: { backgroundColor: '#F1F5F9', color: '#475569' },
   badgeSpots: { backgroundColor: '#DBEAFE', color: '#1E40AF' },
   claimBtn: { marginTop: 12, backgroundColor: GOLD, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  sectionTitle: { fontSize: 12, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 },
+  mineRow: { backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: '#A7F3D0' },
+  mineTitle: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
+  releaseBtn: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingVertical: 7, paddingHorizontal: 10 },
+  releaseBtnText: { color: '#64748B', fontSize: 12, fontWeight: '700' },
   claimBtnText: { color: SLATE, fontSize: 15, fontWeight: '800' },
   mineBtn: { marginTop: 12, backgroundColor: '#ECFDF5', borderRadius: 10, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: '#A7F3D0' },
   mineBtnText: { color: '#065F46', fontSize: 14, fontWeight: '700' },
