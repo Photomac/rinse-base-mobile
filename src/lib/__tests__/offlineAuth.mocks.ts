@@ -35,14 +35,18 @@ export const Accuracy = { Balanced: 3, High: 4 }
 export const GeofencingEventType = { Enter: 1, Exit: 2 }
 export async function startLocationUpdatesAsync() {}
 export async function stopLocationUpdatesAsync() {}
-export async function getCurrentPositionAsync() { return { coords: { latitude: 0, longitude: 0, accuracy: 10 } } }
+// A scenario can stand the phone somewhere (__harness.position).
+export async function getCurrentPositionAsync() { return { coords: h.position ?? { latitude: 0, longitude: 0, accuracy: 10 } } }
 export async function getForegroundPermissionsAsync() { return { status: 'granted' } }
 export async function getBackgroundPermissionsAsync() { return { status: 'denied' } }
 export async function requestForegroundPermissionsAsync() { return { status: 'granted' } }
 export async function requestBackgroundPermissionsAsync() { return { status: 'denied' } }
 
-// expo-notifications
-export async function scheduleNotificationAsync() { return 'n' }
+// expo-notifications. Every local push lands in __harness.pushes.
+export async function scheduleNotificationAsync(req: any) {
+  (h.pushes = h.pushes ?? []).push(req?.content)
+  return 'n'
+}
 export async function getPermissionsAsync() { return { status: 'granted' } }
 export async function requestPermissionsAsync() { return { status: 'granted' } }
 

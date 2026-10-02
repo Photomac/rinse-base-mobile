@@ -11,6 +11,7 @@ import { supabase, readStoredSession } from './supabase'
 import { cachedQuery } from './dataCache'
 import { overlayPending } from './outbox'
 import { loadCachedProfile } from './profileCache'
+import { byCrewDayOrder } from './jobOrder'
 import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
 
@@ -80,12 +81,25 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-// Is this crew member actively working RIGHT NOW — clocked in (per-job 'work'
-// or day 'shift') OR en route / in progress on a job today? Merely having a job
-// scheduled for later today is NOT "working" and must not broadcast a location
-// (that was the "why am I on the map at home, with the app closed?" leak). This
-// gates BOTH starting tracking and continuing it, so tracking self-terminates
-// the moment someone goes off the clock.
+// What checkWork reads for each clean: enough to name it on the dispatch map,
+// fence its property, and put it in day order.
+const JOB_FIELDS = 'id, status, scheduled_start, route_order, job_number, client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)'
+
+// Is this crew member actively working RIGHT NOW? Merely having a job scheduled
+// for later today is NOT "working" and must not broadcast a location (that was
+// the "why am I on the map at home, with the app closed?" leak). This gates
+// BOTH starting tracking and continuing it, so tracking self-terminates the
+// moment someone goes off the clock.
+//
+// Working means an open time entry (a punch on a clean, or a day shift) or a
+// clean they are en route to today. A day-shift company ('daily') also counts a
+// clean in progress: a clean marked started is its only per-job signal. A
+// per-job company does not. There, in progress with no open punch means the
+// crew member paused the clean ("Going to another job", a break) or clocked out
+// and the completion gate held it open. Either way they are off the clock, and
+// the web dispatch board already leaves them off. Counting it kept a phone
+// reporting its location all evening after a stranded clean, and pushing
+// "you're still clocked in" at every ping.
 //
 // With no signal the answer comes from the last good copy of the same reads
 // plus the punches and status changes still queued in the outbox. It used to
@@ -94,41 +108,61 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
 // off after signal came back. `working` is null only when there is no way to
 // tell (offline and nothing saved yet); each caller picks its safe side.
 //
-// Also returns the one in-progress job today, with its address, for the
-// geofence check — from the same read, so offline the "you left the property
-// while clocked in" reminder still fires.
+// The same reads (so this still works offline) also give:
+// - activeJob: the clean the dispatch dot names. Per-job: the one they clocked
+//   into last. Daily: pickActiveJob.
+// - fenceJobs: the cleans the left-the-property check measures against. Every
+//   push is a claim, so per-job fences exactly the cleans they are clocked
+//   into: "you're still clocked in" is true of those and no others, including
+//   one they forgot to clock out of before starting the next. Daily fences the
+//   active clean ("not marked complete").
 // Exported for scripts/test-offline-auth.mjs.
-export async function checkWork(userId: string): Promise<{ working: boolean | null; activeJob: any | null }> {
+export async function checkWork(userId: string, daily = false): Promise<{ working: boolean | null; activeJob: any | null; fenceJobs: any[] }> {
   const now = new Date()
   const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
   const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
   const [entriesRes, jobsRes] = await Promise.all([
+    // Each punch brings its clean along: it can be one they aren't assigned
+    // to, or yesterday's, and neither is in today's read below.
     cachedQuery(`track:open:${userId}`, supabase
-      .from('job_time_entries').select('id, user_id, job_id, entry_type, clocked_out_at')
+      .from('job_time_entries')
+      .select(`id, user_id, job_id, entry_type, clocked_in_at, clocked_out_at, jobs!job_time_entries_job_id_fkey(${JOB_FIELDS})`)
       .eq('user_id', userId).is('clocked_out_at', null).limit(20)),
+    // Embeds name their FK: a second FK between these tables would make an
+    // unhinted embed ambiguous (HTTP 300), and this read would fail everywhere.
     cachedQuery(`track:today:${userId}`, supabase
       .from('jobs')
-      .select('id, status, scheduled_start, job_assignments!inner(user_id), client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)')
+      .select(`${JOB_FIELDS}, job_assignments!job_assignments_job_id_fkey!inner(user_id)`)
       .eq('job_assignments.user_id', userId)
       .gte('scheduled_start', todayStart.toISOString())
       .lte('scheduled_start', todayEnd.toISOString())),
   ])
+  // Saved rows can be from an earlier day: keep today's (the server already
+  // did that for live rows). Queued en-route / start / complete apply on top.
+  const todays = jobsRes.data
+    ? await overlayPending('jobs', (jobsRes.data as any[]).filter(j => inDay(j.scheduled_start, todayStart, todayEnd)))
+    : null
 
   if (entriesRes.data) {
     // A clock-in made offline is a queued upsert; a clock-out or pause is a
     // queued update that stamps clocked_out_at on it.
-    const entries = await overlayPending('job_time_entries', entriesRes.data as any[], v => v.user_id === userId)
-    if (entries.some((e: any) => !e.clocked_out_at)) {
-      return { working: true, activeJob: jobsRes.data ? await activeJobFrom(jobsRes.data as any[], todayStart, todayEnd) : null }
+    const open = (await overlayPending('job_time_entries', entriesRes.data as any[], v => v.user_id === userId))
+      .filter((e: any) => !e.clocked_out_at)
+    if (open.length > 0) {
+      if (!daily) {
+        const clockedIn = jobsClockedInto(open, todays ?? [])
+        return { working: true, activeJob: clockedIn[0] ?? null, fenceJobs: clockedIn }
+      }
+      const activeJob = todays ? pickActiveJob(todays) : null
+      return { working: true, activeJob, fenceJobs: activeJob ? [activeJob] : [] }
     }
   }
-  if (!jobsRes.data) return { working: null, activeJob: null }
-  // Saved rows can be from an earlier day: keep today's (the server already
-  // did that for live rows). Queued en-route / start / complete apply on top.
-  const todays = await overlayPending('jobs', (jobsRes.data as any[]).filter(j => inDay(j.scheduled_start, todayStart, todayEnd)))
-  const working = todays.some((j: any) => j.status === 'en_route' || j.status === 'in_progress')
-  if (!working && !entriesRes.data) return { working: null, activeJob: null }
-  return { working, activeJob: working ? pickActiveJob(todays) : null }
+  if (!todays) return { working: null, activeJob: null, fenceJobs: [] }
+  const working = todays.some((j: any) => j.status === 'en_route' || (daily && j.status === 'in_progress'))
+  if (!working && !entriesRes.data) return { working: null, activeJob: null, fenceJobs: [] }
+  // Per-job with no open punch means en route: nothing to name or fence yet.
+  const activeJob = working && daily ? pickActiveJob(todays) : null
+  return { working, activeJob, fenceJobs: activeJob ? [activeJob] : [] }
 }
 
 function inDay(iso: string, start: Date, end: Date): boolean {
@@ -136,15 +170,38 @@ function inDay(iso: string, start: Date, end: Date): boolean {
   return t >= start.getTime() && t <= end.getTime()
 }
 
-async function activeJobFrom(rows: any[], start: Date, end: Date) {
-  return pickActiveJob(await overlayPending('jobs', rows.filter(j => inDay(j.scheduled_start, start, end))))
+// The cleans a per-job crew member is clocked into, newest punch first. Any
+// open punch on a clean counts, whatever its entry_type ('job' exists as well
+// as 'work'). A punch queued offline for a clean that isn't in today's read has
+// no address to fence yet, but its id still names the clean on the map.
+function jobsClockedInto(open: any[], todays: any[]): any[] {
+  const punches = open
+    .filter((e: any) => e.job_id && e.entry_type !== 'shift')
+    .sort((a: any, b: any) => ms(b.clocked_in_at) - ms(a.clocked_in_at))
+  const seen = new Set<string>()
+  const jobs: any[] = []
+  for (const e of punches) {
+    if (seen.has(e.job_id)) continue
+    seen.add(e.job_id)
+    // Today's copy first: it carries queued status changes.
+    jobs.push(todays.find((j: any) => j.id === e.job_id) ?? e.jobs ?? { id: e.job_id })
+  }
+  return jobs
 }
 
-// The geofence needs exactly one clean in progress — with two it can't know
-// which property to fence, same as the old .maybeSingle() lookup.
+function ms(iso: any): number {
+  const t = new Date(iso ?? 0).getTime()
+  return Number.isFinite(t) ? t : 0
+}
+
+// The clean a day-shift crew member is on: the LAST one in progress in their
+// day order (byCrewDayOrder). Two in progress at once is normal (a paused clean,
+// or one the completion gate held open, and then the next one started), and
+// they work the day in order, so the later clean is where they are. The old
+// lookup returned none with two, which switched the fence off until one closed.
 function pickActiveJob(todays: any[]) {
-  const inProgress = todays.filter((j: any) => j.status === 'in_progress')
-  return inProgress.length === 1 ? inProgress[0] : null
+  const inProgress = todays.filter((j: any) => j.status === 'in_progress').sort(byCrewDayOrder)
+  return inProgress[inProgress.length - 1] ?? null
 }
 
 export async function startLocationTracking(user: any, opts?: { requestBackground?: boolean }) {
@@ -158,7 +215,7 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
   // job, or clocked out), make sure any prior tracking — including a lingering
   // background task from an earlier session — is fully stopped and the dispatch
   // dot is removed. Off the clock = off the map.
-  const { working } = await checkWork(user.id)
+  const { working } = await checkWork(user.id, await isDailyMode(user))
   if (working === false) {
     await stopLocationTracking()
     return
@@ -247,18 +304,18 @@ export async function stopLocationTracking() {
 }
 
 // Stop tracking when the crew member is genuinely done working — no open time
-// entry (work or shift) AND no still-active job today. Called after clock-out /
-// job completion. Before this, per-job crews had NO stop path at all: the ping
-// timer and the OS background task ran until the app was killed (battery drain
-// + "why is it tracking me at home"). Daily-shift crews keep tracking until
-// "End my day" because their shift entry stays open.
+// entry (work or shift) and nothing else checkWork counts as working. Called
+// after clock-out / job completion. Before this, per-job crews had NO stop path
+// at all: the ping timer and the OS background task ran until the app was
+// killed (battery drain + "why is it tracking me at home"). Daily-shift crews
+// keep tracking until "End my day" because their shift entry stays open.
 export async function maybeStopLocationTracking(user: any) {
   try {
     currentUser = user // so stopLocationTracking clears the right row
     // Stop only on a definite "not working" — which offline includes a
     // clock-out that is still queued. Can't tell → keep tracking; the next
     // ping re-checks.
-    if ((await checkWork(user.id)).working !== false) return
+    if ((await checkWork(user.id, await isDailyMode(user))).working !== false) return
     await stopLocationTracking()
   } catch { /* best-effort — worst case tracking continues as before */ }
 }
@@ -266,13 +323,15 @@ export async function maybeStopLocationTracking(user: any) {
 // Day-shift tenants (time_tracking_mode = 'daily') have no per-job clock: the
 // "active job" the departure check keys on is merely a clean marked started.
 // App.tsx caches the mode on the user as _timeMode; the headless background
-// task rebuilds a bare user, so fall back to the tenant row.
+// task rebuilds a bare user, so fall back to the tenant row. That read is
+// cached: the mode decides what counts as working and which push is true, so a
+// headless relaunch in a dead zone must still know it.
 async function isDailyMode(user: any): Promise<boolean> {
   if (user?._timeMode) return user._timeMode === 'daily'
   try {
-    const { data } = await supabase.from('tenants')
-      .select('time_tracking_mode').eq('id', user.tenant_id).maybeSingle()
-    return data?.time_tracking_mode === 'daily'
+    const { data } = await cachedQuery(`track:mode:${user.tenant_id}`, supabase.from('tenants')
+      .select('time_tracking_mode').eq('id', user.tenant_id).maybeSingle())
+    return (data as any)?.time_tracking_mode === 'daily'
   } catch { return false }
 }
 
@@ -281,8 +340,7 @@ async function isDailyMode(user: any): Promise<boolean> {
 // day-shift crew member has no per-job clock — their paid day is untouched —
 // they just left a clean that isn't marked complete. Telling them to "clock
 // out" sends them looking for a button that does not exist in that mode.
-async function notifyLeftProperty(user: any, jobId: string, property: string, extra: Record<string, any> = {}) {
-  const daily = await isDailyMode(user)
+async function notifyLeftProperty(daily: boolean, jobId: string, property: string, extra: Record<string, any> = {}) {
   await Notifications.scheduleNotificationAsync({
     content: {
       title: tStatic(daily ? 'left_site_daily_title' : 'left_site_clocked_title'),
@@ -334,7 +392,8 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
     // dot, and record nothing. This is what stops an Always-granted phone from
     // reporting location after the crew member is done for the day. Only on a
     // definite no: a dead zone mid-clean is not "off the clock".
-    const { working, activeJob } = await checkWork(user.id)
+    const daily = await isDailyMode(user)
+    const { working, activeJob, fenceJobs } = await checkWork(user.id, daily)
     if (working === false) {
       await stopLocationTracking()
       return
@@ -352,17 +411,16 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
       updated_at: new Date().toISOString(),
     }, { onConflict: 'tenant_id,user_id' })
 
-    // Geofence check
-    if (activeJob?.client_addresses) {
-      const addr = activeJob.client_addresses as any
-      if (canFenceOn(addr)) {
-        const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
-        await hydrateDismissals()
-        const dismissed = geofenceDismissedUntil[activeJob.id] || 0
+    // Geofence check: every clean the push would be true about (see checkWork)
+    for (const job of fenceJobs) {
+      const addr = job.client_addresses as any
+      if (!canFenceOn(addr)) continue
+      const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
+      await hydrateDismissals()
+      const dismissed = geofenceDismissedUntil[job.id] || 0
 
-        if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
-          await notifyLeftProperty(user, activeJob.id, addr.nickname || addr.street || tStatic('arrival_generic_property'))
-        }
+      if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
+        await notifyLeftProperty(daily, job.id, addr.nickname || addr.street || tStatic('arrival_generic_property'))
       }
     }
   } catch (e) {
@@ -375,7 +433,8 @@ async function pingLocation(user: any) {
     // Stop the moment they're no longer working — belt-and-suspenders with
     // maybeStopLocationTracking so a stray timer can't keep broadcasting.
     // Only on a definite no (see checkWork).
-    const { working, activeJob } = await checkWork(user.id)
+    const daily = await isDailyMode(user)
+    const { working, activeJob, fenceJobs } = await checkWork(user.id, daily)
     if (working === false) {
       await stopLocationTracking()
       return
@@ -400,33 +459,33 @@ async function pingLocation(user: any) {
     }, { onConflict: 'tenant_id,user_id' })
 
     // ── GEOFENCE CHECK ──
-    // If crew is clocked into a job, check if they've left the property
-    if (activeJob && activeJob.client_addresses) {
-      const addr = activeJob.client_addresses as any
-      if (canFenceOn(addr)) {
-        const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
-        await hydrateDismissals()
-        const dismissed = geofenceDismissedUntil[activeJob.id] || 0
+    // Every clean the push would be true about: per-job, each one they are
+    // clocked into; daily, the clean in progress (see checkWork)
+    for (const job of fenceJobs) {
+      const addr = job.client_addresses as any
+      if (!canFenceOn(addr)) continue
+      const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
+      await hydrateDismissals()
+      const dismissed = geofenceDismissedUntil[job.id] || 0
 
-        if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
-          const propertyName = addr.nickname || addr.street || tStatic('arrival_generic_property')
+      if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
+        const propertyName = addr.nickname || addr.street || tStatic('arrival_generic_property')
 
-          // Fire local push notification
-          await notifyLeftProperty(user, activeJob.id, propertyName, { categoryIdentifier: 'geofence' })
+        // Fire local push notification
+        await notifyLeftProperty(daily, job.id, propertyName, { categoryIdentifier: 'geofence' })
 
-          // Log the geofence departure (non-blocking — if this fails,
-          // the push already fired, so we just swallow the error)
-          try {
-            await supabase.from('notification_log').insert({
-              tenant_id: user.tenant_id,
-              job_id: activeJob.id,
-              user_id: user.id,
-              type: 'geofence_departure',
-              channel: 'push',
-              message: `Left ${propertyName} while clocked in (${Math.round(dist)}m away)`,
-            })
-          } catch { /* non-blocking */ }
-        }
+        // Log the geofence departure (non-blocking — if this fails,
+        // the push already fired, so we just swallow the error)
+        try {
+          await supabase.from('notification_log').insert({
+            tenant_id: user.tenant_id,
+            job_id: job.id,
+            user_id: user.id,
+            type: 'geofence_departure',
+            channel: 'push',
+            message: `Left ${propertyName} while clocked in (${Math.round(dist)}m away)`,
+          })
+        } catch { /* non-blocking */ }
       }
     }
 
