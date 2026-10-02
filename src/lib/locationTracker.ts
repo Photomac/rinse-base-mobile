@@ -72,6 +72,64 @@ export function dismissGeofenceAlert(jobId: string) {
   AsyncStorage.setItem(DISMISS_KEY, JSON.stringify(geofenceDismissedUntil)).catch(() => {})
 }
 
+// ── One departure, one push ──
+// The checks below run on every location update (the 5-minute timer, the OS
+// background task, any timer a racing startLocationTracking leaked), and each
+// used to push whenever the crew member was outside the fence. Nothing
+// remembered that they had already been told, so a clean left open after the
+// crew drove off pushed every few minutes until someone closed it, often two
+// or three at once. CKS 2026-09-30: 50 pushes to one inspector over two hours.
+//
+// Now a job's departure is announced once. The next push needs the crew member
+// to be seen back inside the fence first (a new departure), and even then not
+// within REALERT_GAP, so GPS drift across the edge can't turn into a stream.
+// The check-and-set is synchronous after the one await, so two checks racing
+// in the same JS runtime can't both claim the same departure. Persisted, so a
+// headless relaunch of the background task doesn't forget it already told them.
+const REALERT_GAP = 30 * 60 * 1000
+const DEPARTURE_KEY = 'geofence_departures'
+type DepartureState = { alertedAt: number; backInside: boolean }
+let departures: Record<string, DepartureState> = {}
+let departuresHydrated: Promise<void> | null = null
+
+// One shared read: a second check arriving mid-read waits for it rather than
+// deciding on an empty record.
+function hydrateDepartures(): Promise<void> {
+  if (!departuresHydrated) {
+    departuresHydrated = (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(DEPARTURE_KEY)
+        if (raw) departures = { ...JSON.parse(raw), ...departures }
+      } catch { /* cache-only degradation */ }
+    })()
+  }
+  return departuresHydrated
+}
+
+function persistDepartures() {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000
+  for (const [id, d] of Object.entries(departures)) if (d.alertedAt < cutoff) delete departures[id]
+  AsyncStorage.setItem(DEPARTURE_KEY, JSON.stringify(departures)).catch(() => {})
+}
+
+// True exactly when this check should push. Call it for every fenced job on
+// every check, inside or out: seeing them inside is what re-arms the alert.
+async function claimDepartureAlert(jobId: string, outside: boolean): Promise<boolean> {
+  await hydrateDepartures()
+  await hydrateDismissals()
+  // Nothing below awaits until the claim is recorded.
+  const d = departures[jobId]
+  if (!outside) {
+    if (d && !d.backInside) { d.backInside = true; persistDepartures() }
+    return false
+  }
+  if (Date.now() <= (geofenceDismissedUntil[jobId] || 0)) return false
+  if (d && (!d.backInside || Date.now() - d.alertedAt < REALERT_GAP)) return false
+  departures[jobId] = { alertedAt: Date.now(), backInside: false }
+  persistDepartures()
+  return true
+}
+
 // Haversine distance in meters
 function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000
@@ -275,9 +333,11 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
 
   // Start periodic pinging. Clear any existing timer first — clock-in, resume
   // and relaunch all call this, and stacked intervals meant duplicate pings.
+  // Swap the timer BEFORE the first ping's await: two overlapping calls used to
+  // both clear an empty slot, then both set one, leaking an interval.
   if (pingTimer) clearInterval(pingTimer)
-  await pingLocation(user)
   pingTimer = setInterval(() => pingLocation(user), PING_INTERVAL)
+  await pingLocation(user)
 }
 
 export async function stopLocationTracking() {
@@ -416,10 +476,8 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
       const addr = job.client_addresses as any
       if (!canFenceOn(addr)) continue
       const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
-      await hydrateDismissals()
-      const dismissed = geofenceDismissedUntil[job.id] || 0
 
-      if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
+      if (await claimDepartureAlert(job.id, dist > GEOFENCE_RADIUS)) {
         await notifyLeftProperty(daily, job.id, addr.nickname || addr.street || tStatic('arrival_generic_property'))
       }
     }
@@ -465,10 +523,8 @@ async function pingLocation(user: any) {
       const addr = job.client_addresses as any
       if (!canFenceOn(addr)) continue
       const dist = haversineDistance(loc.coords.latitude, loc.coords.longitude, addr.lat, addr.lng)
-      await hydrateDismissals()
-      const dismissed = geofenceDismissedUntil[job.id] || 0
 
-      if (dist > GEOFENCE_RADIUS && Date.now() > dismissed) {
+      if (await claimDepartureAlert(job.id, dist > GEOFENCE_RADIUS)) {
         const propertyName = addr.nickname || addr.street || tStatic('arrival_generic_property')
 
         // Fire local push notification

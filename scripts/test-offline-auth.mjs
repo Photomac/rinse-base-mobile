@@ -42,6 +42,7 @@ const SCENARIOS = [
   'validTokenOffline',
   'trackerKeepsWorkingOffline',
   'trackerFollowsTheClock',
+  'departureAnnouncedOnce',
 ]
 
 let failed = 0
