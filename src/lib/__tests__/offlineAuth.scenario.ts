@@ -403,6 +403,61 @@ const scenarios: Record<string, () => Promise<void>> = {
     server.mode = 'online'
   },
 
+  // One departure, one push (CKS 2026-09-30: an inspection left open after the
+  // inspector drove off pushed 50 times in two hours, often 2-3 at once).
+  async departureAnnouncedOnce() {
+    seedSession(nowSec() + 3000)
+    server.mode = 'online'
+    let c = load()
+    const here = { lat: 47.2, lng: -121.8 }
+    const away = { lat: 47.6, lng: -122.3 }
+    const user = { id: 'Q1', tenant_id: 'T1', _timeMode: 'per_job' }
+    server.tables.jobs = [{
+      id: 'J1', status: 'in_progress', scheduled_start: localAt(0, 10), route_order: null, job_number: 1,
+      job_assignments: [{ user_id: 'Q1' }],
+      client_addresses: { lat: here.lat, lng: here.lng, geocode_precision: null, nickname: 'Cabin', street: '1 Main' },
+    }]
+    server.tables.job_time_entries = [{ id: 'E1', user_id: 'Q1', job_id: 'J1', entry_type: 'work', clocked_in_at: localAt(0, 10), clocked_out_at: null }]
+    const stand = (p: any) => { h.position = { latitude: p.lat, longitude: p.lng, accuracy: 5 } }
+    const ping = async () => {
+      server.rest = []
+      h.pushes = []
+      await c.startLocationTracking(user)
+      await c.stopLocationTracking()
+      return { pushes: (h.pushes as any[]).length, logged: server.rest.filter(r => r.table === 'notification_log').length }
+    }
+
+    stand(away)
+    let r = await ping()
+    ok('first check outside the fence: one push, logged', r.pushes === 1 && r.logged === 1)
+    r = await ping()
+    ok('next check, still away: no push', r.pushes === 0 && r.logged === 0)
+
+    // Overlapping checks (leaked timer, background task) must not both claim it.
+    stand(here); await ping(); stand(away)
+    const realNow = Date.now
+    Date.now = () => realNow() + 31 * 60 * 1000
+    try {
+      server.rest = []
+      h.pushes = []
+      await Promise.all([c.startLocationTracking(user), c.startLocationTracking(user)])
+      await c.stopLocationTracking()
+      ok('back on site, then a new departure after the gap: two racing checks push once',
+        (h.pushes as any[]).length === 1)
+    } finally { Date.now = realNow }
+
+    // Back inside, out again within REALERT_GAP: GPS drift, not a new departure.
+    stand(here); await ping(); stand(away)
+    r = await ping()
+    ok('re-crossing the edge within 30 minutes: no push', r.pushes === 0)
+
+    // A relaunch (fresh module state) remembers it already told them.
+    delete require.cache[require.resolve(process.env.CLIENT_BUNDLE as string)]
+    c = load()
+    r = await ping()
+    ok('after a relaunch, still away: no push (persisted)', r.pushes === 0)
+  },
+
   // Before the fix, same conditions as expiredColdStartThenReconnect. Opt-in
   // (--baseline): takes ~2 minutes because that is the bug.
   async baseline() {
