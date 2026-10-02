@@ -114,6 +114,30 @@ const settle = () => new Promise(r => setTimeout(r, 10))
   ok('…and the unrelated op behind them still lands', (await pendingOpCount()) === 0 &&
     net.applied.some(a => a.table === 'jobs' && a.values.status === 'completed'))
 
+  // Forward-only status writes (CKS #1083, 2026-09-30). A start queued behind
+  // a stuck op can replay after the job was completed; its IN filter must
+  // travel with it to the server, and the offline overlay must not show a
+  // completed job as started again.
+  net.online = false
+  net.rejectTables.clear()
+  net.rejectOp = null
+  const STARTABLE = ['pending_approval', 'scheduled', 'en_route', 'in_progress']
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'J5' }, matchIn: { status: STARTABLE }, values: { status: 'in_progress' } })
+  const startShown = await overlayPending('jobs', [
+    { id: 'J5', status: 'completed' },
+  ])
+  ok('overlay: a queued start does not reopen a completed job', startShown[0].status === 'completed')
+  const shown2 = await overlayPending('jobs', [{ id: 'J5', status: 'scheduled' }])
+  ok('overlay: …but still starts a scheduled one', shown2[0].status === 'in_progress')
+  await settle()
+  net.online = true
+  net.applied.length = 0
+  await flushOutbox()
+  const startWrite = net.applied.find(a => a.table === 'jobs' && a.values.status === 'in_progress')
+  ok('replayed start carries its status IN filter to the server',
+    !!startWrite && startWrite.filters.includes('id=eq.J5') &&
+    startWrite.filters.includes(`status=in.(${STARTABLE.join(',')})`))
+
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }
   console.log('\nAll outbox invariants hold.')
 })()
