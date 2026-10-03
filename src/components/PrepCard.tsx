@@ -10,8 +10,11 @@
 //                          par + any per-turnover extra for that job, floored
 //                          at 0. Off by default: companies with a linen
 //                          service or linen room don't want this on a phone.
-//   ⏰ Guests arriving    — a confirmed stay (guest or owner) checks in today
-//                          at a property being cleaned today.
+//   ⏰ Arriving today     — a confirmed guest stay checks in today at a property
+//                          being cleaned today, or its calendar is blocked from
+//                          today (said as a block — it may be an owner stay or
+//                          another site's booking). Prep-day buffers and
+//                          cross-listing echoes are skipped (lib/nextArrival).
 //   🧴 Restock            — supplies still flagged low at today's properties.
 //   🔑 Access             — no lockbox code AND no arrival instructions.
 //
@@ -33,6 +36,7 @@ import { tv } from '../lib/vocab'
 import { translateTexts, normalizeText } from '../lib/machineTranslate'
 import { ti, localeFor } from '../lib/i18n'
 import { cachedQuery } from '../lib/dataCache'
+import { pickNextArrival, shiftYmd, fmtWallTime, type ArrivalRow } from '../lib/nextArrival'
 import { todayKey } from '../lib/timezone'
 import { GOLD, GOLD_MUTED, SLATE, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
 
@@ -40,16 +44,6 @@ type Prop = { job: any; name: string }
 type Section = {
   key: string; icon: string; title: string; sub?: string
   lines: { text: string; job?: any }[]
-}
-
-// A reservation's check-in time is a bare wall-clock time in the tenant's zone
-// ("16:00:00"), not an instant — format it without any zone conversion.
-function fmtWallTime(hhmm: string | null | undefined, locale: string): string | null {
-  if (!hhmm) return null
-  const [h, m] = hhmm.split(':').map(Number)
-  if (Number.isNaN(h)) return null
-  const d = new Date(Date.UTC(2000, 0, 1, h, m || 0))
-  return d.toLocaleTimeString(locale, { timeZone: 'UTC', hour: 'numeric', minute: '2-digit' })
 }
 
 export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; onJobPress: (job: any) => void }) {
@@ -100,9 +94,11 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
           .select('crew_prep_linens, default_checkin_time').eq('id', user.tenant_id).maybeSingle()),
         cachedQuery(`prep:addr:${user.id}`, supabase.from('client_addresses')
           .select('id, lockbox_code, arrival_instructions, laundry_bag_color, default_checkin_time').in('id', addrIds)),
-        cachedQuery(`prep:resv:${user.id}`, supabase.from('property_reservations')
-          .select('address_id, checkin_date, checkin_time').in('address_id', addrIds)
-          .eq('checkin_date', today).eq('status', 'confirmed')),
+        // Yesterday → tomorrow, blocks included: a block is only noise when the
+        // stay it echoes or buffers is in view (see lib/nextArrival).
+        cachedQuery(`prep:resv2:${user.id}`, supabase.from('property_reservations')
+          .select('id, address_id, platform, guest_name, calendar_id, checkin_date, checkout_date, checkin_time').in('address_id', addrIds)
+          .gte('checkout_date', shiftYmd(today, -1)).lte('checkin_date', shiftYmd(today, 1)).eq('status', 'confirmed')),
         cachedQuery(`prep:restock:${user.id}`, supabase.from('job_inventory_log')
           .select('item_name, jobs!inner(address_id)').eq('needs_restock', true).in('jobs.address_id', addrIds)),
       ])
@@ -158,20 +154,28 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
         })
       }
 
-      // ⏰ Guests arriving today — property default, then tenant default, when
-      // the feed sends no time (iCal never does).
-      const arrivals: Record<string, string | null> = {}
-      // Re-filter to today: an offline cache hit can be yesterday's arrivals.
-      ;(resvRes.data ?? []).filter((r: any) => r.checkin_date === today).forEach((r: any) => {
-        const time = r.checkin_time || addrById[r.address_id]?.default_checkin_time || tenant.default_checkin_time || null
-        const prev = arrivals[r.address_id]
-        if (prev === undefined || (time && (!prev || time < prev))) arrivals[r.address_id] = time
-      })
+      // ⏰ Arriving today — property default, then tenant default, when the feed
+      // sends no time (iCal never does). A block is said to be a block: it used
+      // to read "guest arrives 4:00 PM" off an "Airbnb (Not available)" row the
+      // office's schedule didn't show as an arrival (Precision H&W, 2026-10-03).
+      const arrivals: Record<string, { time: string | null; hold: boolean }> = {}
+      const resvByAddr: Record<string, ArrivalRow[]> = {}
+      ;(resvRes.data ?? []).forEach((r: any) => { (resvByAddr[r.address_id] ||= []).push(r) })
+      for (const [id, rows] of Object.entries(resvByAddr)) {
+        // pickNextArrival re-filters to today, so an offline cache hit from
+        // yesterday can't surface yesterday's arrivals.
+        const n = pickNextArrival(today, rows,
+          { property: addrById[id]?.default_checkin_time, company: tenant.default_checkin_time })
+        if (n.kind !== 'none' && n.sameDay) arrivals[id] = { time: n.time, hold: n.kind === 'hold' }
+      }
       const arrivalLines = Object.entries(arrivals)
-        .sort((a, b) => (a[1] || '99').localeCompare(b[1] || '99'))
-        .map(([id, time]) => {
-          const when = fmtWallTime(time, locale)
-          return { text: `${nameByAddr[id]} — ${when ? ti(t('prep_guest_arrives'), { time: when }) : t('prep_arrives_today')}`, job: jobByAddr[id] }
+        .sort((a, b) => (a[1].time || '99').localeCompare(b[1].time || '99'))
+        .map(([id, a]) => {
+          const when = fmtWallTime(a.time, locale)
+          const what = a.hold
+            ? (when ? ti(t('prep_blocked_from'), { time: when }) : t('prep_blocked_today'))
+            : (when ? ti(t('prep_guest_arrives'), { time: when }) : t('prep_arrives_today'))
+          return { text: `${nameByAddr[id]} — ${what}`, job: jobByAddr[id] }
         })
       if (arrivalLines.length) out.push({ key: 'arrivals', icon: '⏰', title: t('prep_turnaround_title'), lines: arrivalLines })
 
