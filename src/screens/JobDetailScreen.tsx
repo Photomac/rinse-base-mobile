@@ -5,7 +5,8 @@ import * as ImagePicker from 'expo-image-picker'
 import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 // Job times render in the tenant's zone, not the phone's — src/lib/timezone.ts.
-import { fmtTime } from '../lib/timezone'
+import { fmtTime, dayKey } from '../lib/timezone'
+import { pickNextArrival, shiftYmd, fmtWallTime, type ArrivalRow, type NextArrival } from '../lib/nextArrival'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { WalkthroughScreen } from './WalkthroughScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
@@ -21,7 +22,7 @@ import { uploadImageToJobPhotos } from '../lib/chatAttachments'
 import { InspectionResultCard } from '../components/InspectionResultCard'
 import { useLang } from '../contexts/LangContext'
 import { useMachineTranslation } from '../lib/machineTranslate'
-import { ti } from '../lib/i18n'
+import { ti, localeFor } from '../lib/i18n'
 import { captureRequiredPhoto } from '../lib/requiredPhotoCapture'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -254,6 +255,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // job row (sync-ical keeps them fresh on drift); bag color lives on the property.
   const [turnover, setTurnover] = useState<{ checkout: string | null; checkin: string | null; window: number | null; urgency: string | null } | null>(null)
   const [guestCount, setGuestCount] = useState<number | null>(null)
+  const [nextArrival, setNextArrival] = useState<NextArrival | null>(null)
   // Pets the PMS says are on the stay (property_reservations.pet_count). null =
   // the source didn't say — iCal never does.
   const [bookedPets, setBookedPets] = useState<number | null>(null)
@@ -342,6 +344,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     loadChecklist()
     loadTimeEntries()
     loadPropMeta()
+    loadNextArrival().catch(() => {})
     loadRouteStop()
     loadPhotoRequirements()
   }, [])
@@ -387,6 +390,29 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     const ordered = [...data].sort((a: any, b: any) => a.route_order - b.route_order)
     const idx = ordered.findIndex((j: any) => j.id === job.id)
     setRouteStop(idx === -1 ? null : { k: idx + 1, m: ordered.length })
+  }
+
+  // Who arrives after this clean, read off the property's calendar. The job row
+  // only carries a check-in for same-day turnovers, so crew had no idea a guest
+  // was due in two days, and a block was easy to mistake for a guest
+  // (lib/nextArrival). Silent when the property has nothing on file.
+  async function loadNextArrival() {
+    if (isTask || !addr?.id || !job.scheduled_start) return
+    const cleanYmd = dayKey(job.scheduled_start)
+    const [{ data: rows }, { data: a }, { data: ten }] = await Promise.all([
+      cachedQuery(`nextarr:${job.id}`, supabase.from('property_reservations')
+        .select('id, platform, guest_name, calendar_id, checkin_date, checkout_date, checkin_time')
+        .eq('address_id', addr.id).eq('status', 'confirmed')
+        .gte('checkout_date', shiftYmd(cleanYmd, -1))
+        .order('checkin_date').limit(60)),
+      cachedQuery(`nextarr:addr:${addr.id}`, supabase.from('client_addresses')
+        .select('default_checkin_time').eq('id', addr.id).maybeSingle()),
+      cachedQuery(`nextarr:ten:${user.tenant_id}`, supabase.from('tenants')
+        .select('default_checkin_time').eq('id', user.tenant_id).maybeSingle()),
+    ])
+    if (!rows || !rows.length) { setNextArrival(null); return }
+    setNextArrival(pickNextArrival(cleanYmd, rows as ArrivalRow[],
+      { property: (a as any)?.default_checkin_time, company: (ten as any)?.default_checkin_time }))
   }
 
   // Beds/baths/sqft aren't in the list-screen job payload, so fetch them here —
@@ -1376,6 +1402,33 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               )}
             </View>
           )}
+          {/* Next arrival off the calendar. Skipped when the strip above already
+              shows the same-day guest's exact check-in. */}
+          {nextArrival && !(turnover?.checkin && nextArrival.kind === 'guest' && nextArrival.sameDay) && (() => {
+            const n = nextArrival
+            if (n.kind === 'none') {
+              return <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 6 }}>🔑 {t('next_arrival_none')}</Text>
+            }
+            const locale = localeFor(lang)
+            const day = n.sameDay ? t('next_arrival_same_day')
+              : new Date(n.date + 'T12:00:00').toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })
+            const time = fmtWallTime(n.time, locale)
+            const when = time ? `${day} · ${time}` : day
+            if (n.kind === 'hold') {
+              return (
+                <View style={{ backgroundColor: '#FFFBEB', borderRadius: 10, padding: 10, marginTop: 8 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#92400E' }}>🚫 {t('next_arrival_blocked')}: {when}</Text>
+                  <Text style={{ fontSize: 11, color: '#92400E', marginTop: 3 }}>{t('next_arrival_blocked_hint')}</Text>
+                </View>
+              )
+            }
+            return (
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827', marginTop: 6 }}>
+                🔑 {t('next_checkin')}: {when}
+                {n.timeIsDefault && time ? <Text style={{ fontWeight: '400', color: '#6B7280' }}> ({t('usual_time')})</Text> : null}
+              </Text>
+            )
+          })()}
           {(!isTask || hasTaskLocation) && (
           <TouchableOpacity onPress={() => {
             const q = addr?.lat ? `${addr.lat},${addr.lng}` : `${addr?.street}, ${addr?.city}`
