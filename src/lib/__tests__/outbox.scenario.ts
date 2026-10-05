@@ -138,6 +138,58 @@ const settle = () => new Promise(r => setTimeout(r, 10))
     !!startWrite && startWrite.filters.includes('id=eq.J5') &&
     startWrite.filters.includes(`status=in.(${STARTABLE.join(',')})`))
 
+  // A clean's clock started twice (job_time_entries_one_open_per_job, 23505).
+  // The tap queued in a dead zone; meanwhile the arrival auto clock-in (or
+  // the web) opened an entry for the same person on the same clean. The
+  // queued start must fold into the running entry, not park, and the
+  // clock-out queued behind it must close THAT entry with the right minutes.
+  net.online = false
+  net.applied.length = 0
+  const rejectedBefore = (await rejectedOps()).length
+  const reportedBefore = reported.length
+  const tapId = uuid4()
+  await writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: {
+    id: tapId, job_id: 'J6', user_id: 'U1', clocked_in_at: '2026-10-02T23:40:24.000Z', entry_type: 'work', source: 'manual',
+  } })
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'J6' }, matchIn: { status: STARTABLE }, values: { status: 'in_progress' } })
+  await writeThrough({ table: 'job_time_entries', op: 'update', match: { id: tapId }, values: {
+    clocked_out_at: '2026-10-03T01:46:53.000Z', duration_minutes: 126,
+  } })
+  net.openWork.set('J6|U1', { id: 'AUTO1', clocked_in_at: '2026-10-02T23:39:02.000Z' })
+  await settle()
+  net.online = true
+  await flushOutbox()
+  const out6 = net.applied.find(a => a.op === 'update' && a.values?.clocked_out_at)
+  ok('refused queued clock-in folds into the running entry: queue drains', (await pendingOpCount()) === 0)
+  ok('…nothing parked, nothing reported', (await rejectedOps()).length === rejectedBefore && reported.length === reportedBefore)
+  ok('…the queued clock-out closes the RUNNING entry', !!out6 && out6.filters.includes('id=eq.AUTO1') && !net.openWork.has('J6|U1'))
+  ok('…with minutes from its own (earlier) start: 23:39:02 → 01:46:53 = 128', out6?.values.duration_minutes === 128)
+  ok('…its earlier start is left alone', !net.applied.some(a => a.op === 'update' && a.values?.clocked_in_at))
+  ok('…and the status write queued with it still lands', net.applied.some(a => a.table === 'jobs' && a.filters.includes('id=eq.J6')))
+
+  // Same, but the queued tap is the EARLIER start: the running entry takes it.
+  net.online = false
+  net.applied.length = 0
+  const tap2 = uuid4()
+  await writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: {
+    id: tap2, job_id: 'J7', user_id: 'U1', clocked_in_at: '2026-10-02T23:30:00.000Z', entry_type: 'work', source: 'manual',
+  } })
+  await writeThrough({ table: 'job_time_entries', op: 'update', match: { id: tap2 }, values: {
+    clocked_out_at: '2026-10-03T01:30:00.000Z', duration_minutes: 120,
+  } })
+  net.openWork.set('J7|U1', { id: 'WEB1', clocked_in_at: '2026-10-02T23:39:02.000Z' })
+  await settle()
+  net.online = true
+  await flushOutbox()
+  const moved = net.applied.find(a => a.op === 'update' && a.values?.clocked_in_at)
+  const out7 = net.applied.find(a => a.op === 'update' && a.values?.clocked_out_at)
+  ok('earlier queued tap: the running entry\'s start moves back to it',
+    !!moved && moved.filters.includes('id=eq.WEB1') && moved.filters.includes('clocked_out_at=is.null') &&
+    moved.values.clocked_in_at === '2026-10-02T23:30:00.000Z')
+  ok('…and the clock-out counts from that start: 120 min', !!out7 && out7.filters.includes('id=eq.WEB1') && out7.values.duration_minutes === 120)
+  ok('…queue drains', (await pendingOpCount()) === 0)
+  net.openWork.clear()
+
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }
   console.log('\nAll outbox invariants hold.')
 })()
