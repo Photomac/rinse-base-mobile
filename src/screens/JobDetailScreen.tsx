@@ -578,6 +578,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
   }
 
+  // The person's running entry on this clean, straight from the server — read
+  // when a clock-in or resume is refused because one already exists. null if
+  // there is none (or the read fails), and the caller reports the failure.
+  async function fetchOpenEntry(userId: string): Promise<any | null> {
+    const { data, error } = await supabase.from('job_time_entries')
+      .select('*').eq('job_id', job.id).eq('user_id', userId)
+      .is('clocked_out_at', null).order('clocked_in_at').limit(1)
+    return !error && data?.length ? data[0] : null
+  }
+
   // The roster loads after mount. Once it says this is somebody else's clean,
   // widen the clock to the whole job so a proxy punch is visible and closable.
   useEffect(() => { if (recordsForOthers) loadTimeEntries() }, [recordsForOthers])
@@ -891,13 +901,23 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     const { error: entryErr, queued } = await writeThrough({
       table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
     })
-    if (entryErr) {
+    // 23505 = this person already has a running entry on this clean
+    // (job_time_entries_one_open_per_job). Usually the arrival auto clock-in,
+    // which landed seconds before this tap on a screen that loaded without it
+    // (Cleanfix 10/02, Celebrity Clean x9); or they started on the web. Carry
+    // on with THAT entry: a second one would count the same minutes twice.
+    const running = entryErr?.code === '23505' ? await fetchOpenEntry(entry.user_id) : null
+    if (entryErr && !running) {
       setSaving(false)
       Alert.alert(t('error'), t('clock_in_failed'))
       return
     }
     if (queued) Alert.alert('📡', t('queued_offline'))
-    if (arrival) {
+    if (running) {
+      // Its start stands; this tap's arrival record is spent either way.
+      if (arrival) clearPendingArrival(job.id)
+      Alert.alert('⏱', ti(t('already_clocked_in_since'), { time: fmtTime(running.clocked_in_at) }))
+    } else if (arrival) {
       clearPendingArrival(job.id)
       // Tell them the backdate happened — the timer starting "in the past"
       // without explanation reads as a bug.
@@ -907,7 +927,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         }))
       }
     }
-    setActiveEntry(entry)
+    setActiveEntry(running ?? entry)
     setIsPaused(false)
     // Begin broadcasting location now that they're clocked in (don't wait for
     // an app relaunch, and don't require a job_assignment). Clock-in is the
@@ -1009,12 +1029,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     const { error: resumeErr } = await writeThrough({
       table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
     })
-    if (resumeErr) {
+    // 23505: already running here (resumed from the web, or a second tap).
+    const running = resumeErr?.code === '23505' ? await fetchOpenEntry(user.id) : null
+    if (resumeErr && !running) {
       setSaving(false)
       Alert.alert(t('error'), t('clock_in_failed'))
       return
     }
-    setActiveEntry(entry)
+    setActiveEntry(running ?? entry)
     setIsPaused(false)
     startLocationTracking(user, { requestBackground: true }).catch(() => {})
     loadTimeEntries()

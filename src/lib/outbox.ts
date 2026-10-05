@@ -23,6 +23,12 @@
 // - The outbox is NOT cleared on sign-out (unlike the read caches): queued ops
 //   are unpaid time entries, and RLS rejects them anyway if a different
 //   account replays them.
+// - One exception to "rejected = retry, then park": a queued clock-in on a
+//   clean that the server refuses because the same person already has a
+//   RUNNING entry there (unique index job_time_entries_one_open_per_job,
+//   23505). They are on the clock; it was started twice. resolveWorkStart()
+//   folds the queued one into the running one instead of parking it (and
+//   stalling everything queued behind it for five flushes).
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { reportClientError } from './errorReporter'
@@ -105,6 +111,55 @@ async function applyOp(w: OutboxWrite): Promise<{ error: any; status?: number }>
   return await q
 }
 
+// ── A clean's clock started twice ────────────────────────────────────────
+function isWorkStartConflict(op: OutboxOp, err: any): boolean {
+  const v: any = op.values
+  return op.table === 'job_time_entries' && op.op === 'upsert' && !Array.isArray(v)
+    && !!v?.job_id && v?.entry_type !== 'shift' && !v?.clocked_out_at
+    && err?.code === '23505'
+}
+
+/**
+ * Settle a queued clock-in X refused because entry O is already running for
+ * the same person on the same clean (the arrival auto clock-in, or a punch
+ * from the web, landed while X sat in the queue). Never parks: the person IS
+ * on the clock.
+ *  - O keeps the earlier of the two starts (X's tap is evidence they were
+ *    working by then).
+ *  - Writes still queued for X (pause, clock out) go to O instead, minutes
+ *    counted from O's start, because pay reads duration_minutes.
+ * A screen still showing X picks up O on its next reload. A clock-out sent to
+ * X before then matches no row; the job-close trigger closes O when the clean
+ * is completed, as it does any entry left running.
+ */
+async function resolveWorkStart(op: OutboxOp): Promise<'resolved' | 'offline' | 'unresolved'> {
+  const start: any = op.values
+  const read: any = await supabase.from('job_time_entries')
+    .select('id, clocked_in_at')
+    .eq('job_id', start.job_id).eq('user_id', start.user_id).is('clocked_out_at', null)
+    .limit(1)
+  if (read.error) return read.status === 0 ? 'offline' : 'unresolved'
+  const open = read.data?.[0]
+  // Closed since the insert was refused: the next flush's insert goes through.
+  if (!open) return 'unresolved'
+
+  let startIso: string = open.clocked_in_at
+  if (Date.parse(start.clocked_in_at) < Date.parse(open.clocked_in_at)) {
+    const res: any = await supabase.from('job_time_entries')
+      .update({ clocked_in_at: start.clocked_in_at }).eq('id', open.id).is('clocked_out_at', null)
+    if (res.error && res.status === 0) return 'offline'
+    if (!res.error) startIso = start.clocked_in_at
+  }
+  const minutes = (toIso: string) => Math.max(0, Math.round((Date.parse(toIso) - Date.parse(startIso)) / 60000))
+  await writeQueue((await readQueue()).filter(x => x.id !== op.id).map(x => {
+    if (x.table !== 'job_time_entries' || x.op !== 'update' || x.match?.id !== start.id) return x
+    const values: any = { ...x.values }
+    if (values.clocked_out_at) values.duration_minutes = minutes(values.clocked_out_at)
+    return { ...x, match: { ...x.match, id: open.id }, values }
+  }))
+  return 'resolved'
+}
+
 /**
  * Perform a write now if possible, queue it if the network is down.
  * Returns { queued: true } when the op is safely on-device (treat as success —
@@ -145,6 +200,13 @@ export async function flushOutbox(): Promise<void> {
         continue
       }
       if (res.status === 0) break // still offline — keep everything, retry later
+      if (isWorkStartConflict(op, res.error)) {
+        const settled = await resolveWorkStart(op)
+        if (settled === 'resolved') continue
+        if (settled === 'offline') break
+        // 'unresolved' is counted like any rejection below, so a start that
+        // somehow keeps losing still surfaces instead of looping forever.
+      }
       const rejects = (op.rejects || 0) + 1
       const msg = String(res.error?.message || res.error)
       const cur = await readQueue()

@@ -100,11 +100,35 @@ export async function refreshArrivalGeofences(user: any) {
       }))
 
     if (regions.length === 0) { await stopArrivalGeofences(); return }
+    // Registering re-fires Enter for every region the phone is already inside:
+    // expo-location starts each region over as "unknown" and asks the OS for
+    // its state (iOS requestStateForRegion, Android INITIAL_TRIGGER_ENTER).
+    // This runs on every Dashboard load, so a crew member opening the app at
+    // the property set off one arrival run per load. Register only when the
+    // set actually changed.
+    if (await sameRegionsRegistered(regions)) return
     // startGeofencingAsync REPLACES the monitored set, so stale regions from
     // yesterday's jobs drop off automatically.
     await Location.startGeofencingAsync(ARRIVAL_TASK, regions)
   } catch { /* enhancement only — never break the dashboard */ }
 }
+
+const regionKey = (r: any) =>
+  `${r.identifier}@${Number(r.latitude).toFixed(6)},${Number(r.longitude).toFixed(6)}/${Number(r.radius)}`
+
+// Is exactly this set already being monitored? Any doubt reads as "no", which
+// registers again — the behaviour before this check existed.
+async function sameRegionsRegistered(regions: Location.LocationRegion[]): Promise<boolean> {
+  try {
+    if (!(await Location.hasStartedGeofencingAsync(ARRIVAL_TASK))) return false
+    const opts: any = await TaskManager.getTaskOptionsAsync(ARRIVAL_TASK)
+    const live: any[] = Array.isArray(opts?.regions) ? opts.regions : []
+    return live.map(regionKey).sort().join('|') === regions.map(regionKey).sort().join('|')
+  } catch { return false }
+}
+
+// Jobs whose arrival handler is running right now (see the handler).
+const inFlight = new Set<string>()
 
 export async function stopArrivalGeofences() {
   try {
@@ -139,6 +163,16 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
   const { eventType, region } = data as { eventType: Location.GeofencingEventType; region: Location.LocationRegion }
   if (eventType !== Location.GeofencingEventType.Enter || !region?.identifier) return
   const jobId = region.identifier
+
+  // One run per job at a time. The OS can deliver several Enters for the same
+  // region within milliseconds (one per registration — see
+  // refreshArrivalGeofences), and every run would pass the "already prompted"
+  // and "already on the clock" reads below before any of them wrote: Cleanfix,
+  // 2026-10-02, five auto clock-ins inside 300 ms. Checked and claimed with no
+  // await in between, so a second run in this JS runtime can't slip past.
+  // (The server refuses a second open entry too: job_time_entries_one_open_per_job.)
+  if (inFlight.has(jobId)) return
+  inFlight.add(jobId)
 
   try {
     // One prompt per job per 12h — re-entering the fence (lunch run, supply
@@ -236,6 +270,13 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
             source: 'auto', arrived_at: arrival.at,
             clock_in_lat: fix.coords.latitude, clock_in_lng: fix.coords.longitude,
           }, { onConflict: 'id' }).select('id').single()
+          if ((insErr as any)?.code === '23505') {
+            // Already on the clock here: their own Clock in tap, or the web,
+            // got there first (one open entry per person per clean). That
+            // punch stands. No auto entry, and no "tap to clock in" prompt.
+            await clearPendingArrival(jobId)
+            return
+          }
           if (!insErr && entry) {
             await clearPendingArrival(jobId) // consumed — a manual punch must not double-enter
             // Mirror manual clock-in: the job is being worked now. Status guard
@@ -270,6 +311,7 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
       trigger: null,
     })
   } catch { /* headless best-effort */ }
+  finally { inFlight.delete(jobId) }
 })
 
 // Best-effort quick GPS fix for stamping manual punches — must never block or
