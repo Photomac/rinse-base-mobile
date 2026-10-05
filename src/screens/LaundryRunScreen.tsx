@@ -75,7 +75,9 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
     const { error } = await supabase.from('laundry_runs').upsert({
       tenant_id: tenantId,
       job_id: job.id,
-      user_id: existingUserId || user.id,
+      // The runner is set by whoever records the run first; a later save
+      // leaves them as they are (see TakeHomeLaundryCard in JobDetailScreen).
+      ...(existingUserId ? {} : { user_id: user.id }),
       cash_given: given,
       starting_card_balance: start,
       cash_loaded: loaded,
