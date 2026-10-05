@@ -5,10 +5,16 @@
 // away and retried opportunistically (on capture, when the Photos screen opens,
 // and whenever the app returns to the foreground) until they land. No NetInfo
 // dependency, so this ships over-the-air via `eas update`.
+//
+// Capture never waits for an upload (2026-10-05): screens enqueue, kick
+// flushQueue() without awaiting it, and follow progress through
+// onPhotoQueueChange(). On one rural bar a photo took 24–103 s (CKS
+// Perfections), and the old flow held the camera button for every one of them.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as FileSystem from 'expo-file-system/legacy'
 import { supabase, usableAccessToken } from './supabase'
+import { reportClientError } from './errorReporter'
 
 const QUEUE_KEY = 'rinsebase.photoQueue.v1'
 const DIR = FileSystem.documentDirectory + 'pending_photos/'
@@ -48,11 +54,21 @@ export interface PendingPhoto {
   // job_damage_reports row (append_incident_report_photo) instead of becoming a
   // job_photos row. Absent on every entry queued before 2026-09-23.
   incident_report_id?: string | null
+  // A damage photo flagged for an incident report from the Photos screen: it is
+  // a job_photos row like any other photo AND is attached to that report. (A
+  // photo taken inside the incident form is only attached.)
+  also_job_photo?: boolean
   // The file already reached storage on an earlier try; only the follow-up
   // write is outstanding, so the next try skips the (large) upload.
   stored?: boolean
+  // The job_photos row is written; only the report attach is outstanding.
+  row_saved?: boolean
   created_at: number
   attempts?: number
+  // Uploads of this photo that ran out the clock. Used to send a photo that
+  // keeps timing out to the back of the pass, so it can't hold every photo
+  // behind it hostage on a slow bar.
+  timeouts?: number
   lastErrorKind?: UploadErrorKind
   lastError?: string
   nextAttemptAt?: number
@@ -80,6 +96,55 @@ async function writeQueue(q: PendingPhoto[]): Promise<void> {
   try { await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(q)) } catch { /* best effort */ }
 }
 
+// Every change to the stored queue goes through here, one at a time. Captures,
+// a library batch and the upload pass all rewrite the same key; two writers
+// that each read the list, change it and write it back lose whichever change
+// was written first.
+let queueLock: Promise<unknown> = Promise.resolve()
+function mutateQueue(change: (q: PendingPhoto[]) => PendingPhoto[]): Promise<PendingPhoto[]> {
+  const run = queueLock.then(async () => {
+    const next = change(await readQueue())
+    await writeQueue(next)
+    return next
+  })
+  queueLock = run.catch(() => {})
+  return run.finally(() => emit({}))
+}
+
+export interface PhotoQueueEvent {
+  /** Set when a photo for this job has just become a job_photos row. */
+  uploadedJobId?: string
+}
+const listeners = new Set<(e: PhotoQueueEvent) => void>()
+
+/** Called whenever the queue changes or an upload starts or stops. Returns
+ *  the unsubscribe function. */
+export function onPhotoQueueChange(fn: (e: PhotoQueueEvent) => void): () => void {
+  listeners.add(fn)
+  return () => { listeners.delete(fn) }
+}
+
+function emit(e: PhotoQueueEvent): void {
+  for (const fn of listeners) { try { fn(e) } catch { /* a screen's bug must not stop the queue */ } }
+}
+
+// iOS can move the app's data folder when the app is updated, so the absolute
+// path stored with an older entry may no longer exist although the file does.
+// Resolve every queued file against today's folder.
+function resolveLocal(uri: string): string {
+  const marker = '/pending_photos/'
+  const i = uri.indexOf(marker)
+  return i >= 0 ? DIR + uri.slice(i + marker.length) : uri
+}
+
+// True only when the file is known to be gone. An entry like that can never
+// upload, and a pass that tried it would fail as "no signal" and stop there
+// every time, stranding every photo behind it.
+async function fileMissing(uri: string): Promise<boolean> {
+  if (!uri.startsWith('file://')) return false
+  try { return !(await FileSystem.getInfoAsync(uri)).exists } catch { return false }
+}
+
 async function ensureDir(): Promise<void> {
   try {
     const info = await FileSystem.getInfoAsync(DIR)
@@ -89,15 +154,19 @@ async function ensureDir(): Promise<void> {
 
 // Persist the captured photo to durable storage and add it to the pending queue.
 // The file is copied out of the (clearable) image-picker cache so it survives an
-// app restart while it waits for signal.
+// app restart while it waits for signal. Returns the queue entry's id.
+// incident_report_id: a damage photo the crew flagged for that report — it is
+// saved as a job photo and also attached to the report.
 export async function enqueuePhoto(p: {
   uri: string; tenant_id: string; job_id: string; user_id: string;
   photo_type: string; caption: string | null; checklist_item_id?: string | null;
   photo_requirement_id?: string | null;
   visible_to_client: boolean;
-}): Promise<void> {
+  incident_report_id?: string | null;
+}): Promise<string> {
   await ensureDir()
-  const id = `${p.job_id}_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
+  const stamp = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`
+  const id = `${p.job_id}_${stamp}`
   const localUri = `${DIR}${id}.jpg`
   let persisted = p.uri
   try {
@@ -110,7 +179,10 @@ export async function enqueuePhoto(p: {
     localUri: persisted,
     // Tenant-rooted path to match the web app's convention (the storage policy
     // accepts both the old job-rooted and this form — rinse-base-app PR #280).
-    fileName: `${p.tenant_id}/${p.job_id}/${Date.now()}.jpg`,
+    // The random part matters: a library batch queues several photos in the
+    // same millisecond, and with x-upsert a shared name means the last one
+    // silently overwrites the others.
+    fileName: `${p.tenant_id}/${p.job_id}/${stamp}.jpg`,
     tenant_id: p.tenant_id,
     job_id: p.job_id,
     user_id: p.user_id,
@@ -119,11 +191,11 @@ export async function enqueuePhoto(p: {
     checklist_item_id: p.checklist_item_id ?? null,
     photo_requirement_id: p.photo_requirement_id ?? null,
     visible_to_client: p.visible_to_client,
+    ...(p.incident_report_id ? { incident_report_id: p.incident_report_id, also_job_photo: true } : {}),
     created_at: Date.now(),
   }
-  const q = await readQueue()
-  q.push(entry)
-  await writeQueue(q)
+  await mutateQueue(q => [...q, entry])
+  return id
 }
 
 /** Copy a just-captured photo out of the clearable image-picker cache into
@@ -166,9 +238,7 @@ export async function enqueueIncidentPhoto(p: {
     incident_report_id: p.incident_report_id,
     created_at: Date.now(),
   }
-  const q = await readQueue()
-  q.push(entry)
-  await writeQueue(q)
+  await mutateQueue(q => [...q, entry])
 }
 
 /** Photos for this incident report still waiting to upload or attach. */
@@ -176,7 +246,9 @@ export async function pendingIncidentPhotos(reportId: string): Promise<number> {
   return (await readQueue()).filter(p => p.incident_report_id === reportId).length
 }
 
-type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean }
+type UploadResult =
+  | { ok: true }
+  | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; rowSaved?: boolean; timedOut?: boolean }
 
 // Pull a human-readable reason out of a storage error response, e.g.
 // {"statusCode":"403","error":"Unauthorized","message":"new row violates row-level security policy"}
@@ -194,10 +266,12 @@ async function describeHttpError(res: Response): Promise<string> {
   return detail
 }
 
-// Upload one entry to storage + record it in job_photos. Storage upload is
-// idempotent (x-upsert on a unique path); the queue entry is only dropped
-// after BOTH the upload and the db insert succeed. Failures are classified so
-// the UI can tell "no signal" apart from "the server is rejecting uploads".
+// Upload one entry to storage + record it in job_photos (and/or attach it to
+// its incident report). Storage upload is idempotent (x-upsert on a unique
+// path); the queue entry is only dropped after every write succeeds. Failures
+// are classified so the UI can tell "no signal" apart from "the server is
+// rejecting uploads". Leaves the local file alone: the pass deletes it once the
+// entry is out of the stored queue.
 async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
   let token: string | null
   try {
@@ -212,10 +286,10 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
 
   if (!entry.stored) {
   let res: Response
+  const ac = new AbortController()
   try {
     const form = new FormData()
-    form.append('file', { uri: entry.localUri, name: entry.fileName, type: 'image/jpeg' } as any)
-    const ac = new AbortController()
+    form.append('file', { uri: resolveLocal(entry.localUri), name: entry.fileName, type: 'image/jpeg' } as any)
     const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS)
     try {
       res = await fetch(
@@ -228,7 +302,7 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
   } catch (e: any) {
     // A timeout is a coverage problem, not a rejection: keep it 'network' so it
     // retries on the next trigger instead of backing off.
-    return { ok: false, kind: 'network', message: e?.message || 'Network request failed' }
+    return { ok: false, kind: 'network', message: e?.message || 'Network request failed', timedOut: ac.signal.aborted }
   }
   if (!res.ok) {
     const message = await describeHttpError(res)
@@ -240,47 +314,49 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
 
   const { data: urlData } = supabase.storage.from('job-photos').getPublicUrl(entry.fileName)
 
-  // Incident-report photo: attach to its report rather than job_photos.
+  // Every photo except one taken inside the incident form is a job photo.
+  const jobPhoto = !entry.incident_report_id || !!entry.also_job_photo
+  if (jobPhoto && !entry.row_saved) {
+    try {
+      const { error, status } = await supabase.from('job_photos').insert({
+        tenant_id: entry.tenant_id,
+        job_id: entry.job_id,
+        user_id: entry.user_id,
+        photo_url: urlData.publicUrl,
+        photo_type: entry.photo_type,
+        caption: entry.caption,
+        checklist_item_id: entry.checklist_item_id ?? null,
+        photo_requirement_id: entry.photo_requirement_id ?? null,
+        visible_to_client: entry.visible_to_client,
+      })
+      // status 0 = no signal (the photo is stored; only the row is missing) —
+      // retry on the next trigger, not after a server-rejection backoff.
+      if (error) return { ok: false, kind: status === 0 ? 'network' : 'server', message: error.message, stored: true }
+    } catch (e: any) {
+      return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
+    }
+  }
+
+  // Incident-report photo: attach it to its report.
   if (entry.incident_report_id) {
+    const rowSaved = jobPhoto || undefined
     try {
       const { data, error, status } = await supabase.rpc('append_incident_report_photo', {
         p_report_id: entry.incident_report_id, p_url: urlData.publicUrl,
       })
       // A network failure here surfaces as status 0 on the RESPONSE (the error
       // object has no status — reading it there classed every miss as server).
-      if (error) return { ok: false, kind: status === 0 ? 'network' : 'server', message: error.message, stored: true }
+      if (error) return { ok: false, kind: status === 0 ? 'network' : 'server', message: error.message, stored: true, rowSaved }
       // The report itself can still be waiting in the outbox; the drain runs
       // photos before the outbox, so this is expected on the first pass after
       // signal returns. Short backoff, file stays stored, no re-upload.
-      if (data === 'no_report') return { ok: false, kind: 'server', message: 'Report not saved yet', stored: true }
-      if (data === 'denied') return { ok: false, kind: 'server', message: 'Not allowed to add a photo to this report', stored: true }
+      if (data === 'no_report') return { ok: false, kind: 'server', message: 'Report not saved yet', stored: true, rowSaved }
+      if (data === 'denied') return { ok: false, kind: 'server', message: 'Not allowed to add a photo to this report', stored: true, rowSaved }
     } catch (e: any) {
-      return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
+      return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true, rowSaved }
     }
-    try { await FileSystem.deleteAsync(entry.localUri, { idempotent: true }) } catch { /* ignore */ }
-    return { ok: true }
   }
 
-  try {
-    const { error, status } = await supabase.from('job_photos').insert({
-      tenant_id: entry.tenant_id,
-      job_id: entry.job_id,
-      user_id: entry.user_id,
-      photo_url: urlData.publicUrl,
-      photo_type: entry.photo_type,
-      caption: entry.caption,
-      checklist_item_id: entry.checklist_item_id ?? null,
-      photo_requirement_id: entry.photo_requirement_id ?? null,
-      visible_to_client: entry.visible_to_client,
-    })
-    // status 0 = no signal (the photo is stored; only the row is missing) —
-    // retry on the next trigger, not after a server-rejection backoff.
-    if (error) return { ok: false, kind: status === 0 ? 'network' : 'server', message: error.message, stored: true }
-  } catch (e: any) {
-    return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
-  }
-
-  try { await FileSystem.deleteAsync(entry.localUri, { idempotent: true }) } catch { /* ignore */ }
   return { ok: true }
 }
 
@@ -301,59 +377,116 @@ function summarize(uploaded: number, q: PendingPhoto[]): QueueStatus {
   }
 }
 
-let flushing = false
-
-// Attempt to upload every pending photo. Safe to call often; no-ops if already
-// running (so the on-capture / on-open / on-foreground triggers don't overlap).
-// force skips the server-rejection backoff — used by the manual retry tap.
-export async function flushQueue(opts?: { force?: boolean }): Promise<QueueStatus> {
-  if (flushing) return summarize(0, await readQueue())
-  flushing = true
-  try {
-    const q = await readQueue()
-    if (!q.length) return { uploaded: 0, remaining: 0, serverRejected: 0, lastServerError: null }
-    let uploaded = 0
-    let noSignal = false
-    const survivors: PendingPhoto[] = []
-    for (const entry of q) {
-      // After one "can't reach the server", the rest will fail the same way —
-      // stop the pass instead of making each photo wait out its own timeout.
-      // They keep their place and go on the next trigger.
-      if (noSignal) { survivors.push(entry); continue }
-      if (!opts?.force && entry.nextAttemptAt && Date.now() < entry.nextAttemptAt) {
-        survivors.push(entry)
-        continue
-      }
-      const result = await uploadOne(entry)
-      if (result.ok) { uploaded++; continue }
-      if (result.kind === 'network') noSignal = true
-      const attempts = (entry.attempts ?? 0) + 1
-      survivors.push({
-        ...entry,
-        stored: entry.stored || (!result.ok && result.stored) || undefined,
-        attempts,
-        lastErrorKind: result.kind,
-        lastError: result.message,
-        // Network failures retry on every trigger — coverage returning is the fix.
-        nextAttemptAt: result.kind === 'server' ? Date.now() + backoffMs(attempts) : undefined,
-      })
+// One pass over the queue, oldest first, committing each photo's result to
+// the stored queue as soon as it is known — so a photo that landed is never
+// sent again (a second job_photos row) if the app is closed mid-pass.
+async function runPass(force: boolean): Promise<{ uploaded: number; noSignal: boolean }> {
+  // A photo that keeps timing out goes after the ones that haven't, or on a
+  // slow bar it would fail first on every pass and nothing behind it would go.
+  const q = (await readQueue()).slice()
+    .sort((a, b) => (a.timeouts ?? 0) - (b.timeouts ?? 0) || a.created_at - b.created_at)
+  let uploaded = 0
+  for (const entry of q) {
+    if (!force && entry.nextAttemptAt && Date.now() < entry.nextAttemptAt) continue
+    if (!entry.stored && await fileMissing(resolveLocal(entry.localUri))) {
+      await mutateQueue(cur => cur.filter(e => e.id !== entry.id))
+      reportClientError(
+        'photoQueue: dropped a queued photo whose file is no longer on the phone',
+        JSON.stringify({ id: entry.id, job_id: entry.job_id, photo_type: entry.photo_type, attempts: entry.attempts ?? 0 }),
+        'photoQueue',
+      )
+      continue
     }
-    // A photo taken WHILE this pass was uploading is not in `q` (enqueuePhoto
-    // appends to the stored list). Writing `survivors` alone erased it: the file
-    // stayed in pending_photos but nothing would ever upload it. On one weak
-    // bar a pass runs for minutes, so a second shot mid-upload was enough.
-    // Merge those entries back from a fresh read, as the outbox does.
-    const seen = new Set(q.map(e => e.id))
-    const next = [...survivors, ...(await readQueue()).filter(e => !seen.has(e.id))]
-    await writeQueue(next)
-    return summarize(uploaded, next)
-  } finally {
-    flushing = false
+
+    uploadingId = entry.id
+    emit({})
+    const result = await uploadOne(entry).finally(() => { uploadingId = null })
+    const jobPhoto = !entry.incident_report_id || !!entry.also_job_photo
+
+    if (result.ok) {
+      uploaded++
+      await mutateQueue(cur => cur.filter(e => e.id !== entry.id))
+      if (jobPhoto && !entry.row_saved) emit({ uploadedJobId: entry.job_id })
+      // Only now: had the app died between deleting the file and rewriting the
+      // queue, the entry would point at a file that no longer exists.
+      try { await FileSystem.deleteAsync(resolveLocal(entry.localUri), { idempotent: true }) } catch { /* ignore */ }
+      continue
+    }
+
+    const attempts = (entry.attempts ?? 0) + 1
+    await mutateQueue(cur => cur.map(e => e.id !== entry.id ? e : {
+      ...e,
+      stored: e.stored || result.stored || undefined,
+      row_saved: e.row_saved || result.rowSaved || undefined,
+      timeouts: result.timedOut ? (e.timeouts ?? 0) + 1 : e.timeouts,
+      attempts,
+      lastErrorKind: result.kind,
+      lastError: result.message,
+      // Network failures retry on every trigger — coverage returning is the fix.
+      nextAttemptAt: result.kind === 'server' ? Date.now() + backoffMs(attempts) : undefined,
+    }))
+    if (result.rowSaved && !entry.row_saved) emit({ uploadedJobId: entry.job_id })
+    // After one "can't reach the server", the rest will fail the same way —
+    // stop the pass instead of making each photo wait out its own timeout.
+    // They keep their place and go on the next trigger.
+    if (result.kind === 'network') return { uploaded, noSignal: true }
   }
+  return { uploaded, noSignal: false }
+}
+
+let running: Promise<QueueStatus> | null = null
+let rerun: { force: boolean } | null = null
+let uploadingId: string | null = null
+
+function takeRerun(): { force: boolean } | null {
+  const r = rerun
+  rerun = null
+  return r
+}
+
+/** An upload pass is running right now. */
+export function photoQueueActive(): boolean {
+  return running !== null
+}
+
+// Upload every pending photo. Safe to call often and never runs two passes at
+// once. A call while a pass is running doesn't start another: it asks that
+// pass to go round once more when it ends (so a photo taken mid-pass goes
+// right after, not at the next trigger) and gets the same result to await.
+// force skips the server-rejection backoff — used by the manual retry tap.
+export function flushQueue(opts?: { force?: boolean }): Promise<QueueStatus> {
+  if (running) {
+    rerun = { force: !!(rerun?.force || opts?.force) }
+    return running
+  }
+  rerun = null
+  running = (async () => {
+    let force = !!opts?.force
+    let uploaded = 0
+    for (;;) {
+      const pass = await runPass(force)
+      uploaded += pass.uploaded
+      const again = takeRerun()
+      // No signal: going round again would only fail again; the next trigger
+      // (capture, screen open, foreground, the 2-minute drain) retries.
+      if (!again || pass.noSignal) break
+      force = again.force
+    }
+    return summarize(uploaded, await readQueue())
+  })().finally(() => {
+    running = null
+    rerun = null
+    emit({})
+  })
+  emit({})
+  return running
 }
 
 export async function pendingStatus(jobId?: string): Promise<PendingStatus> {
-  const q = await readQueue()
+  // A flagged damage photo whose job_photos row is written is uploaded as far
+  // as the job is concerned; only its report attach is left (and it can wait
+  // on a report still in the outbox, which reads as a rejection). Not counted.
+  const q = (await readQueue()).filter(p => !p.row_saved)
   const scoped = jobId ? q.filter(p => p.job_id === jobId) : q
   const { remaining, serverRejected, lastServerError } = summarize(0, scoped)
   return { count: remaining, serverRejected, lastServerError }
@@ -368,18 +501,22 @@ export interface QueuedJobPhoto {
   created_at: number
   /** The server rejected it (not just no signal). */
   failing: boolean
+  /** Being uploaded right now. */
+  uploading: boolean
 }
 
 /** This job's photos still on the device, for showing alongside uploaded ones.
- *  Incident-report photos are excluded: they belong to their report, not the
- *  job's photo list. */
+ *  Photos taken inside the incident form are excluded: they belong to their
+ *  report, not the job's photo list. So is a flagged damage photo whose
+ *  job_photos row exists — the server list already shows it. */
 export async function queuedJobPhotos(jobId: string): Promise<QueuedJobPhoto[]> {
   return (await readQueue())
-    .filter(p => p.job_id === jobId && !p.incident_report_id)
+    .filter(p => p.job_id === jobId && (!p.incident_report_id || p.also_job_photo) && !p.row_saved)
     .map(p => ({
-      id: p.id, localUri: p.localUri, photo_type: p.photo_type, caption: p.caption,
+      id: p.id, localUri: resolveLocal(p.localUri), photo_type: p.photo_type, caption: p.caption,
       visible_to_client: p.visible_to_client, created_at: p.created_at,
       failing: p.lastErrorKind === 'server',
+      uploading: p.id === uploadingId,
     }))
 }
 

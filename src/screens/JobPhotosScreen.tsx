@@ -1,10 +1,15 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Alert, ActivityIndicator, TextInput, Modal, KeyboardAvoidingView, Platform } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
-import { ensureCameraCapture } from '../lib/permissions'
+import { ensureCameraCapture, ensureMediaLibrary } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
-import { enqueuePhoto, flushQueue, pendingStatus, PendingStatus, queuedJobPhotos } from '../lib/photoQueue'
+import {
+  enqueuePhoto, flushQueue, pendingStatus, PendingStatus, queuedJobPhotos, QueuedJobPhoto,
+  onPhotoQueueChange, photoQueueActive,
+} from '../lib/photoQueue'
+import { writeThrough, uuid4 } from '../lib/outbox'
+import { queueIncidentNotify, flushIncidentNotifies } from '../lib/incidentNotify'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { PhotoViewer, ViewerPhoto } from '../components/PhotoViewer'
@@ -12,6 +17,14 @@ import { PhotoViewer, ViewerPhoto } from '../components/PhotoViewer'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
+
+// One library pick. Each photo is ~1.5–3 MB and a rural bar moves one every
+// 30–100 s, so a bigger batch mostly means a longer wait; the crew can always
+// pick again.
+const LIBRARY_PICK_LIMIT = 30
+// iOS formats we can't send as a .jpg. 'compatible' below makes the picker
+// convert them, so this only catches a picker that didn't.
+const IOS_UNSENDABLE = /\.(heic|heif|avif|tiff?|bmp)$/i
 
 const PHOTO_TYPES: { id: string; emoji: string; key: 'before' | 'after' | 'damage' | 'other_photo'; color: string }[] = [
   { id: 'before',  emoji: '📷', key: 'before',      color: '#3B82F6' },
@@ -33,13 +46,20 @@ interface Props {
 
 export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOutstanding = 0 }: Props) {
   const { t } = useLang()
-  const [photos, setPhotos] = useState<any[]>([])
+  const [serverPhotos, setServerPhotos] = useState<any[]>([])
+  const [devicePhotos, setDevicePhotos] = useState<QueuedJobPhoto[]>([])
   const [loading, setLoading] = useState(true)
-  const [uploading, setUploading] = useState(false)
   const [selectedType, setSelectedType] = useState('after')
   const [caption, setCaption] = useState(preselectedItem?.title || '')
   const [visibleToClient, setVisibleToClient] = useState(true)
   const [pending, setPending] = useState<PendingStatus>({ count: 0, serverRejected: 0, lastServerError: null })
+  // An upload pass is running: the banner says "uploading", not "waiting".
+  const [queueActive, setQueueActive] = useState(photoQueueActive())
+  // The camera or library picker is open (or its photos are being queued).
+  // Guards a double tap; uploads never hold the buttons.
+  const busy = useRef(false)
+  // Newest server read wins; an older one finishing late must not overwrite it.
+  const loadSeq = useRef(0)
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
   // Editing a note on a photo that already exists. The capture-time caption
   // field cannot serve this: it is consumed and cleared by uploadPhoto, so a
@@ -57,148 +77,220 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
   useEffect(() => {
     loadPhotos()
     // Opening the screen in coverage drains any photos captured earlier offline.
-    flushQueue().then(({ uploaded }) => { if (uploaded > 0) loadPhotos() }).catch(() => {})
-      .finally(() => { pendingStatus().then(setPending).catch(() => {}) })
+    void flushQueue().catch(() => {})
   }, [])
+
+  // Photos still on the device are listed too, from their local file, so a
+  // shot that hasn't uploaded doesn't look like it never happened — that is
+  // what sent crews to retake photos or give up (Rhyne, 2026-09-23).
+  async function loadDevice() {
+    const [queued, status] = await Promise.all([
+      queuedJobPhotos(job.id).catch((): QueuedJobPhoto[] => []),
+      pendingStatus().catch((): PendingStatus => ({ count: 0, serverRejected: 0, lastServerError: null })),
+    ])
+    return { queued, status }
+  }
 
   async function loadPhotos(silent = false) {
     if (!silent) setLoading(true)
-    // Photos still on the device are listed too, from their local file, so a
-    // shot taken with no signal doesn't look like it never happened — that is
-    // what sent crews to retake photos or give up (Rhyne, 2026-09-23). Read
-    // alongside the server list so one render shows both.
-    const [{ data }, queued] = await Promise.all([
+    const seq = ++loadSeq.current
+    // Read both sides together, so a photo that just uploaded leaves the
+    // on-device list and joins the server list in the same render.
+    const [{ data }, device] = await Promise.all([
       supabase.from('job_photos').select('*').eq('job_id', job.id).order('created_at', { ascending: false }),
-      queuedJobPhotos(job.id).catch(() => []),
+      loadDevice(),
     ])
-    const onDevice = queued
-      .sort((a, b) => b.created_at - a.created_at)
-      .map(q => ({
-        id: `queued:${q.id}`, photo_url: q.localUri, photo_type: q.photo_type, caption: q.caption,
-        visible_to_client: q.visible_to_client, queued: true, failing: q.failing,
-      }))
-    setPhotos([...onDevice, ...(data ?? [])])
+    if (seq !== loadSeq.current) return
+    setServerPhotos(data ?? [])
+    setDevicePhotos(device.queued)
+    setPending(device.status)
+    setQueueActive(photoQueueActive())
     setLoading(false)
   }
 
-  // While anything is still waiting, re-read quietly so a photo the background
-  // drain uploads flips from "waiting" to uploaded without leaving the screen.
-  const hasQueued = photos.some(p => p.queued)
+  // Follow the upload queue live: badges flip from waiting → uploading →
+  // uploaded without leaving the screen. Coalesced, because a library batch
+  // queues many photos at once.
   useEffect(() => {
-    if (!hasQueued) return
-    const iv = setInterval(() => {
-      loadPhotos(true)
-      pendingStatus().then(setPending).catch(() => {})
-    }, 20_000)
-    return () => clearInterval(iv)
-  }, [hasQueued])
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let needServer = false
+    const off = onPhotoQueueChange(e => {
+      if (e.uploadedJobId === job.id) needServer = true
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(async () => {
+        timer = null
+        if (needServer) { needServer = false; loadPhotos(true); return }
+        const seq = loadSeq.current
+        const device = await loadDevice()
+        if (seq !== loadSeq.current) return
+        setDevicePhotos(device.queued)
+        setPending(device.status)
+        setQueueActive(photoQueueActive())
+      }, 200)
+    })
+    return () => { off(); if (timer) clearTimeout(timer) }
+  }, [job.id])
+
+  const photos = [
+    ...[...devicePhotos]
+      .sort((a, b) => b.created_at - a.created_at)
+      .map(q => ({
+        id: `queued:${q.id}`, photo_url: q.localUri, photo_type: q.photo_type, caption: q.caption,
+        visible_to_client: q.visible_to_client, queued: true, failing: q.failing, uploading: q.uploading,
+      })),
+    ...serverPhotos,
+  ]
 
   // Required-shot capture LEFT this screen 2026-08-24 — evidence is taken
   // inside its room on the Turnover checklist (JobDetailScreen), one home not
   // two. This screen is job-level photos only: before/after/general/damage.
 
   async function takePhoto() {
-    // ensureCameraCapture prompts (camera + iOS photo roll), or shows a
-    // Settings deep-link if blocked, and returns non-granted rather than
-    // letting launchCameraAsync throw.
-    if (await ensureCameraCapture() !== 'granted') return
+    if (busy.current) return
+    busy.current = true
     try {
-      const result = await ImagePicker.launchCameraAsync({
-        quality: 0.7,
-        allowsEditing: false,
-      })
-      if (result.canceled) return
-      await uploadPhoto(result.assets[0].uri)
-    } catch { /* permission race / camera unavailable — no crash */ }
-  }
-
-  async function uploadPhoto(uri: string) {
-    setUploading(true)
-    // Capture before setCaption('') clears it — a damage report reuses it as the note/title.
-    const damageCaption = caption.trim()
-    try {
-      // Persist + queue first so the photo is never lost, then try to send it now.
-      // Offline → it stays queued and uploads automatically once back in coverage.
-      // Canonical checklist link: this photo satisfies the preselected item as
-      // long as the caption still names it (legacy caption-matching wouldn't
-      // have counted an edited caption either). The caption itself stays as a
-      // dual-write until old bundles that match on it have aged out.
-      const checklistItemId =
-        preselectedItem?.jobItemId && caption.trim() === (preselectedItem.title || '').trim()
-          ? preselectedItem.jobItemId
-          : null
-      await enqueuePhoto({
-        uri,
-        tenant_id: user.tenant_id,
-        job_id: job.id,
-        user_id: user.id,
-        photo_type: selectedType === 'damage' ? 'issue' : selectedType,
-        caption: caption.trim() || null,
-        checklist_item_id: checklistItemId,
-        visible_to_client: visibleToClient,
-      })
-      const result = await flushQueue()
-      setPending({ count: result.remaining, serverRejected: result.serverRejected, lastServerError: result.lastServerError })
-
-      setCaption('')
-      loadPhotos()
-
-      if (result.remaining > 0) {
-        if (result.serverRejected > 0) {
-          // The server heard us and said no (auth/policy/etc). Signal is fine —
-          // don't tell the crew to wait for coverage; tell them who can fix it.
-          Alert.alert(
-            `⚠️ ${t('photo_upload_failing_title')}`,
-            ti(t('photo_upload_failing_msg'), { error: result.lastServerError || '?' }),
-          )
-        } else {
-          // No signal — the photo is safely saved on the device and will sync itself.
-          Alert.alert(`📥 ${t('photo_saved_offline_title')}`, t('photo_saved_offline_msg'))
-        }
-        setUploading(false)
-        return
-      }
-      
-      if (selectedType === 'damage') {
-        Alert.alert(
-          `⚠️ ${t('damage_photo_saved')}`,
-          t('damage_flag_msg'),
-          [
-            { text: t('not_now'), style: 'cancel' },
-            {
-              text: t('flag_for_report'),
-              onPress: () => submitDamageReport(damageCaption),
-            }
-          ]
-        )
-      } else {
-        Alert.alert(`✅ ${t('uploaded_ok')}`, t('photo_saved'))
-      }
-    } catch (e: any) {
-      Alert.alert(t('upload_failed'), e.message || t('could_not_upload'))
+      // ensureCameraCapture prompts (camera + iOS photo roll), or shows a
+      // Settings deep-link if blocked, and returns non-granted rather than
+      // letting launchCameraAsync throw.
+      if (await ensureCameraCapture() !== 'granted') return
+      let uri: string | undefined
+      try {
+        const result = await ImagePicker.launchCameraAsync({
+          quality: 0.7,
+          allowsEditing: false,
+        })
+        if (result.canceled) return
+        uri = result.assets[0]?.uri
+      } catch { return /* permission race / camera unavailable — no crash */ }
+      if (uri) await addPhotos([uri])
+    } finally {
+      busy.current = false
     }
-    setUploading(false)
   }
 
-  // Create a real damage report the owner can see + send to the host. A tagged
-  // damage photo alone lives only in job_photos, which the owner's Issues view and
-  // dashboard never read — they're built on job_damage_reports (same as IncidentReportCard).
-  async function submitDamageReport(captionText: string) {
+  // Several photos from the camera roll in one go, queued exactly like camera
+  // shots (same type, note, client toggle). Asked for by CKS Perfections.
+  async function pickFromLibrary() {
+    if (busy.current) return
+    busy.current = true
     try {
-      // The damage photo was saved as photo_type 'issue' — grab its URL for the report.
-      const { data: latest } = await supabase
-        .from('job_photos')
-        .select('photo_url')
-        .eq('job_id', job.id)
-        .eq('photo_type', 'issue')
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      const photoUrl = (latest as any)?.photo_url || null
+      if (await ensureMediaLibrary() !== 'granted') return
+      let assets: ImagePicker.ImagePickerAsset[]
+      try {
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: 'images',
+          allowsMultipleSelection: true,
+          selectionLimit: LIBRARY_PICK_LIMIT,
+          orderedSelection: true,
+          quality: 0.7,
+          // iPhones keep photos as HEIC, and the multi-select picker hands
+          // HEIC straight through unless asked for the compatible (JPEG) form.
+          // Uploaded as-is it would be a ".jpg" Android phones and most
+          // browsers can't open.
+          preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+        })
+        if (result.canceled) return
+        assets = result.assets ?? []
+      } catch { return /* permission race / picker unavailable — no crash */ }
+      const uris = assets
+        .map(a => a.uri)
+        .filter(u => !(Platform.OS === 'ios' && IOS_UNSENDABLE.test(u)))
+      const skipped = assets.length - uris.length
+      await addPhotos(uris)
+      if (skipped > 0) Alert.alert(t('photos_skipped_title'), ti(t('photos_skipped_msg'), { n: String(skipped) }))
+    } finally {
+      busy.current = false
+    }
+  }
 
-      const addressId = job.client_addresses?.id || job.address_id || null
-      const title = captionText || 'Incident reported by crew'
-      const { error } = await supabase.from('job_damage_reports').insert({
+  // Queue the photos and return: they upload in the background while the crew
+  // keeps shooting, and each thumbnail shows its own state. Nothing here waits
+  // for the network — on one rural bar a single photo took up to 103 s.
+  async function addPhotos(uris: string[]) {
+    if (!uris.length) return
+    const note = caption.trim()
+    // Canonical checklist link: this photo satisfies the preselected item as
+    // long as the caption still names it (legacy caption-matching wouldn't
+    // have counted an edited caption either). The caption itself stays as a
+    // dual-write until old bundles that match on it have aged out.
+    const checklistItemId =
+      preselectedItem?.jobItemId && note === (preselectedItem.title || '').trim()
+        ? preselectedItem.jobItemId
+        : null
+
+    // Damage: ask before queueing, so a flagged photo is queued already tied
+    // to its report and the flag survives no signal and an app restart.
+    let report: { id: string; title: string } | null = null
+    if (selectedType === 'damage' && await askFlagForReport()) {
+      report = await createDamageReport(note)
+    }
+
+    setCaption('')
+    let failed = 0
+    for (const uri of uris) {
+      try {
+        await enqueuePhoto({
+          uri,
+          tenant_id: user.tenant_id,
+          job_id: job.id,
+          user_id: user.id,
+          photo_type: selectedType === 'damage' ? 'issue' : selectedType,
+          caption: note || null,
+          checklist_item_id: checklistItemId,
+          visible_to_client: visibleToClient,
+          incident_report_id: report?.id ?? null,
+        })
+        // Start uploading with the first photo; later calls just ask the
+        // running pass to pick up what was added since.
+        void flushQueue().catch(() => {})
+      } catch {
+        failed++
+      }
+    }
+
+    if (report) {
+      // Heads-up the cleaning company only — the host is told later, if/when the
+      // owner reviews and chooses to send (owner-controlled QC). Deferred until
+      // the report AND its photos have landed (lib/incidentNotify), so it
+      // survives no signal and still carries the photo.
+      await queueIncidentNotify({
+        report_id: report.id, job_id: job.id, tenant_id: user.tenant_id,
+        report_type: 'damage', severity: 'minor', title: report.title, room: null,
+      }).catch(() => {})
+      void flushQueue().then(() => flushIncidentNotifies()).catch(() => {})
+    }
+
+    if (failed > 0) Alert.alert(t('upload_failed'), t('could_not_upload'))
+  }
+
+  function askFlagForReport(): Promise<boolean> {
+    return new Promise(resolve => {
+      Alert.alert(
+        `⚠️ ${t('damage_photo_saved')}`,
+        t('damage_flag_msg'),
+        [
+          { text: t('not_now'), style: 'cancel', onPress: () => resolve(false) },
+          { text: t('flag_for_report'), onPress: () => resolve(true) },
+        ],
+        // Android: tapping outside closes the dialog — treat it as "Not now"
+        // so the photo is still queued.
+        { cancelable: true, onDismiss: () => resolve(false) },
+      )
+    })
+  }
+
+  // A real damage report the owner can see + send to the host. A tagged damage
+  // photo alone lives only in job_photos, which the owner's Issues view and
+  // dashboard never read — they're built on job_damage_reports (same as
+  // IncidentReportCard). Written through the offline outbox with a client id,
+  // exactly like that card: live with signal, queued without. The photos
+  // attach to it from the photo queue once they upload.
+  async function createDamageReport(note: string): Promise<{ id: string; title: string } | null> {
+    const id = uuid4()
+    const title = note || 'Incident reported by crew'
+    try {
+      const { error } = await writeThrough({ table: 'job_damage_reports', op: 'upsert', onConflict: 'id', values: {
+        id,
         tenant_id: user.tenant_id,
         job_id: job.id,
         address_id: addressId,
@@ -206,23 +298,17 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
         report_type: 'damage',
         severity: 'minor',
         title,
-        description: captionText || null,
-        photo_urls: photoUrl ? [photoUrl] : [],
+        description: note || null,
+        // photo_urls omitted (defaults to '{}'): photos are appended as they
+        // upload, and a replayed upsert that re-sent [] would wipe them.
         status: 'reported',
-      })
+      } })
       if (error) throw error
-
-      // Heads-up the cleaning company only — the host is told later, if/when the
-      // owner reviews and chooses to send (owner-controlled QC).
-      try {
-        await supabase.functions.invoke('notify-damage-report', {
-          body: { job_id: job.id, tenant_id: user.tenant_id, report_type: 'damage', severity: 'minor', title, photo_url: photoUrl, recipients: 'owner' },
-        })
-      } catch { /* report is saved; notify is best-effort */ }
-
-      Alert.alert(`✓ ${t('photo_flagged')}`, t('damage_report_sent'))
+      return { id, title }
     } catch (e: any) {
-      Alert.alert(t('error'), e?.message || t('could_not_upload'))
+      // The photo still goes in as a damage photo; only the report failed.
+      Alert.alert(t('error'), e?.message || t('could_not_save'))
+      return null
     }
   }
 
@@ -309,28 +395,33 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
         )}
 
         {/* Pending queue status — crew proof-of-work must never feel uncertain.
-            Yellow = waiting on signal; red = the server is rejecting uploads
-            (shows the error, so it's not mistaken for coverage). Tap retries. */}
-        {pending.count > 0 && (
-          <TouchableOpacity
-            onPress={() => flushQueue({ force: true }).then(r => { setPending({ count: r.remaining, serverRejected: r.serverRejected, lastServerError: r.lastServerError }); if (r.uploaded > 0) loadPhotos() }).catch(() => {})}
-            style={pending.serverRejected > 0
-              ? { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FCA5A5', borderRadius: 10, padding: 10, marginBottom: 10 }
-              : { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FEF9C3', borderWidth: 1, borderColor: '#FCD34D', borderRadius: 10, padding: 10, marginBottom: 10 }}>
-            <Text style={{ fontSize: 16 }}>{pending.serverRejected > 0 ? '⚠️' : '📥'}</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: pending.serverRejected > 0 ? '#991B1B' : '#854D0E' }}>
-                {pending.count} 📷 {pending.serverRejected > 0 ? t('pending_upload_failing') : t('pending_upload')}
-              </Text>
-              {pending.serverRejected > 0 && !!pending.lastServerError && (
-                <Text style={{ fontSize: 10, color: '#991B1B', marginTop: 2 }} numberOfLines={2}>
-                  {pending.lastServerError}
+            Blue = uploading now, keep shooting; yellow = waiting on signal;
+            red = the server is rejecting uploads (shows the error, so it's not
+            mistaken for coverage). Tap retries. Never a blocking dialog. */}
+        {pending.count > 0 && (() => {
+          const tone = pending.serverRejected > 0 ? 'fail' : queueActive ? 'busy' : 'wait'
+          const c = BANNER[tone]
+          return (
+            <TouchableOpacity
+              onPress={() => { void flushQueue({ force: true }).catch(() => {}) }}
+              style={[styles.banner, { backgroundColor: c.bg, borderColor: c.border }]}>
+              <Text style={{ fontSize: 16 }}>{tone === 'fail' ? '⚠️' : tone === 'busy' ? '⬆️' : '📥'}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: c.text }}>
+                  {pending.count} 📷 {tone === 'fail' ? t('pending_upload_failing') : tone === 'busy' ? t('pending_uploading') : t('pending_upload')}
                 </Text>
-              )}
-            </View>
-            <Text style={{ fontSize: 11, fontWeight: '700', color: pending.serverRejected > 0 ? '#991B1B' : '#854D0E' }}>↻</Text>
-          </TouchableOpacity>
-        )}
+                {tone === 'fail' && !!pending.lastServerError && (
+                  <Text style={{ fontSize: 10, color: c.text, marginTop: 2 }} numberOfLines={2}>
+                    {pending.lastServerError}
+                  </Text>
+                )}
+              </View>
+              {tone === 'busy'
+                ? <ActivityIndicator color={c.text} size="small" />
+                : <Text style={{ fontSize: 11, fontWeight: '700', color: c.text }}>↻</Text>}
+            </TouchableOpacity>
+          )
+        })()}
         {/* Photo type selector */}
         <View style={styles.typeRow}>
           {PHOTO_TYPES.map(pt => (
@@ -361,19 +452,15 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
           </View>
         </TouchableOpacity>
 
-        {/* Upload buttons */}
+        {/* Capture buttons — never disabled by an upload in progress. */}
         <View style={styles.uploadRow}>
-          <TouchableOpacity style={styles.cameraBtn} onPress={takePhoto} disabled={uploading}>
+          <TouchableOpacity style={styles.cameraBtn} onPress={takePhoto}>
             <Text style={styles.cameraBtnText}>📷 {t('take_photo')}</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.galleryBtn} onPress={pickFromLibrary}>
+            <Text style={styles.galleryBtnText}>🖼 {t('choose_photos')}</Text>
+          </TouchableOpacity>
         </View>
-
-        {uploading && (
-          <View style={styles.uploadingBar}>
-            <ActivityIndicator color={TEAL} size="small" />
-            <Text style={styles.uploadingText}>{t('uploading')}</Text>
-          </View>
-        )}
 
         {/* Photo sections */}
         {loading ? (
@@ -407,9 +494,20 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
                       onLongPress={() => { if (!photo.queued) openPhotoOptions(photo) }}
                     >
                       <Image source={{ uri: photo.photo_url }} style={[styles.photo, photo.queued && { opacity: 0.75 }]} />
-                      {photo.queued && (
-                        <View style={[styles.queuedBadge, photo.failing && { backgroundColor: '#DC2626' }]}>
-                          <Text style={styles.queuedBadgeText}>{photo.failing ? '⚠️' : '⏳'} {t('pending_upload')}</Text>
+                      {/* Every thumbnail says where its photo is: waiting,
+                          uploading, failing, or safely uploaded. */}
+                      {photo.queued ? (
+                        <View style={[
+                          styles.statusBadge,
+                          photo.failing ? styles.badgeFailing : photo.uploading ? styles.badgeUploading : styles.badgeWaiting,
+                        ]}>
+                          <Text style={styles.statusBadgeText}>
+                            {photo.failing ? `⚠️ ${t('pending_upload')}` : photo.uploading ? `⬆️ ${t('photo_uploading_badge')}` : `⏳ ${t('pending_upload')}`}
+                          </Text>
+                        </View>
+                      ) : (
+                        <View style={[styles.statusBadge, styles.badgeUploaded]}>
+                          <Text style={styles.statusBadgeText}>✓ {t('uploaded_ok')}</Text>
                         </View>
                       )}
                       {photo.caption && (
@@ -470,6 +568,12 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
   )
 }
 
+const BANNER = {
+  busy: { bg: '#EFF6FF', border: '#BFDBFE', text: '#1E40AF' },
+  wait: { bg: '#FEF9C3', border: '#FCD34D', text: '#854D0E' },
+  fail: { bg: '#FEE2E2', border: '#FCA5A5', text: '#991B1B' },
+} as const
+
 const styles = StyleSheet.create({
   // Violet, matching the required-shot affordance on the job screen this sends
   // them back to — deliberately not the yellow/red used for upload trouble,
@@ -525,8 +629,7 @@ const styles = StyleSheet.create({
   cameraBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   galleryBtn: { flex: 1, backgroundColor: '#fff', borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1.5, borderColor: TEAL },
   galleryBtnText: { color: TEAL, fontSize: 14, fontWeight: '700' },
-  uploadingBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#ECFDF5', borderRadius: 10, padding: 12, marginBottom: 12 },
-  uploadingText: { color: '#065F46', fontSize: 13, fontWeight: '600' },
+  banner: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 10, padding: 10, marginBottom: 10 },
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyIcon: { fontSize: 48, marginBottom: 12, opacity: 0.3 },
   emptyTitle: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 4 },
@@ -537,8 +640,12 @@ const styles = StyleSheet.create({
   photoWrapper: { width: '47%', borderRadius: 10, overflow: 'hidden', backgroundColor: '#fff', borderWidth: 1, borderColor: '#E5E7EB' },
   photo: { width: '100%', aspectRatio: 1, backgroundColor: '#F3F4F6' },
   photoCaption: { fontSize: 10, color: '#6B7280', padding: 4, textAlign: 'center' },
-  queuedBadge: { position: 'absolute', top: 6, left: 6, backgroundColor: 'rgba(146, 64, 14, 0.9)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  queuedBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  statusBadge: { position: 'absolute', top: 6, left: 6, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  statusBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  badgeWaiting: { backgroundColor: 'rgba(146, 64, 14, 0.9)' },
+  badgeUploading: { backgroundColor: 'rgba(37, 99, 235, 0.92)' },
+  badgeFailing: { backgroundColor: '#DC2626' },
+  badgeUploaded: { backgroundColor: 'rgba(22, 163, 74, 0.9)' },
   clientBadge: { position: 'absolute', top: 6, right: 6, backgroundColor: TEAL, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 },
   clientBadgeText: { color: '#fff', fontSize: 8, fontWeight: '700' },
   hint: { textAlign: 'center', fontSize: 11, color: '#9CA3AF', marginTop: 16 },
