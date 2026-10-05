@@ -88,10 +88,15 @@ function TakeHomeLaundryCard({ job, user, bagColor }: { job: any; user: any; bag
 
   async function save() {
     setSaving(true)
+    // The runner is set by whoever records the run first. A later save leaves
+    // them as they are: user_id is left out, so the upsert's update doesn't
+    // touch it. Re-sending the stored runner had every save re-check them, and
+    // the tenant pin on laundry_runs.user_id (2026-10-05) refuses a runner who
+    // has since moved to another company.
     const { error } = await supabase.from('laundry_runs').upsert({
       tenant_id: user.tenant_id,
       job_id: job.id,
-      user_id: rowUserId || user.id,
+      ...(rowUserId ? {} : { user_id: user.id }),
       ...bags,
     }, { onConflict: 'job_id' })
     setSaving(false)
