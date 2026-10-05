@@ -25,4 +25,5 @@ export const ROLE_COLORS: Record<string, string> = {
   trainee:      '#9CA3AF',
   laundry_runner: '#0EA5E9',
   inspector: '#8B5CF6',
+  maintenance: '#F97316',
 }

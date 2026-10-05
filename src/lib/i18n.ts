@@ -304,6 +304,7 @@ export const translations = {
     role_lead_cleaner: 'Lead Cleaner', role_cleaner: 'Cleaner', role_trainee: 'Trainee',
     role_laundry_runner: 'Laundry Runner',
     role_inspector: 'Inspector',
+    role_maintenance: 'Maintenance',
     // Laundry run reconciliation form
     laundry_run: 'Laundry run',
     task: 'Task',
@@ -929,6 +930,7 @@ export const translations = {
     role_lead_cleaner: 'Limpiador principal', role_cleaner: 'Limpiador', role_trainee: 'Aprendiz',
     role_laundry_runner: 'Encargado de lavandería',
     role_inspector: 'Inspector',
+    role_maintenance: 'Mantenimiento',
     // Formulario de conciliación de lavandería
     laundry_run: 'Viaje de lavandería',
     task: 'Tarea',
@@ -1551,6 +1553,7 @@ export const translations = {
     role_lead_cleaner: 'Líder de limpeza', role_cleaner: 'Auxiliar de limpeza', role_trainee: 'Aprendiz',
     role_laundry_runner: 'Encarregado de lavanderia',
     role_inspector: 'Inspetor',
+    role_maintenance: 'Manutenção',
     // Laundry run reconciliation form
     laundry_run: 'Ida à lavanderia',
     task: 'Tarefa',
