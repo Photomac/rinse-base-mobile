@@ -17,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase, readStoredSession } from './supabase'
 import { fmtTime, setCurrentTz } from './timezone'
 import { uuid4 } from './outbox'
+import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
 
@@ -186,10 +187,12 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
     // the time iOS gives a background wake.
     const authId = (await readStoredSession())?.user?.id
     if (!authId) return
-    const { data: user } = await supabase.from('users')
-      .select('id, tenant_id')
-      .or(`auth_user_id.eq.${authId},id.eq.${authId}`)
-      .maybeSingle()
+    // The row the database acts as (see myUsersRow.ts); .maybeSingle() errored
+    // when both of the login's rows were readable, and this gave up.
+    const { data: rows } = await supabase.from('users')
+      .select('id, tenant_id, auth_user_id, is_active')
+      .or(myUsersRowFilter(authId))
+    const user = pickMyUsersRow(rows, authId)
     if (!user) return
 
     // Job still worth prompting for? (Not started/completed/cancelled by a
