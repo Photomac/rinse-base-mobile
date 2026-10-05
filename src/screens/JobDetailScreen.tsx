@@ -28,7 +28,7 @@ import { captureRequiredPhoto } from '../lib/requiredPhotoCapture'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
-import { flushQueue, pendingStatus, PendingStatus } from '../lib/photoQueue'
+import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive } from '../lib/photoQueue'
 import { cachedQuery } from '../lib/dataCache'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 const TEAL = GOLD
@@ -798,6 +798,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setSignoffs(prev => ({ ...prev, [roomId]: new Date().toISOString() }))
   }
 
+  // A required shot counts toward "done" once its job_photos row exists, which
+  // now happens in the background after capture — refresh the count when one
+  // of this job's photos lands.
+  useEffect(() => onPhotoQueueChange(e => {
+    if (e.uploadedJobId === job.id) loadPhotoRequirements()
+  }), [job.id])
+
   // Evidence capture inside the room — shared path with the (former) Photos-
   // screen shot list. Optimistic thumbnail from the local uri, so offline the
   // room reads done immediately; the queue uploads when signal returns.
@@ -1088,9 +1095,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       return
     }
 
-    // Photos taken with no signal wait in the on-device queue; give them a
-    // chance to land now so the gate below sees them.
-    try { await flushQueue() } catch { /* offline — handled below */ }
+    // Photos upload in the background, so some may still be on the phone; give
+    // them a chance to land now so the gate below sees them. Capped: on one
+    // weak bar a full queue can take many minutes, and a Complete tap that
+    // silently hangs reads as broken — the gate below says what's going on.
+    setSaving(true)
+    try {
+      await Promise.race([flushQueue(), new Promise(resolve => setTimeout(resolve, 10_000))])
+    } catch { /* offline — handled below */ }
+    setSaving(false)
 
     // Canonical completion gate — the same job_completion_blockers() the web
     // panel calls, so web and mobile can never disagree on what completion
@@ -1110,6 +1123,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             `⚠️ ${t('photo_upload_failing_title')}`,
             ti(t('photo_pending_complete_failing_msg'), { error: queued.lastServerError || '?' }),
           )
+          return
+        }
+        // Still uploading (signal is fine, the photos are just big) vs. no
+        // signal — different advice.
+        if (photoQueueActive()) {
+          Alert.alert(`⬆️ ${t('photo_uploading_complete_title')}`, ti(t('photo_uploading_complete_msg'), { n: String(queued.count) }))
           return
         }
         Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))

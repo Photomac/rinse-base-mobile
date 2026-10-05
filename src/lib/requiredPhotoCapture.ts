@@ -15,7 +15,6 @@ export interface CaptureResult {
   status: 'captured' | 'cancelled' | 'failed'
   /** Local file uri — valid as an <Image> source immediately, even offline. */
   localUri?: string
-  queuedOffline?: boolean
 }
 
 export async function captureRequiredPhoto(
@@ -39,12 +38,12 @@ export async function captureRequiredPhoto(
         photo_requirement_id: req.id,
         visible_to_client: true,
       })
-      const flushed = await flushQueue()
-      const queuedOffline = flushed.remaining > 0 && flushed.serverRejected === 0
-      if (queuedOffline) {
-        Alert.alert(`📥 ${t('photo_saved_offline_title')}`, t('photo_saved_offline_msg'))
-      }
-      return { status: 'captured', localUri: uri, queuedOffline }
+      // Uploads in the background, as on the Photos screen: the room shows the
+      // shot from its local file right away, and the next one can be taken
+      // without waiting out a slow bar. (Awaiting it here also mistook "queued
+      // behind a photo already uploading" for "no signal".)
+      void flushQueue().catch(() => {})
+      return { status: 'captured', localUri: uri }
     } catch (e: any) {
       Alert.alert(t('upload_failed'), e.message || t('could_not_upload'))
       return { status: 'failed' }
