@@ -99,6 +99,10 @@ check('clock-in: the punch waits for "Got it"',
     && clockIn.indexOf('crewNoteNeedsAck') < clockIn.lastIndexOf('clockInAs(null)'), true)
 check('daily start: same window, and the button uses it',
   [/setNotePrompt\(\{ then: startJobDaily \}\)/.test(fn('handleStartDaily')), /onPress=\{handleStartDaily\}/.test(screen), /onPress=\{startJobDaily\}/.test(screen)], [true, true, false])
+check('proxy punch (office on a cleaner\'s clean): the note and "Got it" sit in the record-for window, and every punch button waits for it',
+  [/crewNoteNeedsAck && !!crewNoteAtClockIn && \(\s*<View style=\{\{ marginBottom: 6 \}\}>\s*<CrewNoteBanner/.test(screen),
+   /onPress=\{\(\) => clockInAs\(c\.id\)\} disabled=\{saving \|\| crewNoteNeedsAck\}/.test(screen),
+   /onPress=\{\(\) => clockInAs\(user\.id\)\} disabled=\{saving \|\| crewNoteNeedsAck\}/.test(screen)], [true, true, true])
 check('a clean already under way asks with no "Not yet"', /if \(crewNoteNeedsAck && isStarted && !recordsForOthers[^)]*\)\s*\{\s*setNotePrompt\(p => p \?\? \{ then: null \}\)/.test(screen), true)
 check('"Not yet" only when a start is waiting', /onNotYet=\{notePrompt\?\.then \? \(\) => setNotePrompt\(null\) : null\}/.test(screen), true)
 check('the acknowledgment never goes through the pay outbox', /writeThrough\(\{\s*table: 'job_crew_note_acks'/.test(screen), false)

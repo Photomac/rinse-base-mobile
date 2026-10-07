@@ -2154,12 +2154,25 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>⏱ {t('record_for_title')}</Text>
             <Text style={styles.modalSub}>{t('record_for_msg')}</Text>
+            {/* The note gates a proxy punch too. Shown here rather than in a
+                second modal (iOS can't present one while this one is up). The
+                "Got it" is recorded as the person holding this phone, which is
+                who actually read it; the cleaner is still asked on their own
+                phone, since their clean is then under way and unconfirmed. */}
+            {crewNoteNeedsAck && !!crewNoteAtClockIn && (
+              <View style={{ marginBottom: 6 }}>
+                <CrewNoteBanner note={crewNoteAtClockIn} translated={tx(crewNoteAtClockIn)} atClockIn confirmed={false} />
+                <TouchableOpacity style={[styles.reasonBtn, { backgroundColor: '#1A1408' }]} onPress={acknowledgeCrewNote} accessibilityRole="button">
+                  <Text style={[styles.reasonBtnText, { color: '#fff' }]}>✓ {t('crew_note_got_it')}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
             {crewOnJob.map(c => (
-              <TouchableOpacity key={c.id} style={[styles.reasonBtn, styles.reasonBtnActive]} onPress={() => clockInAs(c.id)} disabled={saving}>
+              <TouchableOpacity key={c.id} style={[styles.reasonBtn, styles.reasonBtnActive, crewNoteNeedsAck && { opacity: 0.4 }]} onPress={() => clockInAs(c.id)} disabled={saving || crewNoteNeedsAck}>
                 <Text style={[styles.reasonBtnText, { color: '#fff' }]}>{c.isLead ? `${c.name} (${t('lead_tag')})` : c.name}</Text>
               </TouchableOpacity>
             ))}
-            <TouchableOpacity style={styles.reasonBtn} onPress={() => clockInAs(user.id)} disabled={saving}>
+            <TouchableOpacity style={[styles.reasonBtn, crewNoteNeedsAck && { opacity: 0.4 }]} onPress={() => clockInAs(user.id)} disabled={saving || crewNoteNeedsAck}>
               <Text style={styles.reasonBtnText}>{t('record_for_me')}</Text>
             </TouchableOpacity>
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
