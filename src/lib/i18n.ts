@@ -354,6 +354,10 @@ export const translations = {
     turnover_window: '{{h}}h window',
     laundry_bags_label: 'Laundry bags',
     job_notes: 'Job notes',
+    // Note for the crew, shown at clock-in (jobs.crew_note)
+    crew_note_label: 'Note for the crew', crew_note_pinned: 'Read before you start',
+    crew_note_title: 'Before you start', crew_note_got_it: 'Got it', crew_note_not_yet: 'Not yet',
+    crew_note_confirmed: 'You confirmed this note',
     laundry_note_placeholder: 'Machines used, receipts, anything off…',
     laundry_save_run: 'Save laundry run',
     job_cancelled_label: 'Cancelled',
@@ -987,6 +991,10 @@ export const translations = {
     turnover_window: 'Ventana de {{h}}h',
     laundry_bags_label: 'Bolsas de ropa',
     job_notes: 'Notas del trabajo',
+    // Nota para el equipo, mostrada al registrar la entrada (jobs.crew_note)
+    crew_note_label: 'Nota para el equipo', crew_note_pinned: 'Lee esto antes de empezar',
+    crew_note_title: 'Antes de empezar', crew_note_got_it: 'Entendido', crew_note_not_yet: 'Todavía no',
+    crew_note_confirmed: 'Confirmaste esta nota',
     laundry_note_placeholder: 'Máquinas usadas, recibos, algo fuera de lo normal…',
     laundry_save_run: 'Guardar viaje',
     job_cancelled_label: 'Cancelado',
@@ -1617,6 +1625,10 @@ export const translations = {
     turnover_window: 'Janela de {{h}}h',
     laundry_bags_label: 'Sacolas de roupa',
     job_notes: 'Notas do serviço',
+    // Nota para a equipe, mostrada ao registrar a entrada (jobs.crew_note)
+    crew_note_label: 'Nota para a equipe', crew_note_pinned: 'Leia antes de começar',
+    crew_note_title: 'Antes de começar', crew_note_got_it: 'Entendi', crew_note_not_yet: 'Ainda não',
+    crew_note_confirmed: 'Você confirmou esta nota',
     laundry_note_placeholder: 'Máquinas usadas, recibos, algo fora do normal…',
     laundry_save_run: 'Salvar ida à lavanderia',
     job_cancelled_label: 'Cancelado',

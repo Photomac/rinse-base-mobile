@@ -20,6 +20,7 @@ import type { StagingPhotoRow } from '../lib/stagingRooms'
 import { IncidentReportCard } from '../components/IncidentReportCard'
 import { uploadImageToJobPhotos } from '../lib/chatAttachments'
 import { InspectionResultCard } from '../components/InspectionResultCard'
+import { CrewNoteBanner, CrewNoteModal } from '../components/CrewNoteModal'
 import { useLang } from '../contexts/LangContext'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { ti, localeFor } from '../lib/i18n'
@@ -30,6 +31,7 @@ import { startLocationTracking, maybeStopLocationTracking } from '../lib/locatio
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
 import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive } from '../lib/photoQueue'
 import { cachedQuery } from '../lib/dataCache'
+import { ackRow, clockInNote, crewNoteText, flushAcks, localAcks, recordAck, type CrewNoteJob } from '../lib/crewNote'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
@@ -288,6 +290,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
   // Dispatcher-suggested driving order → "Stop k of M" for this crew's day.
   const [routeStop, setRouteStop] = useState<{ k: number; m: number } | null>(null)
+  // The office's note for this clean (jobs.crew_note) and the wordings this
+  // person has confirmed, from the server and from this device. See lib/crewNote.ts.
+  const [crewNote, setCrewNote] = useState<CrewNoteJob | null>(null)
+  const [ackedNotes, setAckedNotes] = useState<string[]>([])
+  // The open "Before you start" window. `then` is the start it interrupted, run
+  // after "Got it"; null = asked on a clean already under way (no "Not yet").
+  const [notePrompt, setNotePrompt] = useState<{ then: (() => void) | null } | null>(null)
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
   // the cash + bags reconciliation form replaces them.
   const isLaundry = job.job_type === 'laundry_run'
@@ -311,10 +320,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const jobNote = (job.job_type === 'task'
     ? String(job.internal_notes || '').split('\n').slice(1).join('\n')
     : String(job.internal_notes || '')).trim()
+  // The office's note, and whether this person still owes a "Got it" for it.
+  const crewNoteShown = crewNoteText(crewNote)
+  const crewNoteAtClockIn = clockInNote(crewNote)
+  const crewNoteNeedsAck = !!crewNoteAtClockIn && !ackedNotes.includes(crewNoteAtClockIn)
   // Owner-written text in the crew's language. Seeded strings (default tasks,
   // room names) resolve locally through vocab.ts; custom tasks, custom room
   // names and notes go through the translate-crew-text function and its cache.
   const tx = useMachineTranslation(lang, [
+    crewNoteShown,
     propMeta?.crew_notes, jobNote, bagColor,
     ...checklist.map((i: any) => i.title), ...checklist.map((i: any) => i.room),
     ...roomsMeta.map((r: any) => r.name),
@@ -351,6 +365,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     loadPropMeta()
     loadNextArrival().catch(() => {})
     loadRouteStop()
+    loadCrewNote().catch(() => {})
     loadPhotoRequirements()
   }, [])
 
@@ -418,6 +433,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!rows || !rows.length) { setNextArrival(null); return }
     setNextArrival(pickNextArrival(cleanYmd, rows as ArrivalRow[],
       { property: (a as any)?.default_checkin_time, company: (ten as any)?.default_checkin_time }))
+  }
+
+  // The office's note: its own read, failing soft. A server without the columns
+  // yet, or offline with nothing cached, just shows no note.
+  async function loadCrewNote() {
+    flushAcks().catch(() => {})
+    const [{ data: jn }, { data: rows }, mine] = await Promise.all([
+      cachedQuery(`crewnote:${job.id}`, supabase.from('jobs')
+        .select('crew_note, crew_note_at_clock_in').eq('id', job.id).maybeSingle()),
+      cachedQuery(`crewnoteack:${job.id}:${user.id}`, supabase.from('job_crew_note_acks')
+        .select('note').eq('job_id', job.id).eq('user_id', user.id)),
+      localAcks(job.id, user.id),
+    ])
+    setAckedNotes(Array.from(new Set([...mine, ...((rows as any[]) ?? []).map((r: any) => r.note)])))
+    if (jn) setCrewNote({ crew_note: (jn as any).crew_note ?? null, crew_note_at_clock_in: !!(jn as any).crew_note_at_clock_in })
   }
 
   // Beds/baths/sqft aren't in the list-screen job payload, so fetch them here —
@@ -865,7 +895,38 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // before anything is written. Everyone else clocks themselves in directly.
   function handleClockIn() {
     if (recordsForOthers) { setRecordForOpen(true); return }
+    // The office asked for this note to be read at clock-in: the punch waits
+    // for "Got it" (once per wording; an edited note asks again).
+    if (crewNoteNeedsAck) { setNotePrompt({ then: () => clockInAs(null) }); return }
     clockInAs(null)
+  }
+
+  // Daily mode's "start" is its clock-in: same window.
+  function handleStartDaily() {
+    if (crewNoteNeedsAck && !recordsForOthers) { setNotePrompt({ then: startJobDaily }); return }
+    startJobDaily()
+  }
+
+  // Started without the window (the arrival auto clock-in, the web, or a start
+  // before the office added the note): ask now, with no way to skip.
+  useEffect(() => {
+    if (crewNoteNeedsAck && isStarted && !recordsForOthers && job.status !== 'completed') {
+      setNotePrompt(p => p ?? { then: null })
+    }
+  }, [crewNoteNeedsAck, isStarted, recordsForOthers])
+
+  // "Got it": remembered on this device at once, sent (or parked offline) for
+  // the office, then the start it interrupted carries on. Recording it never
+  // blocks the start: they have read the note either way.
+  function acknowledgeCrewNote() {
+    const note = crewNoteAtClockIn
+    const then = notePrompt?.then ?? null
+    setNotePrompt(null)
+    if (note) {
+      setAckedNotes(prev => (prev.includes(note) ? prev : [...prev, note]))
+      recordAck(ackRow({ tenantId: user.tenant_id, jobId: job.id, userId: user.id, note })).catch(() => {})
+    }
+    then?.()
   }
 
   // forUserId: null = the viewer. Anything else is a PROXY punch recorded by
@@ -1372,6 +1433,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll}>
+        {/* The office's note for this clean, pinned on top. */}
+        {!!crewNoteShown && (
+          <CrewNoteBanner note={crewNoteShown} translated={tx(crewNoteShown)} atClockIn={!!crewNoteAtClockIn} confirmed={!crewNoteNeedsAck} />
+        )}
         {/* Property photo — not for location-less tasks (internal shell property) */}
         {(isTask && !hasTaskLocation) ? null : propertyPhotoUrl && !propertyPhotoBroken ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => setViewPropertyPhoto(true)}>
@@ -1677,7 +1742,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {dailyMode && job.status !== 'completed' && (
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
               {job.status !== 'in_progress' ? (
-                <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={startJobDaily} disabled={saving}>
+                <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={handleStartDaily} disabled={saving}>
                   {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>{t('start_job')}</Text>}
                 </TouchableOpacity>
               ) : (
@@ -2050,6 +2115,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         />
       )}
 
+      {/* "Before you start": the office's note, dismissed only with "Got it" */}
+      {!!crewNoteAtClockIn && (
+        <CrewNoteModal visible={!!notePrompt} note={crewNoteAtClockIn} translated={tx(crewNoteAtClockIn)} place={propLabel}
+          onGotIt={acknowledgeCrewNote} onNotYet={notePrompt?.then ? () => setNotePrompt(null) : null} />
+      )}
+
       {/* Pause modal */}
       <Modal visible={showPauseModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -2083,12 +2154,25 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>⏱ {t('record_for_title')}</Text>
             <Text style={styles.modalSub}>{t('record_for_msg')}</Text>
+            {/* The note gates a proxy punch too. Shown here rather than in a
+                second modal (iOS can't present one while this one is up). The
+                "Got it" is recorded as the person holding this phone, which is
+                who actually read it; the cleaner is still asked on their own
+                phone, since their clean is then under way and unconfirmed. */}
+            {crewNoteNeedsAck && !!crewNoteAtClockIn && (
+              <View style={{ marginBottom: 6 }}>
+                <CrewNoteBanner note={crewNoteAtClockIn} translated={tx(crewNoteAtClockIn)} atClockIn confirmed={false} />
+                <TouchableOpacity style={[styles.reasonBtn, { backgroundColor: '#1A1408' }]} onPress={acknowledgeCrewNote} accessibilityRole="button">
+                  <Text style={[styles.reasonBtnText, { color: '#fff' }]}>✓ {t('crew_note_got_it')}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
             {crewOnJob.map(c => (
-              <TouchableOpacity key={c.id} style={[styles.reasonBtn, styles.reasonBtnActive]} onPress={() => clockInAs(c.id)} disabled={saving}>
+              <TouchableOpacity key={c.id} style={[styles.reasonBtn, styles.reasonBtnActive, crewNoteNeedsAck && { opacity: 0.4 }]} onPress={() => clockInAs(c.id)} disabled={saving || crewNoteNeedsAck}>
                 <Text style={[styles.reasonBtnText, { color: '#fff' }]}>{c.isLead ? `${c.name} (${t('lead_tag')})` : c.name}</Text>
               </TouchableOpacity>
             ))}
-            <TouchableOpacity style={styles.reasonBtn} onPress={() => clockInAs(user.id)} disabled={saving}>
+            <TouchableOpacity style={[styles.reasonBtn, crewNoteNeedsAck && { opacity: 0.4 }]} onPress={() => clockInAs(user.id)} disabled={saving || crewNoteNeedsAck}>
               <Text style={styles.reasonBtnText}>{t('record_for_me')}</Text>
             </TouchableOpacity>
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
