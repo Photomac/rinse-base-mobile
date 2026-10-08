@@ -1,7 +1,7 @@
 // The office's note to the crew for one clean (jobs.crew_note), shown at
 // clock-in when the office turns on jobs.crew_note_at_clock_in, and the crew's
 // "Got it" (job_crew_note_acks). Server half: rinse-base-app migration
-// 20261007160000; the web app applies the same rules in src/lib/crewNote.ts.
+// 20261008114826; the web app applies the same rules in src/lib/crewNote.ts.
 //
 // Unlike internal_notes ("Job notes"), no calendar sync writes crew_note.
 // An acknowledgment carries the wording it was given for: when the office

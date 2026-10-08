@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// "Show at clock-in" crew note (rinse-base-app migration 20261007160000).
+// "Show at clock-in" crew note (rinse-base-app migration 20261008114826).
 //
 // Runs the REAL src/lib/crewNote.ts under Node's type stripping, with
 // AsyncStorage and ./supabase redirected to in-memory stand-ins, and checks:
