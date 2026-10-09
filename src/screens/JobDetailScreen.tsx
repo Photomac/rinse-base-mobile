@@ -1041,7 +1041,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // so tracking keeps working with the phone in their pocket.
     if (!proxy) startLocationTracking(user, { requestBackground: true }).catch(() => {})
     // Update job status
-    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, matchIn: { status: STARTABLE }, values: { status: 'in_progress' } })
+    // started_at = the tap, not the moment the outbox delivers it: offline
+    // Starts replay later, and the server would otherwise stamp the replay.
+    // The server keeps it only on the move into in_progress and only if
+    // plausible (rinsebase-app migration 20261009170000) — needs that
+    // migration live before this ships, or PostgREST refuses the column.
+    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, matchIn: { status: STARTABLE }, values: { status: 'in_progress', started_at: new Date().toISOString() } })
     onStatusChange(job, 'in_progress')
     loadTimeEntries()
     setSaving(false)
@@ -1071,7 +1076,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // time entry (hours come from the day's shift on the Dashboard).
   async function startJobDaily() {
     setSaving(true)
-    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, matchIn: { status: STARTABLE }, values: { status: 'in_progress' } })
+    // started_at = the tap, not the moment the outbox delivers it: offline
+    // Starts replay later, and the server would otherwise stamp the replay.
+    // The server keeps it only on the move into in_progress and only if
+    // plausible (rinsebase-app migration 20261009170000) — needs that
+    // migration live before this ships, or PostgREST refuses the column.
+    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, matchIn: { status: STARTABLE }, values: { status: 'in_progress', started_at: new Date().toISOString() } })
     onStatusChange(job, 'in_progress')
     setSaving(false)
     announceRequiredPhotos()
