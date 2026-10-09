@@ -11,6 +11,7 @@ import { supabase, readStoredSession } from './supabase'
 import { cachedQuery } from './dataCache'
 import { overlayPending } from './outbox'
 import { loadCachedProfile } from './profileCache'
+import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { byCrewDayOrder } from './jobOrder'
 import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
@@ -435,10 +436,12 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
     try {
       const authId = (await readStoredSession())?.user?.id
       if (!authId) return
-      const { data: u, error } = await supabase.from('users')
-        .select('id, tenant_id')
-        .or(`auth_user_id.eq.${authId},id.eq.${authId}`)
-        .maybeSingle()
+      // The row the database acts as (see myUsersRow.ts); .maybeSingle() errored
+      // when both of the login's rows were readable.
+      const { data: rows, error } = await supabase.from('users')
+        .select('id, tenant_id, auth_user_id, is_active')
+        .or(myUsersRowFilter(authId))
+      const u = pickMyUsersRow(rows, authId)
       // Offline: the profile App.tsx saved at the last good load.
       const found = u ?? (error ? await loadCachedProfile(authId) : null)
       if (!found) return

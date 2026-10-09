@@ -26,6 +26,7 @@ import './src/lib/arrivalGeofence'
 import { flushQueue } from './src/lib/photoQueue'
 import { flushVideoQueue } from './src/lib/videoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
+import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
 import { clearDataCache } from './src/lib/dataCache'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
 import { flushOutbox } from './src/lib/outbox'
@@ -150,7 +151,12 @@ function AppInner() {
   }, [])
 
   async function loadUser(authId: string) {
-    const { data, error } = await supabase.from('users').select('*').or(`auth_user_id.eq.${authId},id.eq.${authId}`).maybeSingle()
+    // The row the database acts as for this login: the active row whose id is
+    // the login, else the active row linked by auth_user_id. Both candidates
+    // in one read (RLS shows at most these two); `.maybeSingle()` errored when
+    // both were readable and sent us to the offline copy.
+    const { data: rows, error } = await supabase.from('users').select('*').or(myUsersRowFilter(authId))
+    const data = pickMyUsersRow(rows, authId)
     if (data) {
       let settings: CompanySettings | null = null
       try { settings = await companySettings(data.tenant_id) } catch { /* unreadable, same as an error */ }
