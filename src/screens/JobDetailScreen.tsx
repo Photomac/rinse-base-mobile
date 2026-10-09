@@ -182,6 +182,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Full evidence rows (property_photo_requirements + latest shot per req) —
   // rendered inside their rooms; required-only counts derive from this.
   const [evidence, setEvidence] = useState<any[]>([])
+  // The same rows for async callbacks, which must compare against the list on
+  // screen now, not the one their render closed over.
+  const evidenceRef = useRef<any[]>([])
+  useEffect(() => { evidenceRef.current = evidence }, [evidence])
+  const shotListChangeNoticed = useRef(false)
   const [openRooms, setOpenRooms] = useState<Record<string, boolean>>({})
   // Room hand-off: "Report an issue in <room>" opens the incident card below
   // with that room preset and scrolls it into view.
@@ -832,8 +837,33 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // now happens in the background after capture — refresh the count when one
   // of this job's photos lands.
   useEffect(() => onPhotoQueueChange(e => {
-    if (e.uploadedJobId === job.id) loadPhotoRequirements()
+    if (e.uploadedJobId === job.id) { loadPhotoRequirements(); refreshIfShotListChanged() }
   }), [job.id])
+
+  // The office can rebuild this property's checklist or remove a room while the
+  // crew is mid-clean. This screen keeps the shot list it loaded, so the next
+  // shot names a shot that no longer exists. Before 2026-10-09 the server
+  // refused that photo outright: Sheddys #207, six photos stranded on the phone.
+  // Since then it is saved with no link, so it doesn't count. Compare the shots
+  // on screen with the property's current ones; when they differ, reload the
+  // rooms and shots, and say so once. No signal: leave the screen as it is.
+  async function refreshIfShotListChanged() {
+    const addrId = job.client_addresses?.id || job.address_id
+    if (!addrId || isTask || isLaundry) return
+    const { data, error } = await supabase.from('property_photo_requirements')
+      .select('id').eq('address_id', addrId)
+    if (error || !data) return
+    const live = new Set((data as any[]).map(r => r.id))
+    const shown = evidenceRef.current
+    if (shown.length === live.size && shown.every((x: any) => live.has(x.id))) return
+    await loadChecklist(true)
+    loadPhotoRequirements()
+    // Nothing was on screen (first load failed): a quiet reload is enough.
+    if (shown.length > 0 && !shotListChangeNoticed.current) {
+      shotListChangeNoticed.current = true
+      Alert.alert(`📸 ${t('photo_list_changed_title')}`, t('photo_list_changed_msg'), [{ text: t('ok') }])
+    }
+  }
 
   // Evidence capture inside the room — shared path with the (former) Photos-
   // screen shot list. Optimistic thumbnail from the local uri, so offline the
@@ -850,6 +880,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (res.status === 'captured' && res.localUri) {
       setEvidence(prev => prev.map((x: any) => x.id === e.id ? { ...x, photo_url: res.localUri } : x))
       loadPhotoRequirements()
+      // Before the upload lands: the first shot after a change brings the
+      // current list up, so the rest are taken against it.
+      void refreshIfShotListChanged()
     }
   }
 
