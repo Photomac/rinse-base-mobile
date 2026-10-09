@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIn
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { CrewLine } from '../components/CrewLine'
 import { ti, localeFor } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
@@ -83,7 +84,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // All in parallel: the slowest one sets the wait, not the sum of them.
     const [todayRes, monthRes, strandedRes, shiftRes] = await Promise.all([
       cachedQuery(`dash:today:${user.id}`, supabase.from('jobs')
-        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
+        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
         .eq('tenant_id', user.tenant_id)
         .gte('scheduled_start', todayStart.toISOString())
         .lte('scheduled_start', todayEnd.toISOString())
@@ -483,6 +484,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     <View style={styles.jobInfo}>
                       <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}</Text>
                       <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}{job.is_turnover ? ' · 🏠 ' + t('turnover') : ''}{job.window_minutes != null ? ' · ↔ ' + t('back_to_back') : ''}</Text>
+                      <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                     </View>
                     {stop && (
                       <View style={styles.routeStopBadge}>
