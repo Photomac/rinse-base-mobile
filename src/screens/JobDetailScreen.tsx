@@ -32,6 +32,7 @@ import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/ar
 import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive } from '../lib/photoQueue'
 import { cachedQuery } from '../lib/dataCache'
 import { ackRow, clockInNote, crewNoteText, flushAcks, localAcks, recordAck, type CrewNoteJob } from '../lib/crewNote'
+import { crewClockFor, type CrewClock, type CrewClockEntry } from '../lib/crewClock'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
@@ -273,6 +274,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [bookedPets, setBookedPets] = useState<number | null>(null)
   // Everyone working this job (lead first) — crew see who they're working with.
   const [crewOnJob, setCrewOnJob] = useState<{ id: string; name: string; isLead: boolean }[]>([])
+  // Everyone's punches on this job, for the on-the-clock status beside each
+  // name. null until read — no status is better than a wrong "not clocked in".
+  const [crewClockRows, setCrewClockRows] = useState<CrewClockEntry[] | null>(null)
   // Owner/manager opening a clean they are NOT on the crew of: the Clock In
   // button asks whose hours it is recording instead of silently clocking the
   // owner in. Pay follows the time entry's user_id, so an owner tapping Clock
@@ -387,13 +391,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => loadChecklist(true), 300)
     }
+    // A teammate clocking in, pausing or out updates the crew line.
+    let clockTimer: ReturnType<typeof setTimeout> | null = null
+    const reloadClock = () => {
+      if (clockTimer) clearTimeout(clockTimer)
+      clockTimer = setTimeout(() => { loadCrewClock().catch(() => {}) }, 300)
+    }
     const channel = supabase
       .channel(`job-detail-${job.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'job_checklist_items', filter: `job_id=eq.${job.id}` }, reload)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'job_photos', filter: `job_id=eq.${job.id}` }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'job_time_entries', filter: `job_id=eq.${job.id}` }, reloadClock)
       .subscribe()
     return () => {
       if (timer) clearTimeout(timer)
+      if (clockTimer) clearTimeout(clockTimer)
       supabase.removeChannel(channel)
     }
   }, [job.id])
@@ -582,7 +594,37 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     return () => clearInterval(timerRef.current)
   }, [isClockedIn, activeEntry, timeEntries])
 
+  // Every crew member's punches on this clean, for the crew line. Separate from
+  // loadTimeEntries, which drives the viewer's own timer and must stay own-only.
+  // Daily-mode punches carry no job_id, so there is nothing per-job to show.
+  async function loadCrewClock() {
+    if (dailyMode || isTask) return
+    const { data } = await cachedQuery(`crewclock:${job.id}`, supabase
+      .from('job_time_entries')
+      .select('user_id, clocked_in_at, clocked_out_at, pause_reason')
+      .eq('job_id', job.id))
+    if (data) setCrewClockRows(data as CrewClockEntry[])
+  }
+
+  // A crew member's status. The viewer's own comes from their timer's entries,
+  // which include punches still queued on this phone, so it is right offline.
+  function crewClockOf(userId: string): CrewClock | null {
+    if (dailyMode) return null
+    const finished = job.status === 'completed'
+    if (userId === user.id) return crewClockFor(timeEntries.filter(e => e.user_id === user.id), userId, finished)
+    return crewClockRows ? crewClockFor(crewClockRows, userId, finished) : null
+  }
+
+  function crewClockLabel(c: CrewClock): string {
+    if (c.state === 'on') return `🟢 ${ti(t('crew_clock_on'), { time: fmtTime(c.at) })}`
+    if (c.state === 'paused') return `⏸ ${t('paused')}`
+    if (c.state === 'out') return c.at ? ti(t('crew_clock_out'), { time: fmtTime(c.at) }) : t('crew_clock_out_plain')
+    return t('crew_clock_none')
+  }
+
   async function loadTimeEntries() {
+    // Teammates' status beside their names refreshes with every own punch too.
+    loadCrewClock().catch(() => {})
     // Own entries only — except for desk staff on a clean they aren't crew on,
     // who see (and run) the whole job's clock: the entry they recorded for a
     // cleaner has to survive a reload, or Complete could never close it.
@@ -1647,9 +1689,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <Text style={styles.infoIcon}>👥</Text>
               <View style={{ flex: 1 }}>
                 <Text style={styles.infoLabel}>{t('crew_on_job')}</Text>
-                <Text style={styles.infoValue}>
-                  {crewOnJob.map(c => c.isLead ? `${c.name} (${t('lead_tag')})` : c.name).join(' · ')}
-                </Text>
+                {/* One line per person with their clock, so everyone on the clean
+                    sees who is on the clock — not just their own timer below. */}
+                {crewOnJob.map(c => {
+                  const clock = crewClockOf(c.id)
+                  return (
+                    <Text key={c.id} style={styles.infoValue}>
+                      {c.isLead ? `${c.name} (${t('lead_tag')})` : c.name}
+                      {clock && (
+                        <Text style={[styles.crewClock, clock.state === 'on' && styles.crewClockOn]}>
+                          {'  '}{crewClockLabel(clock)}
+                        </Text>
+                      )}
+                    </Text>
+                  )
+                })}
               </View>
             </View>
           )}
@@ -2238,6 +2292,8 @@ const styles = StyleSheet.create({
   infoIcon: { fontSize: 18 },
   infoLabel: { fontSize: 10, color: '#9CA3AF', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
   infoValue: { fontSize: 14, color: '#111827', fontWeight: '600', marginTop: 2 },
+  crewClock: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
+  crewClockOn: { color: '#15803D', fontWeight: '600' },
   infoOriginal: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
   callBtn: { marginTop: 4, backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', borderRadius: 10, padding: 12, alignItems: 'center' },
   callBtnText: { color: '#15803D', fontSize: 13, fontWeight: '700' },
