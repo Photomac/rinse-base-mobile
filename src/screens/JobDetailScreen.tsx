@@ -235,7 +235,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [elapsedMinutes, setElapsedMinutes] = useState(0)
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
-  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null } | null>(null)
+  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null; lockbox_code?: string | null; arrival_instructions?: string | null } | null>(null)
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
 
@@ -246,6 +246,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   const { t, lang } = useLang()
   const addr = job.client_addresses as any
+  // Access info comes from loadPropMeta's own read of the property, not the
+  // job the list screen handed us: no list query selects arrival_instructions
+  // (and Schedule doesn't select lockbox_code), so reading them off `addr`
+  // left them blank depending on which screen the crew came from.
+  const lockboxCode: string | null = (propMeta?.lockbox_code ?? addr?.lockbox_code)?.trim() || null
+  const arrivalInstructions: string | null = (propMeta?.arrival_instructions ?? addr?.arrival_instructions)?.trim() || null
   const client = job.clients as any
   // Laundry + "how did the guests leave it" are STR/PM turnover features — a
   // residential client's clean hides both. client_type isn't in every list
@@ -338,7 +344,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // names and notes go through the translate-crew-text function and its cache.
   const tx = useMachineTranslation(lang, [
     crewNoteShown,
-    propMeta?.crew_notes, jobNote, bagColor,
+    propMeta?.crew_notes, arrivalInstructions, jobNote, bagColor,
     ...checklist.map((i: any) => i.title), ...checklist.map((i: any) => i.room),
     ...roomsMeta.map((r: any) => r.name),
     ...evidence.map((e: any) => e.area_name),
@@ -507,7 +513,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!addrId) return
     const { data } = await cachedQuery(`propmeta:${addrId}`, supabase
       .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft, beds, sleeps, crew_notes, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
+      .select('bedrooms, bathrooms, sqft, beds, sleeps, crew_notes, lockbox_code, arrival_instructions, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
       .eq('id', addrId)
       .maybeSingle())
     if (data) {
@@ -1640,16 +1646,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <View><Text style={styles.infoLabel}>{t('crew_door_code')}</Text><Text style={styles.infoValue}>{accessCode}</Text></View>
             </View>
           )}
-          {addr?.lockbox_code && (
+          {lockboxCode && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>🔐</Text>
-              <View><Text style={styles.infoLabel}>{t('lockbox_code')}</Text><Text style={styles.infoValue}>{addr.lockbox_code}</Text></View>
+              <View><Text style={styles.infoLabel}>{t('lockbox_code')}</Text><Text style={styles.infoValue}>{lockboxCode}</Text></View>
             </View>
           )}
-          {addr?.arrival_instructions && (
+          {arrivalInstructions && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📋</Text>
-              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('arrival_instructions')}</Text><Text style={styles.infoValue}>{addr.arrival_instructions}</Text></View>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('arrival_instructions')}</Text><Text style={styles.infoValue}>{tx(arrivalInstructions)}</Text>{tx(arrivalInstructions) !== arrivalInstructions && <Text style={styles.infoOriginal}>{arrivalInstructions}</Text>}</View>
             </View>
           )}
           {(!isTask || hasTaskLocation) && propMeta?.crew_notes && (
