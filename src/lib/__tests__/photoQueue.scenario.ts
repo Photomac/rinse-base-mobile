@@ -17,6 +17,12 @@ import {
 ;(globalThis as any).fetch = fetchMock
 
 let failures = 0
+// A step awaiting something that never settles would otherwise end the run
+// quietly, with exit code 0, before the failures are counted.
+let finished = false
+process.on('beforeExit', () => {
+  if (!finished) { console.error('\nA step never finished: the scenario stalled'); process.exit(1) }
+})
 const ok = (name: string, cond: boolean) => {
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}`)
   if (!cond) failures++
@@ -40,12 +46,19 @@ function shot(): string {
   return uri
 }
 const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('hex')
+// The app closed and opened again: a fresh copy of the queue module. What
+// survives is the stored queue, the phone's files and the server.
+function reopenApp(): typeof import('../photoQueue') {
+  delete require.cache[require.resolve('../photoQueue')]
+  return require('../photoQueue')
+}
 function reset() {
   setRawQueue([])
   net.offline = false; net.hold = false; net.held = []; net.slow.clear()
   net.attempts = []; net.uploads = []; net.readFrom = []; net.rows = []; net.attaches = []
   net.attachResult = 'ok'; net.inserts = []; net.noTakenAtColumn = false; net.noSha256Column = false
   net.token = 'A'; net.storage.clear(); net.loseAnswer.clear(); net.refuseNew = false; net.heads = []; net.headFails = false
+  net.loseInsertAnswer = false; net.holdInsert = false; net.selectFails = false; net.selects = []
   unreadable.clear(); fsReads.length = 0; reported.length = 0
 }
 
@@ -72,6 +85,7 @@ function reset() {
   const r1 = await first
   ok('the mid-pass photo goes in the same flush (re-run), not at the next trigger', r1.uploaded === 2 && r1.remaining === 0)
   ok('each photo uploaded exactly once', net.uploads.length === 2 && new Set(net.uploads).size === 2 && net.rows.length === 2)
+  ok('a photo stored on this try writes its row without looking for one first', net.selects.length === 0)
   ok('no pass left running', !photoQueueActive())
   ok('local copies deleted once uploaded', ![...files].some(f => f.startsWith(DIR)))
   ok('an "uploaded" event per photo for its job', events.filter(e => e.uploadedJobId === 'J1').length === 2)
@@ -234,6 +248,7 @@ function reset() {
   await flushQueue()
   ok('stored by an older bundle: no re-upload, row saved with the local file\'s hash',
     net.uploads.length === 0 && net.rows[0]?.photo_sha256 === sha256(oldBytes) && rawQueue().length === 0)
+  ok('…after looking for its row first (an older bundle\'s insert may have landed)', net.selects.length === 1 && net.inserts.length === 1)
 
   // The file can't be read: the photo is saved anyway, without a fingerprint.
   reset()
@@ -294,6 +309,7 @@ function reset() {
     rShared.uploaded === 1 && net.rows.length === 1 && rawQueue().length === 0 && net.heads.length === 1 && net.heads[0] === shared.fileName)
   ok('…A\'s file is untouched, and the row carries its hash', net.storage.get(shared.fileName)?.owner === 'A' &&
     net.rows[0].photo_sha256 === sha256(net.storage.get(shared.fileName)!.bytes))
+  ok('…a file already in storage: its row looked for before one is written', net.selects.length === 1 && net.inserts.length === 1)
 
   // The same crew member's retry after a lost answer may overwrite: no HEAD.
   reset()
@@ -326,6 +342,56 @@ function reset() {
   await flushQueue({ force: true })
   ok('…the next try finds it and writes the row', net.rows.length === 1 && rawQueue().length === 0)
 
+  // ── Saved once: the row's answer lost ────────────────────────────────────
+  // The row lands but the phone never hears back. The next try must neither
+  // send the file again (a new storage version, which the web's check reads
+  // as "re-sent") nor write a second row (4 photos on prod, 2026-10-12).
+  reset()
+  await enqueuePhoto({ ...base, uri: shot() })
+  const [lost] = rawQueue()
+  net.loseInsertAnswer = true
+  await flushQueue()
+  ok('row answer lost: the row is there, the entry kept as stored', net.rows.length === 1 && rawQueue()[0]?.stored === true)
+  const rLost = await flushQueue()
+  ok('…the next try finds the row: 1 upload, 1 row, entry gone',
+    rLost.uploaded === 1 && net.attempts.length === 1 && net.uploads.length === 1 &&
+    net.inserts.length === 1 && net.rows.length === 1 && rawQueue().length === 0)
+  ok('…looked up by its job and URL', net.selects.length === 1 && net.selects[0].job_id === 'J1' &&
+    net.selects[0].photo_url === `https://cdn.test/job-photos/${lost.fileName}`)
+  ok('…and its local copy deleted', !files.has(lost.localUri))
+
+  // ── Saved once: the app closed after the row, before the pass took it out ─
+  reset()
+  await enqueuePhoto({ ...base, uri: shot() })
+  const [killed] = rawQueue()
+  net.holdInsert = true
+  const closed = flushQueue()
+  await until(() => net.held.length === 1)       // the row is written; its answer hangs
+  ok('the stored queue says "stored" before the row is written', rawQueue()[0]?.stored === true && net.rows.length === 1)
+  const reopened = reopenApp()
+  const rReopen = await reopened.flushQueue()
+  ok('app reopened: 1 upload, 1 row, entry gone',
+    rReopen.uploaded === 1 && net.attempts.length === 1 && net.uploads.length === 1 &&
+    net.inserts.length === 1 && net.rows.length === 1 && rawQueue().length === 0)
+  ok('…and its local copy deleted', !files.has(killed.localUri))
+  // A closed app's pass never comes back; let this one end before going on.
+  release()
+  await closed
+
+  // The lookup fails: no row is written blind.
+  reset()
+  await enqueuePhoto({ ...base, uri: shot() })
+  net.loseInsertAnswer = true
+  await flushQueue()
+  net.selectFails = true
+  await flushQueue()
+  ok('lookup refused: no second row, the photo kept (failing, not lost)',
+    net.inserts.length === 1 && net.rows.length === 1 && rawQueue()[0]?.lastErrorKind === 'server' && rawQueue()[0]?.stored === true)
+  net.selectFails = false
+  await flushQueue({ force: true })
+  ok('…the next try finds the row: 1 upload, 1 row', net.attempts.length === 1 && net.rows.length === 1 && rawQueue().length === 0)
+
+  finished = true
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }
   console.log('\nAll photo-queue invariants hold.')
 })().catch(e => { console.error(e); process.exit(1) })

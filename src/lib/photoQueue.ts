@@ -69,7 +69,8 @@ export interface PendingPhoto {
   // photo taken inside the incident form is only attached.)
   also_job_photo?: boolean
   // The file already reached storage on an earlier try; only the follow-up
-  // write is outstanding, so the next try skips the (large) upload.
+  // write is outstanding, so the next try skips the (large) upload. Written to
+  // the stored queue as soon as the upload lands, before the row is written.
   stored?: boolean
   // The job_photos row is written; only the report attach is outstanding.
   row_saved?: boolean
@@ -344,6 +345,35 @@ async function describeHttpError(res: Response): Promise<string> {
   return detail
 }
 
+// Write this entry's job_photos row.
+async function insertRow(entry: PendingPhoto, photoUrl: string, sha256: Promise<string | null | undefined>): Promise<{ error: any; status: number }> {
+  const row: Record<string, unknown> = {
+    tenant_id: entry.tenant_id,
+    job_id: entry.job_id,
+    user_id: entry.user_id,
+    photo_url: photoUrl,
+    photo_type: entry.photo_type,
+    caption: entry.caption,
+    checklist_item_id: entry.checklist_item_id ?? null,
+    photo_requirement_id: entry.photo_requirement_id ?? null,
+    visible_to_client: entry.visible_to_client,
+  }
+  if (entry.taken_at != null && Number.isFinite(entry.taken_at)) row.taken_at = new Date(entry.taken_at).toISOString()
+  // The fingerprint goes last, so this writer's request body is the one
+  // before it plus that one field (the edge logs tell writers apart by
+  // body size).
+  const fingerprint = await sha256
+  if (fingerprint) row.photo_sha256 = fingerprint
+  let { error, status } = await supabase.from('job_photos').insert(row)
+  // A database without one of the newer columns: once more without the
+  // one it names, until it names none.
+  for (let column = unknownNewColumn(error, row); column; column = unknownNewColumn(error, row)) {
+    delete row[column]
+    ;({ error, status } = await supabase.from('job_photos').insert(row))
+  }
+  return { error, status }
+}
+
 // Upload one entry to storage + record it in job_photos (and/or attach it to
 // its incident report). Storage upload is idempotent (x-upsert on a unique
 // path); the queue entry is only dropped after every write succeeds. Failures
@@ -363,6 +393,9 @@ async function uploadOne(entry: PendingPhoto, sha256: Promise<string | null | un
   }
   if (!token) return { ok: false, kind: 'network', message: 'No signed-in session yet' }
 
+  // The file was in storage before this try: an earlier try may have written
+  // the row too.
+  let mayHaveRow = !!entry.stored
   if (!entry.stored) {
   let res: Response
   const ac = new AbortController()
@@ -394,7 +427,13 @@ async function uploadOne(entry: PendingPhoto, sha256: Promise<string | null | un
     // job photo (rinse-base-app #1391), so this login's retry is refused every
     // time. The file is in storage: go on to its row.
     if (!(await alreadyStored(entry.fileName))) return { ok: false, kind: 'server', message }
+    mayHaveRow = true
   }
+  // Said in the stored queue now, before the row: had the row's answer been
+  // lost, or the app closed before the pass took the entry out, the next try
+  // sent the whole file again (a new storage version, which the web's check
+  // reads as "re-sent") and wrote a second row (4 photos on prod, 2026-10-12).
+  await mutateQueue(cur => cur.map(e => e.id === entry.id ? { ...e, stored: true } : e))
   }
 
   const { data: urlData } = supabase.storage.from('job-photos').getPublicUrl(entry.fileName)
@@ -403,33 +442,22 @@ async function uploadOne(entry: PendingPhoto, sha256: Promise<string | null | un
   const jobPhoto = !entry.incident_report_id || !!entry.also_job_photo
   if (jobPhoto && !entry.row_saved) {
     try {
-      const row: Record<string, unknown> = {
-        tenant_id: entry.tenant_id,
-        job_id: entry.job_id,
-        user_id: entry.user_id,
-        photo_url: urlData.publicUrl,
-        photo_type: entry.photo_type,
-        caption: entry.caption,
-        checklist_item_id: entry.checklist_item_id ?? null,
-        photo_requirement_id: entry.photo_requirement_id ?? null,
-        visible_to_client: entry.visible_to_client,
+      // An earlier try's insert may have landed without its answer reaching
+      // the phone: look for that row before writing another (the web's shot
+      // queue does the same, insertSent).
+      let saved = false
+      if (mayHaveRow) {
+        const found = await supabase.from('job_photos').select('id')
+          .eq('job_id', entry.job_id).eq('photo_url', urlData.publicUrl).limit(1)
+        if (found.error) return { ok: false, kind: found.status === 0 ? 'network' : 'server', message: found.error.message, stored: true }
+        saved = !!found.data?.length
       }
-      if (entry.taken_at != null && Number.isFinite(entry.taken_at)) row.taken_at = new Date(entry.taken_at).toISOString()
-      // The fingerprint goes last, so this writer's request body is the one
-      // before it plus that one field (the edge logs tell writers apart by
-      // body size).
-      const fingerprint = await sha256
-      if (fingerprint) row.photo_sha256 = fingerprint
-      let { error, status } = await supabase.from('job_photos').insert(row)
-      // A database without one of the newer columns: once more without the
-      // one it names, until it names none.
-      for (let column = unknownNewColumn(error, row); column; column = unknownNewColumn(error, row)) {
-        delete row[column]
-        ;({ error, status } = await supabase.from('job_photos').insert(row))
+      if (!saved) {
+        const { error, status } = await insertRow(entry, urlData.publicUrl, sha256)
+        // status 0 = no signal (the photo is stored; only the row is missing) —
+        // retry on the next trigger, not after a server-rejection backoff.
+        if (error) return { ok: false, kind: status === 0 ? 'network' : 'server', message: error.message, stored: true }
       }
-      // status 0 = no signal (the photo is stored; only the row is missing) —
-      // retry on the next trigger, not after a server-rejection backoff.
-      if (error) return { ok: false, kind: status === 0 ? 'network' : 'server', message: error.message, stored: true }
     } catch (e: any) {
       return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
     }
