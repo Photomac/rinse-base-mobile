@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, RefreshControl } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { CrewLine } from '../components/CrewLine'
+import { JobScopeToggle } from '../components/JobScopeToggle'
+import { useJobScope } from '../lib/useJobScope'
+import { isOfficeRole, isMyJob, jobsInScope, dayView, type JobScope } from '../lib/jobScope'
 import { ti, localeFor } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
@@ -19,17 +22,19 @@ import { fmtTime, fmtDate, dayKey, todayKey, startOfDayInTz, endOfDayInTz, start
 
 export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void; onSOS: () => void }) {
   const { t, lang } = useLang()
-  const [todayJobs, setTodayJobs] = useState<any[]>([])
-  const [cancelledToday, setCancelledToday] = useState<any[]>([])
+  // The day as loaded (cancelled included, in working order). What renders —
+  // list, counts, active/next job, route stops — is derived from it below, so
+  // flipping Mine / Everyone needs no reload.
+  const [dayRows, setDayRows] = useState<any[]>([])
   // Cleans left open on a PREVIOUS day — see the query in load().
-  const [needsClosing, setNeedsClosing] = useState<any[]>([])
+  const [strandedRows, setStrandedRows] = useState<any[]>([])
   // jobId -> outstanding blocker count. Absent = unresolved (offline, or
   // the RPC failed), which renders no badge rather than a wrong one.
   const [closingBlockers, setClosingBlockers] = useState<Record<string, number>>({})
-  const [activeJob, setActiveJob] = useState<any>(null)
-  const [nextJob, setNextJob] = useState<any>(null)
-  // earnings null = the pay read hasn't landed yet (shown as "—", not $0.00).
-  const [monthStats, setMonthStats] = useState<{ completed: number; hours: number; earnings: number | null }>({ completed: 0, hours: 0, earnings: null })
+  // This month's completed jobs, as loaded (the office's whole company, crew their own).
+  const [monthRows, setMonthRows] = useState<any[]>([])
+  // null = the pay read hasn't landed yet (shown as "—", not $0.00).
+  const [earnings, setEarnings] = useState<number | null>(null)
   // Bumped per load(): an older load's late answers must not overwrite a newer one's.
   const loadGen = useRef(0)
   const [loading, setLoading] = useState(true)
@@ -45,6 +50,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
   // Crew see the property, not the homeowner — client names are for admins.
   const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
+
+  // Mine / Everyone (lib/jobScope). The office loads the whole company's day
+  // and can narrow it to the cleans they're on; crew rows are already only
+  // their own (load() filters them), so for crew the scope changes nothing.
+  const isOffice = isOfficeRole(user.role)
+  const [scope, setScope] = useJobScope(user.id)
+  const viewScope: JobScope = isOffice ? scope : 'everyone'
 
   const load = useCallback(async () => {
     // Drain queued offline writes first chance we get (pull-to-refresh after
@@ -75,8 +87,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       p_start: monthStart.toISOString(), p_end: now.toISOString(), p_user_id: user.id,
     })).then(({ data: pay }) => {
       if (gen !== loadGen.current) return
-      const earnings = Number((pay as any[])?.[0]?.labor_total || 0)
-      setMonthStats(s => ({ ...s, earnings: Math.round(earnings * 100) / 100 }))
+      const labor = Number((pay as any[])?.[0]?.labor_total || 0)
+      setEarnings(Math.round(labor * 100) / 100)
     }).catch(() => { /* keep what's shown */ })
 
     // Reads go through cachedQuery: last good result survives in AsyncStorage,
@@ -93,9 +105,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       // — the old fetch-everything-then-filter pulled every tenant job of the
       // month, which silently truncates at PostgREST's 1,000-row cap on a busy
       // tenant and understates the crew member's own hours/earnings.
+      // The office's rows carry who is on each job, so "This month" follows Mine.
       cachedQuery(`dash:month:${user.id}`, isOwner
         ? supabase.from('jobs')
-            .select('id, status, scheduled_start, scheduled_end')
+            .select('id, status, scheduled_start, scheduled_end, job_assignments(user_id)')
             .eq('tenant_id', user.tenant_id)
             .eq('status', 'completed')
             .gte('scheduled_start', monthStart.toISOString())
@@ -143,23 +156,17 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // the cached/live rows so the day reads right after a relaunch.
     const myTodayAll = await overlayPending('jobs', (isOwner
       ? (todayRes.data ?? [])
-      : (todayRes.data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
+      : (todayRes.data ?? []).filter((j: any) => isMyJob(j, user.id))
     ).filter(inToday))
-    // Cancelled jobs used to be filtered out server-side, so a cancellation
-    // silently vanished from the crew's day — show explicit "cancelled" cards
-    // instead, so nobody drives to a dead job or wonders where it went.
-    const myToday = myTodayAll.filter((j: any) => j.status !== 'cancelled')
-    setCancelledToday(myTodayAll.filter((j: any) => j.status === 'cancelled'))
 
-    const myMonth = (monthRes.data ?? []).filter((j: any) => new Date(j.scheduled_start) >= monthStart)
+    setMonthRows((monthRes.data ?? []).filter((j: any) => new Date(j.scheduled_start) >= monthStart))
 
     // Same ownership filter + pending overlay as the day itself, so a queued
     // offline completion drops the row instead of nagging until it syncs.
-    const strandedAll = await overlayPending('jobs', (isOwner
+    setStrandedRows(await overlayPending('jobs', (isOwner
       ? (strandedRes.data ?? [])
-      : (strandedRes.data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
-    ))
-    setNeedsClosing(strandedAll.filter((j: any) => j.status === 'in_progress' || j.status === 'en_route'))
+      : (strandedRes.data ?? []).filter((j: any) => isMyJob(j, user.id))
+    )))
 
     // Sorted here rather than trusting the query's ORDER BY: the server can only
     // order by start time, which leaves same-slot jobs in an arbitrary — and
@@ -171,17 +178,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // a day with several cleans in the same slot the crew's next stop was
     // whichever one Postgres happened to hand back first — and could change on
     // a refresh. Next now means next in the order they actually work.
-    const ordered = [...myToday].sort(byCrewDayOrder)
-    setTodayJobs(ordered)
-    setActiveJob(ordered.find((j: any) => j.status === 'in_progress') || null)
-    setNextJob(ordered.find((j: any) => j.status === 'scheduled' || j.status === 'en_route') || null)
-
-    const hours = myMonth.reduce((s: number, j: any) => {
-      if (!j.scheduled_end) return s
-      return s + (new Date(j.scheduled_end).getTime() - new Date(j.scheduled_start).getTime()) / 3600000
-    }, 0)
-    // Earnings are filled in by the pay read started above.
-    setMonthStats(s => ({ ...s, completed: myMonth.length, hours: Math.round(hours * 10) / 10 }))
+    // (dayView picks active/next from this order.)
+    setDayRows([...myTodayAll].sort(byCrewDayOrder))
 
     if (shiftRes) {
       const shift = shiftRes.data as any
@@ -203,6 +201,28 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   }, [user])
 
   useEffect(() => { load() }, [load])
+
+  // Cancelled jobs used to be filtered out server-side, so a cancellation
+  // silently vanished from the crew's day — dayView keeps them apart as
+  // explicit "cancelled" cards, so nobody drives to a dead job or wonders
+  // where it went. They never count toward Today / Done / Remaining.
+  const day = useMemo(() => dayView(dayRows, user.id, viewScope), [dayRows, user.id, viewScope])
+  const todayJobs = day.jobs
+  const cancelledToday = day.cancelled
+  const activeJob = day.active
+  const nextJob = day.next
+  // Still open after the offline overlay (load()), and narrowed like the day.
+  const needsClosing = useMemo(() => jobsInScope(strandedRows, user.id, viewScope)
+    .filter((j: any) => j.status === 'in_progress' || j.status === 'en_route'), [strandedRows, user.id, viewScope])
+  const monthStats = useMemo(() => {
+    const rows = jobsInScope(monthRows, user.id, viewScope)
+    const hours = rows.reduce((s: number, j: any) => {
+      if (!j.scheduled_end) return s
+      return s + (new Date(j.scheduled_end).getTime() - new Date(j.scheduled_start).getTime()) / 3600000
+    }, 0)
+    // Earnings are filled in by the pay read started in load().
+    return { completed: rows.length, hours: Math.round(hours * 10) / 10, earnings }
+  }, [monthRows, earnings, user.id, viewScope])
 
   // Resolve "ready to close" vs "still short of photos" per stranded clean,
   // using the SAME job_completion_blockers() gate JobDetailScreen enforces on
@@ -283,19 +303,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const now = new Date()
   const hour = now.getHours()
   const greeting = hour < 12 ? t('good_morning') : hour < 17 ? t('good_afternoon') : t('good_evening')
-  const completedToday = todayJobs.filter(j => j.status === 'completed').length
-
-  // Dispatcher-suggested driving order → "Stop k of M" for the crew's day.
-  // Rank among today's jobs that carry a route_order so it's always a clean
-  // "1 of N" regardless of how the dispatcher generated it.
-  const routeStops: Record<string, { k: number; m: number }> = (() => {
-    const ordered = todayJobs
-      .filter((j: any) => j.route_order != null)
-      .sort((a: any, b: any) => a.route_order - b.route_order)
-    const map: Record<string, { k: number; m: number }> = {}
-    ordered.forEach((j: any, i: number) => { map[j.id] = { k: i + 1, m: ordered.length } })
-    return map
-  })()
+  // Dispatcher-suggested driving order → "Stop k of M" for the crew's day,
+  // ranked over the jobs shown: on Mine, the viewer's own stops (see routeStops).
+  const routeStops = day.stops
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -316,6 +326,12 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             </TouchableOpacity>
           </View>
 
+          {isOffice && (
+            <View style={styles.scopeRow}>
+              <JobScopeToggle scope={scope} onChange={setScope} />
+            </View>
+          )}
+
           {/* Stats bar */}
           <View style={styles.statsBar}>
             <View style={styles.stat}>
@@ -324,12 +340,12 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
-              <Text style={styles.statValue}>{completedToday}</Text>
+              <Text style={styles.statValue}>{day.done}</Text>
               <Text style={styles.statLabel}>{t('done_label')}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
-              <Text style={styles.statValue}>{todayJobs.length - completedToday}</Text>
+              <Text style={styles.statValue}>{day.remaining}</Text>
               <Text style={styles.statLabel}>{t('remaining')}</Text>
             </View>
             <View style={styles.statDivider} />
@@ -471,7 +487,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               </View>
               {todayJobs.length === 0 ? (
                 <View style={styles.emptyCard}>
-                  <Text style={styles.emptyText}>{t('no_jobs_today')} 🌟</Text>
+                  <Text style={styles.emptyText}>{viewScope === 'mine' ? t('no_jobs_today_mine') : t('no_jobs_today')} 🌟</Text>
                 </View>
               ) : todayJobs.map((job: any) => {
                 const addr = job.client_addresses
@@ -560,6 +576,7 @@ const styles = StyleSheet.create({
   sosBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center', shadowColor: '#EF4444', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 8 },
   sosBtnText: { fontSize: 20 },
   sosHoldLabel: { fontSize: 7, color: 'rgba(255,255,255,0.8)', fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.3 },
+  scopeRow: { marginTop: -8, marginBottom: 14 },
   statsBar: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: 14, padding: 14, marginBottom: 20 },
   stat: { flex: 1, alignItems: 'center' },
   statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.1)' },

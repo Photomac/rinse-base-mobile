@@ -4,6 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { CrewLine } from '../components/CrewLine'
+import { JobScopeToggle } from '../components/JobScopeToggle'
+import { useJobScope } from '../lib/useJobScope'
+import { isOfficeRole, isMyJob, jobsInScope, type JobScope } from '../lib/jobScope'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
@@ -45,6 +48,11 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const [view, setView] = useState<ViewMode>('month')
   // Crew see the property, not the homeowner — client names are for admins.
   const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
+  // Mine / Everyone (lib/jobScope), the same choice as Home's. Crew rows are
+  // already only their own (load() filters them), so for crew it changes nothing.
+  const isOffice = isOfficeRole(user.role)
+  const [scope, setScope] = useJobScope(user.id)
+  const viewScope: JobScope = isOffice ? scope : 'everyone'
 
   useEffect(() => { load() }, [])
 
@@ -66,7 +74,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     setOffline(fromCache)
     const myJobs = isOwner
       ? (data ?? [])
-      : (data ?? []).filter((j: any) => j.job_assignments?.some((a: any) => a.user_id === user.id))
+      : (data ?? []).filter((j: any) => isMyJob(j, user.id))
     // Queued offline status changes overlay the cached/live rows.
     // Same order the Dashboard uses — a crew opening Schedule for today must
     // see the sequence they see on the day screen, not a second opinion.
@@ -79,16 +87,17 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   // cells the month grid draws. Keys are tenant-zone days; a grid cell is a
   // local calendar Date whose literal Y/M/D is what it displays, so the two
   // sides of the lookup are built by different helpers on purpose.
+  const shown = useMemo(() => jobsInScope(jobs, user.id, viewScope), [jobs, user.id, viewScope])
   const jobsByDay = useMemo(() => {
     const m = new Map<string, any[]>()
-    for (const j of jobs) {
+    for (const j of shown) {
       const k = dayKey(j.scheduled_start)
       const bucket = m.get(k)
       if (bucket) bucket.push(j)
       else m.set(k, [j])
     }
     return m
-  }, [jobs])
+  }, [shown])
 
   function getJobsForDay(day: Date) {
     return jobsByDay.get(localDayKey(day)) ?? EMPTY_DAY
@@ -146,8 +155,13 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
             </Text>
           </TouchableOpacity>
         ))}
-        <Text style={styles.jobCountLabel}>{ti(t('n_jobs'), { n: String(jobs.length) })}</Text>
+        <Text style={styles.jobCountLabel}>{ti(t('n_jobs'), { n: String(shown.length) })}</Text>
       </View>
+      {isOffice && (
+        <View style={styles.scopeRow}>
+          <JobScopeToggle scope={scope} onChange={setScope} />
+        </View>
+      )}
 
       <ScrollView
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={GOLD} />}>
@@ -236,7 +250,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
           </Text>
           {selectedJobs.length === 0 ? (
             <View style={styles.emptyDay}>
-              <Text style={styles.emptyText}>{t('no_jobs_day')}</Text>
+              <Text style={styles.emptyText}>{viewScope === 'mine' ? t('no_jobs_day_mine') : t('no_jobs_day')}</Text>
             </View>
           ) : selectedJobs.map((job: any) => {
             const addr = job.client_addresses as any
@@ -278,6 +292,7 @@ const styles = StyleSheet.create({
   viewBtnText: { color: 'rgba(255,255,255,0.6)', fontSize: 12, fontWeight: '600' },
   viewBtnTextActive: { color: '#fff' },
   jobCountLabel: { color: 'rgba(255,255,255,0.4)', fontSize: 11, marginLeft: 'auto' },
+  scopeRow: { backgroundColor: SLATE_DARK, paddingHorizontal: 16, paddingBottom: 12 },
   dayNamesRow: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
   dayName: { flex: 1, textAlign: 'center', fontSize: 10, fontWeight: '700', color: '#94A3B8', paddingVertical: 6, textTransform: 'uppercase' },
   weekRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
