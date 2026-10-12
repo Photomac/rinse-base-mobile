@@ -27,6 +27,8 @@ export async function captureRequiredPhoto(
     const result = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false })
     if (result.canceled) return { status: 'cancelled' }
     const uri = result.assets[0].uri
+    // Taken just now: the camera has only just handed it back.
+    const takenAt = Date.now()
     try {
       await enqueuePhoto({
         uri,
@@ -37,6 +39,7 @@ export async function captureRequiredPhoto(
         caption: req.area_name,
         photo_requirement_id: req.id,
         visible_to_client: true,
+        taken_at: takenAt,
       })
       // Uploads in the background, as on the Photos screen: the room shows the
       // shot from its local file right away, and the next one can be taken

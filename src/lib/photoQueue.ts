@@ -63,7 +63,14 @@ export interface PendingPhoto {
   stored?: boolean
   // The job_photos row is written; only the report attach is outstanding.
   row_saved?: boolean
+  // When it was enqueued. Not sent: a library photo is enqueued long after it
+  // was taken.
   created_at: number
+  // When the photo was taken (ms), sent as job_photos.taken_at: the camera's
+  // moment, or a library photo's EXIF time (src/lib/photoTakenAt.ts). Null =
+  // unknown, and so is an entry queued before 2026-10-12 (absent): the web's
+  // stamped download then shows the upload time, said to be one.
+  taken_at?: number | null
   attempts?: number
   // Uploads of this photo that ran out the clock. Used to send a photo that
   // keeps timing out to the back of the pass, so it can't hold every photo
@@ -163,6 +170,8 @@ export async function enqueuePhoto(p: {
   photo_requirement_id?: string | null;
   visible_to_client: boolean;
   incident_report_id?: string | null;
+  /** When it was taken (ms): Date.now() as the camera returns it, or exifTakenAt() for a library photo. */
+  taken_at?: number | null;
 }): Promise<string> {
   await ensureDir()
   const stamp = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`
@@ -193,6 +202,7 @@ export async function enqueuePhoto(p: {
     visible_to_client: p.visible_to_client,
     ...(p.incident_report_id ? { incident_report_id: p.incident_report_id, also_job_photo: true } : {}),
     created_at: Date.now(),
+    taken_at: p.taken_at ?? null,
   }
   await mutateQueue(q => [...q, entry])
   return id
@@ -244,6 +254,13 @@ export async function enqueueIncidentPhoto(p: {
 /** Photos for this incident report still waiting to upload or attach. */
 export async function pendingIncidentPhotos(reportId: string): Promise<number> {
   return (await readQueue()).filter(p => p.incident_report_id === reportId).length
+}
+
+// PostgREST refusing a column it doesn't know: this bundle reached phones
+// before the migration adding taken_at reached the database. The photo matters
+// more than its capture time, so its row is written without it.
+function unknownColumn(error: any, column: string): boolean {
+  return error?.code === 'PGRST204' && typeof error?.message === 'string' && error.message.includes(`'${column}'`)
 }
 
 type UploadResult =
@@ -318,7 +335,7 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
   const jobPhoto = !entry.incident_report_id || !!entry.also_job_photo
   if (jobPhoto && !entry.row_saved) {
     try {
-      const { error, status } = await supabase.from('job_photos').insert({
+      const row: Record<string, unknown> = {
         tenant_id: entry.tenant_id,
         job_id: entry.job_id,
         user_id: entry.user_id,
@@ -328,7 +345,13 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
         checklist_item_id: entry.checklist_item_id ?? null,
         photo_requirement_id: entry.photo_requirement_id ?? null,
         visible_to_client: entry.visible_to_client,
-      })
+      }
+      if (entry.taken_at != null && Number.isFinite(entry.taken_at)) row.taken_at = new Date(entry.taken_at).toISOString()
+      let { error, status } = await supabase.from('job_photos').insert(row)
+      if (error && 'taken_at' in row && unknownColumn(error, 'taken_at')) {
+        delete row.taken_at
+        ;({ error, status } = await supabase.from('job_photos').insert(row))
+      }
       // status 0 = no signal (the photo is stored; only the row is missing) —
       // retry on the next trigger, not after a server-rejection backoff.
       if (error) return { ok: false, kind: status === 0 ? 'network' : 'server', message: error.message, stored: true }

@@ -46,6 +46,10 @@ export const net = {
   /** The file uri each upload was read from. */
   readFrom: [] as string[],
   rows: [] as any[],
+  /** Every job_photos insert that reached the server, kept or refused. */
+  inserts: [] as any[],
+  /** The database doesn't have job_photos.taken_at yet (migration not applied). */
+  noTakenAtColumn: false,
   attaches: [] as { p_report_id: string; p_url: string }[],
   attachResult: 'ok' as 'ok' | 'no_report',
 }
@@ -88,7 +92,11 @@ export const supabase = {
   from: (_table: string) => ({
     insert: async (row: any) => {
       if (net.offline) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
-      net.rows.push(row)
+      net.inserts.push({ ...row })
+      if (net.noTakenAtColumn && 'taken_at' in row) {
+        return { error: { code: 'PGRST204', message: "Could not find the 'taken_at' column of 'job_photos' in the schema cache" }, status: 400 }
+      }
+      net.rows.push({ ...row })
       return { error: null, status: 201 }
     },
   }),
