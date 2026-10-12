@@ -1459,6 +1459,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   async function completeJobNoPhotoCheck() {
     setSaving(true)
+    // completed_at = the tap, not the moment the outbox delivers it: offline
+    // Completes replay later, and the server would otherwise stamp the replay.
+    // Taken before the clock-out's GPS fix so it can't trail the clock-out.
+    // The server keeps it only on the move into completed and only if
+    // plausible (rinsebase-app migration 20261012170000); before that
+    // migration it is overwritten with the delivery time, as today.
+    const completedAt = new Date().toISOString()
     if (!(await clockOutActive())) { setSaving(false); return }
     const queuedOffline = clockOutQueuedRef.current
     // Append the crew's completion note to internal_notes instead of replacing
@@ -1472,6 +1479,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       table: 'jobs', op: 'update', match: { id: job.id },
       values: {
         status: 'completed',
+        completed_at: completedAt,
         internal_notes: mergedNotes,
         // Sign-off attribution (distinct from per-item completed_by = last ticker).
         ...(user?.id ? { completed_by_user_id: user.id } : {}),
