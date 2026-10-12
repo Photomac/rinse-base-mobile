@@ -10,11 +10,18 @@
 // flushQueue() without awaiting it, and follow progress through
 // onPhotoQueueChange(). On one rural bar a photo took 24–103 s (CKS
 // Perfections), and the old flow held the camera button for every one of them.
+//
+// Each job photo's row also carries the SHA-256 of the file it uploaded
+// (job_photos.photo_sha256, 2026-10-12; rinse-base-app #1391), which nobody but
+// the server can change once the row is saved. The web's stamped download
+// hashes the stored file and prints whether the two still match. Worked out
+// once per photo, from the same local file the upload sends, while it uploads.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as FileSystem from 'expo-file-system/legacy'
 import { supabase, usableAccessToken } from './supabase'
 import { reportClientError } from './errorReporter'
+import { sha256HexOfBase64 } from './sha256'
 
 const QUEUE_KEY = 'rinsebase.photoQueue.v1'
 const DIR = FileSystem.documentDirectory + 'pending_photos/'
@@ -25,6 +32,9 @@ const SUPABASE_URL = 'https://cbnbhwclbtowfbjylnph.supabase.co'
 // for a SLOW-but-alive upload to finish: photos run ~1.8 MB average, 3.5 MB
 // max, which takes ~2 min at 25 KB/s. A shorter cap would kill those every time.
 const UPLOAD_TIMEOUT_MS = 240_000
+// Asking storage whether a refused file is already there (alreadyStored) is a
+// tiny request; it shouldn't hold the pass as long as an upload may.
+const CHECK_TIMEOUT_MS = 30_000
 
 // 'network' = couldn't reach the server (no signal, fetch threw, no session yet)
 // — retrying when coverage returns IS the fix. 'server' = the server heard us
@@ -71,6 +81,12 @@ export interface PendingPhoto {
   // unknown, and so is an entry queued before 2026-10-12 (absent): the web's
   // stamped download then shows the upload time, said to be one.
   taken_at?: number | null
+  // The SHA-256 (lowercase hex) of the local file the upload sends, sent as
+  // job_photos.photo_sha256. Worked out on the first try and kept, so a retry
+  // doesn't hash the photo again. Null = it couldn't be read or hashed, and the
+  // row is saved without one; absent = not worked out yet (and on every entry
+  // queued before 2026-10-12).
+  sha256?: string | null
   attempts?: number
   // Uploads of this photo that ran out the clock. Used to send a photo that
   // keeps timing out to the back of the pass, so it can't hold every photo
@@ -257,10 +273,55 @@ export async function pendingIncidentPhotos(reportId: string): Promise<number> {
 }
 
 // PostgREST refusing a column it doesn't know: this bundle reached phones
-// before the migration adding taken_at reached the database. The photo matters
-// more than its capture time, so its row is written without it.
+// before the migration adding taken_at (or photo_sha256) reached the database.
+// The photo matters more than its capture time or fingerprint, so its row is
+// written without it.
 function unknownColumn(error: any, column: string): boolean {
   return error?.code === 'PGRST204' && typeof error?.message === 'string' && error.message.includes(`'${column}'`)
+}
+
+// The row's columns newer than the database may be (2026-10-12). PostgREST
+// names one unknown column at a time.
+const NEW_COLUMNS = ['taken_at', 'photo_sha256'] as const
+function unknownNewColumn(error: any, row: Record<string, unknown>): string | undefined {
+  return NEW_COLUMNS.find(c => c in row && unknownColumn(error, c))
+}
+
+// The SHA-256 of a queued photo's file, or null when it can't be read or
+// hashed: the photo is then saved without a fingerprint, never held back for
+// one. Never throws.
+async function fileSha256(uri: string): Promise<string | null> {
+  try {
+    const b64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
+    return await sha256HexOfBase64(b64)
+  } catch (e: any) {
+    reportClientError(`photoQueue: could not fingerprint a photo: ${e?.message || e}`, undefined, 'photoQueue')
+    return null
+  }
+}
+
+// Whether this entry still needs its fingerprint worked out: it becomes a
+// job_photos row that isn't written yet. (A photo taken inside the incident
+// form only joins its report, which has no fingerprint column.)
+function needsFingerprint(entry: PendingPhoto): boolean {
+  const jobPhoto = !entry.incident_report_id || !!entry.also_job_photo
+  return jobPhoto && !entry.row_saved && entry.sha256 === undefined
+}
+
+// The file is already at this path in storage. The bucket is public, so a HEAD
+// of its public URL answers without a session. No, or no answer, is false.
+async function alreadyStored(fileName: string): Promise<boolean> {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), CHECK_TIMEOUT_MS)
+  try {
+    const { data } = supabase.storage.from('job-photos').getPublicUrl(fileName)
+    const res = await fetch(data.publicUrl, { method: 'HEAD', signal: ac.signal })
+    return res.ok
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 type UploadResult =
@@ -288,8 +349,9 @@ async function describeHttpError(res: Response): Promise<string> {
 // path); the queue entry is only dropped after every write succeeds. Failures
 // are classified so the UI can tell "no signal" apart from "the server is
 // rejecting uploads". Leaves the local file alone: the pass deletes it once the
-// entry is out of the stored queue.
-async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
+// entry is out of the stored queue. sha256 = the file's fingerprint for the
+// row, being worked out while the file uploads.
+async function uploadOne(entry: PendingPhoto, sha256: Promise<string | null | undefined>): Promise<UploadResult> {
   let token: string | null
   try {
     // Null while the hour-long token has lapsed and can't be renewed (no
@@ -323,9 +385,15 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
   }
   if (!res.ok) {
     const message = await describeHttpError(res)
-    // 4xx = the server rejected this upload (auth/policy/path); 5xx = transient,
-    // treat like a connectivity blip and keep retrying opportunistically.
-    return { ok: false, kind: res.status < 500 ? 'server' : 'network', message }
+    // 5xx = transient, treat like a connectivity blip and keep retrying
+    // opportunistically.
+    if (res.status >= 500) return { ok: false, kind: 'network', message }
+    // 4xx = the server rejected this upload (auth/policy/path) — unless the
+    // file is already there. On a shared phone, the crew member signed in
+    // before sent it and never heard back; only the uploader may write over a
+    // job photo (rinse-base-app #1391), so this login's retry is refused every
+    // time. The file is in storage: go on to its row.
+    if (!(await alreadyStored(entry.fileName))) return { ok: false, kind: 'server', message }
   }
   }
 
@@ -347,9 +415,16 @@ async function uploadOne(entry: PendingPhoto): Promise<UploadResult> {
         visible_to_client: entry.visible_to_client,
       }
       if (entry.taken_at != null && Number.isFinite(entry.taken_at)) row.taken_at = new Date(entry.taken_at).toISOString()
+      // The fingerprint goes last, so this writer's request body is the one
+      // before it plus that one field (the edge logs tell writers apart by
+      // body size).
+      const fingerprint = await sha256
+      if (fingerprint) row.photo_sha256 = fingerprint
       let { error, status } = await supabase.from('job_photos').insert(row)
-      if (error && 'taken_at' in row && unknownColumn(error, 'taken_at')) {
-        delete row.taken_at
+      // A database without one of the newer columns: once more without the
+      // one it names, until it names none.
+      for (let column = unknownNewColumn(error, row); column; column = unknownNewColumn(error, row)) {
+        delete row[column]
         ;({ error, status } = await supabase.from('job_photos').insert(row))
       }
       // status 0 = no signal (the photo is stored; only the row is missing) —
@@ -423,7 +498,11 @@ async function runPass(force: boolean): Promise<{ uploaded: number; noSignal: bo
 
     uploadingId = entry.id
     emit({})
-    const result = await uploadOne(entry).finally(() => { uploadingId = null })
+    // Hashed from the file the upload sends, while it uploads (the hash hands
+    // the JS thread back between slices; the upload runs natively).
+    const fingerprint = needsFingerprint(entry) ? fileSha256(resolveLocal(entry.localUri)) : Promise.resolve(entry.sha256)
+    const result = await uploadOne(entry, fingerprint).finally(() => { uploadingId = null })
+    const sha256 = await fingerprint
     const jobPhoto = !entry.incident_report_id || !!entry.also_job_photo
 
     if (result.ok) {
@@ -439,6 +518,8 @@ async function runPass(force: boolean): Promise<{ uploaded: number; noSignal: bo
     const attempts = (entry.attempts ?? 0) + 1
     await mutateQueue(cur => cur.map(e => e.id !== entry.id ? e : {
       ...e,
+      // Kept so the next try sends the same fingerprint without hashing again.
+      sha256: e.sha256 !== undefined ? e.sha256 : sha256,
       stored: e.stored || result.stored || undefined,
       row_saved: e.row_saved || result.rowSaved || undefined,
       timeouts: result.timedOut ? (e.timeouts ?? 0) + 1 : e.timeouts,

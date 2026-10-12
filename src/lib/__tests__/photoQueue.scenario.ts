@@ -5,10 +5,13 @@
 // are queued and the flush is kicked WITHOUT being awaited, while the crew
 // keeps shooting or picks a batch from the library. The two failure modes that
 // matter are a lost photo and a photo saved twice.
+import { createHash, randomBytes } from 'node:crypto'
 import {
   enqueuePhoto, flushQueue, pendingStatus, queuedJobPhotos, onPhotoQueueChange, photoQueueActive,
 } from '../photoQueue'
-import { net, files, rawQueue, setRawQueue, reported, release, MockFormData, fetchMock } from './photoQueue.mocks'
+import {
+  net, files, fileBytes, bytesOf, unreadable, fsReads, rawQueue, setRawQueue, reported, release, MockFormData, fetchMock,
+} from './photoQueue.mocks'
 
 ;(globalThis as any).FormData = MockFormData
 ;(globalThis as any).fetch = fetchMock
@@ -33,13 +36,17 @@ let n = 0
 function shot(): string {
   const uri = `file:///app/NEW/Library/Caches/ImagePicker/${++n}.jpg`
   files.add(uri)
+  fileBytes.set(uri, new Uint8Array(randomBytes(2000 + n)))
   return uri
 }
+const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('hex')
 function reset() {
   setRawQueue([])
   net.offline = false; net.hold = false; net.held = []; net.slow.clear()
   net.attempts = []; net.uploads = []; net.readFrom = []; net.rows = []; net.attaches = []
-  net.attachResult = 'ok'; net.inserts = []; net.noTakenAtColumn = false
+  net.attachResult = 'ok'; net.inserts = []; net.noTakenAtColumn = false; net.noSha256Column = false
+  net.token = 'A'; net.storage.clear(); net.loseAnswer.clear(); net.refuseNew = false; net.heads = []; net.headFails = false
+  unreadable.clear(); fsReads.length = 0; reported.length = 0
 }
 
 ;(async () => {
@@ -165,7 +172,8 @@ function reset() {
   await enqueuePhoto({ ...base, uri: shot(), taken_at: null })
   await enqueuePhoto({ ...base, uri: shot() })
   await flushQueue()
-  ok('taken_at: sent with the row as ISO, after every other field', net.rows[0]?.taken_at === '2026-10-12T15:04:30.000Z' && Object.keys(net.rows[0]).pop() === 'taken_at')
+  ok('taken_at: sent with the row as ISO, after every other field but the fingerprint',
+    net.rows[0]?.taken_at === '2026-10-12T15:04:30.000Z' && Object.keys(net.rows[0]).slice(-2).join() === 'taken_at,photo_sha256')
   ok('…unknown (null, or a caller that says nothing): no taken_at sent', net.rows.length === 3 && !('taken_at' in net.rows[1]) && !('taken_at' in net.rows[2]))
   ok('…the queue time (created_at) is never sent', net.rows.every(r => !('created_at' in r)))
 
@@ -183,6 +191,140 @@ function reset() {
   await flushQueue()
   ok('no taken_at column yet: the photo is still saved, without it, on the same pass',
     net.inserts.length === 2 && 'taken_at' in net.inserts[0] && !('taken_at' in net.inserts[1]) && net.rows.length === 1 && rawQueue().length === 0)
+
+  // ── The file's fingerprint (job_photos.photo_sha256, 2026-10-12) ─────────
+  reset()
+  await enqueuePhoto({ ...base, uri: shot(), taken_at: shotAt })
+  await enqueuePhoto({ ...base, uri: shot() })
+  const [fp1, fp2] = rawQueue()
+  await flushQueue()
+  const sent1 = net.storage.get(fp1.fileName)!.bytes
+  ok('photo_sha256: the SHA-256 of the very bytes the upload sent (node:crypto)',
+    net.rows[0]?.photo_sha256 === sha256(sent1) && net.rows[1]?.photo_sha256 === sha256(net.storage.get(fp2.fileName)!.bytes))
+  ok('…read from the same local file the upload sent, once each', fsReads.length === 2 && fsReads[0] === net.readFrom[0] && fsReads[1] === net.readFrom[1])
+  ok('…64 lowercase hex characters (the column\'s CHECK)', net.rows.every(r => /^[0-9a-f]{64}$/.test(r.photo_sha256)))
+  ok('body keys: as before, then taken_at, then photo_sha256 last',
+    Object.keys(net.rows[0]).join() === 'tenant_id,job_id,user_id,photo_url,photo_type,caption,checklist_item_id,photo_requirement_id,visible_to_client,taken_at,photo_sha256')
+  ok('…photo_sha256 last when taken_at is unknown too', Object.keys(net.rows[1]).pop() === 'photo_sha256' && !('taken_at' in net.rows[1]))
+  const { photo_sha256: _fp, ...withoutFp } = net.rows[0]
+  const grows = JSON.stringify(net.rows[0]).length - JSON.stringify(withoutFp).length
+  ok('the request body grows by exactly 82 bytes (,"photo_sha256":"<64 hex>")', grows === 82)
+
+  // Hashed once: a retry sends the hash it kept.
+  reset()
+  net.offline = true
+  await enqueuePhoto({ ...base, uri: shot() })
+  await flushQueue()
+  const [kept] = rawQueue()
+  ok('offline: the fingerprint is worked out once and kept on the queue entry', /^[0-9a-f]{64}$/.test(kept?.sha256) && fsReads.length === 1)
+  await flushQueue()
+  ok('…a second offline pass doesn\'t hash it again', fsReads.length === 1)
+  net.offline = false
+  await flushQueue()
+  ok('signal back: saved with the kept hash, no third read', net.rows[0]?.photo_sha256 === kept.sha256 && fsReads.length === 1 && rawQueue().length === 0)
+  ok('…and the kept hash is the stored file\'s', kept.sha256 === sha256(net.storage.get(kept.fileName)!.bytes))
+
+  // An entry an older bundle already stored, row still owed: hashed from the
+  // local file, which stays on the phone until the row is written.
+  reset()
+  const oldUri = shot()
+  const oldBytes = bytesOf(oldUri)
+  net.storage.set('T/J1/stored.jpg', { owner: 'A', bytes: oldBytes })
+  setRawQueue([{ id: 'J1_stored', localUri: oldUri, fileName: 'T/J1/stored.jpg', tenant_id: 'T', job_id: 'J1', user_id: 'U', photo_type: 'after', caption: null, visible_to_client: true, created_at: 1, stored: true }])
+  await flushQueue()
+  ok('stored by an older bundle: no re-upload, row saved with the local file\'s hash',
+    net.uploads.length === 0 && net.rows[0]?.photo_sha256 === sha256(oldBytes) && rawQueue().length === 0)
+
+  // The file can't be read: the photo is saved anyway, without a fingerprint.
+  reset()
+  await enqueuePhoto({ ...base, uri: shot() })
+  unreadable.add(rawQueue()[0].localUri)
+  await flushQueue()
+  ok('unreadable file: the row is saved without photo_sha256, same pass', net.rows.length === 1 && !('photo_sha256' in net.rows[0]) && rawQueue().length === 0)
+  ok('…and it is reported', reported.some(m => m.includes('could not fingerprint')))
+
+  // …and when the row then fails, a retry doesn't try to hash it again.
+  reset()
+  await enqueuePhoto({ ...base, uri: shot() })
+  unreadable.add(rawQueue()[0].localUri)
+  net.noTakenAtColumn = true; net.noSha256Column = true
+  net.offline = true
+  await flushQueue()
+  ok('a fingerprint that failed is kept as null, not retried every pass', rawQueue()[0]?.sha256 === null && fsReads.length === 1)
+  net.offline = false
+  await flushQueue()
+  ok('…and the photo still saves without one', net.rows.length === 1 && fsReads.length === 1 && rawQueue().length === 0)
+
+  // A photo taken inside the incident form only joins its report: no hash.
+  reset()
+  files.add(`${DIR}incident.jpg`)
+  setRawQueue([{ id: 'J1_inc', localUri: `${DIR}incident.jpg`, fileName: 'T/J1/incident_1.jpg', tenant_id: 'T', job_id: 'J1', user_id: 'U', photo_type: 'damage', caption: null, visible_to_client: false, incident_report_id: 'R2', created_at: 1 }])
+  await flushQueue()
+  ok('incident-form photo: attached, no job_photos row, never hashed', net.attaches.length === 1 && net.rows.length === 0 && fsReads.length === 0)
+
+  // ── A database without photo_sha256 (PGRST204) ───────────────────────────
+  reset()
+  net.noSha256Column = true
+  await enqueuePhoto({ ...base, uri: shot(), taken_at: shotAt })
+  await flushQueue()
+  ok('no photo_sha256 column: saved without it, keeping taken_at, on the same pass',
+    net.inserts.length === 2 && 'photo_sha256' in net.inserts[0] && !('photo_sha256' in net.inserts[1]) &&
+    net.rows.length === 1 && net.rows[0].taken_at === '2026-10-12T15:04:30.000Z' && rawQueue().length === 0)
+
+  reset()
+  net.noSha256Column = true; net.noTakenAtColumn = true
+  await enqueuePhoto({ ...base, uri: shot(), taken_at: shotAt })
+  await flushQueue()
+  ok('neither new column: three tries, one row, the photo saved without both',
+    net.inserts.length === 3 && net.rows.length === 1 && !('photo_sha256' in net.rows[0]) && !('taken_at' in net.rows[0]) && rawQueue().length === 0)
+
+  // ── Shared phone: storage refuses the retry, but the file is there ───────
+  // Crew A's upload lands, the answer is lost, A signs out, B signs in. Only
+  // the uploader may write over a job photo (rinse-base-app #1391), so B's
+  // retry is refused every time.
+  reset()
+  await enqueuePhoto({ ...base, uri: shot() })
+  const [shared] = rawQueue()
+  net.loseAnswer.add(shared.fileName)
+  await flushQueue()
+  ok('A: the file reached storage but the phone never heard back', net.storage.get(shared.fileName)?.owner === 'A' && rawQueue()[0]?.stored === undefined)
+  net.token = 'B'
+  const rShared = await flushQueue()
+  ok('B: refused (4xx), but the file is there: marked stored and the row is written',
+    rShared.uploaded === 1 && net.rows.length === 1 && rawQueue().length === 0 && net.heads.length === 1 && net.heads[0] === shared.fileName)
+  ok('…A\'s file is untouched, and the row carries its hash', net.storage.get(shared.fileName)?.owner === 'A' &&
+    net.rows[0].photo_sha256 === sha256(net.storage.get(shared.fileName)!.bytes))
+
+  // The same crew member's retry after a lost answer may overwrite: no HEAD.
+  reset()
+  await enqueuePhoto({ ...base, uri: shot() })
+  net.loseAnswer.add(rawQueue()[0].fileName)
+  await flushQueue()
+  await flushQueue()
+  ok('same login retrying: the overwrite is allowed, nothing to ask', net.rows.length === 1 && net.heads.length === 0 && rawQueue().length === 0)
+
+  // Refused and NOT there: still a server rejection, backed off, not lost.
+  reset()
+  net.refuseNew = true
+  await enqueuePhoto({ ...base, uri: shot() })
+  await flushQueue()
+  const [refused] = rawQueue()
+  ok('refused and not in storage: kept, failing, backing off, no row',
+    refused?.lastErrorKind === 'server' && !refused.stored && (refused.nextAttemptAt ?? 0) > Date.now() && net.rows.length === 0 && net.heads.length === 1)
+  ok('…the reason is storage\'s', /row-level security/.test(refused?.lastError ?? '') && (await pendingStatus('J1')).serverRejected === 1)
+
+  // Refused, and the check gets no answer: not assumed stored.
+  reset()
+  await enqueuePhoto({ ...base, uri: shot() })
+  net.loseAnswer.add(rawQueue()[0].fileName)
+  await flushQueue()
+  net.token = 'B'; net.headFails = true
+  await flushQueue()
+  const [unsure] = rawQueue()
+  ok('refused and the check unanswered: kept as a server rejection, not marked stored', unsure?.lastErrorKind === 'server' && !unsure.stored && net.rows.length === 0)
+  net.headFails = false
+  await flushQueue({ force: true })
+  ok('…the next try finds it and writes the row', net.rows.length === 1 && rawQueue().length === 0)
 
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }
   console.log('\nAll photo-queue invariants hold.')

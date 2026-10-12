@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Runs the photo-queue scenario test (src/lib/__tests__/photoQueue.scenario.ts)
 // against the REAL src/lib/photoQueue.ts with its imports (AsyncStorage,
-// expo-file-system, supabase, errorReporter) rewritten to the test mocks.
-// Same zero-dependency approach as scripts/test-outbox.mjs. The 240 s upload
-// timeout is shortened to 50 ms so the timeout case runs in real time.
+// expo-file-system, supabase, errorReporter) rewritten to the test mocks, and
+// the real src/lib/sha256.ts beside it (the fingerprint is checked against
+// node:crypto). Same zero-dependency approach as scripts/test-outbox.mjs. The
+// 240 s upload timeout is shortened to 50 ms so the timeout case runs in real
+// time.
 //
 // Usage: node scripts/test-photo-queue.mjs
 import { execSync } from 'node:child_process'
@@ -29,11 +31,12 @@ try {
   queue = rewrite(queue, `const UPLOAD_TIMEOUT_MS = 240_000`, `const UPLOAD_TIMEOUT_MS = 50`)
   writeFileSync(join(work, 'photoQueue.ts'), queue)
   cpSync(join(repo, 'src/lib/__tests__/photoQueue.mocks.ts'), join(work, 'photoQueue.mocks.ts'))
+  cpSync(join(repo, 'src/lib/sha256.ts'), join(work, 'sha256.ts'))
   const scenario = readFileSync(join(repo, 'src/lib/__tests__/photoQueue.scenario.ts'), 'utf8')
     .replace(`from '../photoQueue'`, `from './photoQueue'`)
   writeFileSync(join(work, 'scenario.ts'), scenario)
 
-  execSync('npx --yes esbuild photoQueue.ts photoQueue.mocks.ts scenario.ts --format=cjs --platform=node --outdir=out', {
+  execSync('npx --yes esbuild photoQueue.ts photoQueue.mocks.ts sha256.ts scenario.ts --format=cjs --platform=node --outdir=out', {
     cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
   })
   execSync('node out/scenario.js', { cwd: work, stdio: 'inherit' })
