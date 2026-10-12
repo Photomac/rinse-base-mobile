@@ -39,7 +39,7 @@ function reset() {
   setRawQueue([])
   net.offline = false; net.hold = false; net.held = []; net.slow.clear()
   net.attempts = []; net.uploads = []; net.readFrom = []; net.rows = []; net.attaches = []
-  net.attachResult = 'ok'
+  net.attachResult = 'ok'; net.inserts = []; net.noTakenAtColumn = false
 }
 
 ;(async () => {
@@ -157,6 +157,32 @@ function reset() {
   net.attachResult = 'ok'
   await flushQueue({ force: true })
   ok('report lands: attached, and no second job_photos row', net.attaches.length === 2 && net.rows.length === 1 && rawQueue().length === 0)
+
+  // ── When it was taken (job_photos.taken_at, 2026-10-12) ──────────────────
+  reset()
+  const shotAt = Date.parse('2026-10-12T15:04:30Z')
+  await enqueuePhoto({ ...base, uri: shot(), taken_at: shotAt })
+  await enqueuePhoto({ ...base, uri: shot(), taken_at: null })
+  await enqueuePhoto({ ...base, uri: shot() })
+  await flushQueue()
+  ok('taken_at: sent with the row as ISO, after every other field', net.rows[0]?.taken_at === '2026-10-12T15:04:30.000Z' && Object.keys(net.rows[0]).pop() === 'taken_at')
+  ok('…unknown (null, or a caller that says nothing): no taken_at sent', net.rows.length === 3 && !('taken_at' in net.rows[1]) && !('taken_at' in net.rows[2]))
+  ok('…the queue time (created_at) is never sent', net.rows.every(r => !('created_at' in r)))
+
+  // An entry queued by the bundle before this one has no taken_at at all.
+  reset()
+  const legacyUri = shot()
+  setRawQueue([{ id: 'J1_old', localUri: legacyUri, fileName: 'T/J1/old.jpg', tenant_id: 'T', job_id: 'J1', user_id: 'U', photo_type: 'after', caption: null, visible_to_client: true, created_at: Date.now() - 60_000 }])
+  await flushQueue()
+  ok('an entry queued by an older bundle uploads as before, with no taken_at', net.rows.length === 1 && !('taken_at' in net.rows[0]) && rawQueue().length === 0)
+
+  // The bundle can reach phones before the migration reaches the database.
+  reset()
+  net.noTakenAtColumn = true
+  await enqueuePhoto({ ...base, uri: shot(), taken_at: shotAt })
+  await flushQueue()
+  ok('no taken_at column yet: the photo is still saved, without it, on the same pass',
+    net.inserts.length === 2 && 'taken_at' in net.inserts[0] && !('taken_at' in net.inserts[1]) && net.rows.length === 1 && rawQueue().length === 0)
 
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }
   console.log('\nAll photo-queue invariants hold.')

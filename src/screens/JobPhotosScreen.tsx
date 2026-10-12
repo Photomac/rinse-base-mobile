@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Alert, Act
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import { ensureCameraCapture, ensureMediaLibrary } from '../lib/permissions'
+import { exifTakenAt } from '../lib/photoTakenAt'
 import { supabase } from '../lib/supabase'
 import {
   enqueuePhoto, flushQueue, pendingStatus, PendingStatus, queuedJobPhotos, QueuedJobPhoto,
@@ -162,7 +163,8 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
         if (result.canceled) return
         uri = result.assets[0]?.uri
       } catch { return /* permission race / camera unavailable — no crash */ }
-      if (uri) await addPhotos([uri])
+      // Taken just now: the camera has only just handed it back.
+      if (uri) await addPhotos([{ uri, takenAt: Date.now() }])
     } finally {
       busy.current = false
     }
@@ -188,15 +190,18 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
           // Uploaded as-is it would be a ".jpg" Android phones and most
           // browsers can't open.
           preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+          // For when each was taken (job_photos.taken_at): a library photo is
+          // picked long after it was shot.
+          exif: true,
         })
         if (result.canceled) return
         assets = result.assets ?? []
       } catch { return /* permission race / picker unavailable — no crash */ }
-      const uris = assets
-        .map(a => a.uri)
-        .filter(u => !(Platform.OS === 'ios' && IOS_UNSENDABLE.test(u)))
-      const skipped = assets.length - uris.length
-      await addPhotos(uris)
+      const picked = assets
+        .filter(a => !(Platform.OS === 'ios' && IOS_UNSENDABLE.test(a.uri)))
+        .map(a => ({ uri: a.uri, takenAt: exifTakenAt(a.exif) }))
+      const skipped = assets.length - picked.length
+      await addPhotos(picked)
       if (skipped > 0) Alert.alert(t('photos_skipped_title'), ti(t('photos_skipped_msg'), { n: String(skipped) }))
     } finally {
       busy.current = false
@@ -206,8 +211,8 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
   // Queue the photos and return: they upload in the background while the crew
   // keeps shooting, and each thumbnail shows its own state. Nothing here waits
   // for the network — on one rural bar a single photo took up to 103 s.
-  async function addPhotos(uris: string[]) {
-    if (!uris.length) return
+  async function addPhotos(photos: { uri: string; takenAt: number | null }[]) {
+    if (!photos.length) return
     const note = caption.trim()
     // Canonical checklist link: this photo satisfies the preselected item as
     // long as the caption still names it (legacy caption-matching wouldn't
@@ -227,10 +232,11 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
 
     setCaption('')
     let failed = 0
-    for (const uri of uris) {
+    for (const { uri, takenAt } of photos) {
       try {
         await enqueuePhoto({
           uri,
+          taken_at: takenAt,
           tenant_id: user.tenant_id,
           job_id: job.id,
           user_id: user.id,
