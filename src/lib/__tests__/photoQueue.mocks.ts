@@ -85,10 +85,19 @@ export const net = {
   heads: [] as string[],
   /** A HEAD gets no answer. */
   headFails: false,
+  /** The next job_photos insert lands but its answer never reaches the phone. */
+  loseInsertAnswer: false,
+  /** Hold the next job_photos insert's answer (the row is written) until release(). */
+  holdInsert: false,
+  /** job_photos lookups fail at the server. */
+  selectFails: false,
+  /** Every job_photos lookup that reached the server: its filters. */
+  selects: [] as Record<string, unknown>[],
 }
 
 export function release() {
   net.hold = false
+  net.holdInsert = false
   const held = net.held.splice(0)
   held.forEach(r => r())
 }
@@ -148,7 +157,29 @@ export const supabase = {
         return { error: { code: 'PGRST204', message: "Could not find the 'photo_sha256' column of 'job_photos' in the schema cache" }, status: 400 }
       }
       net.rows.push({ ...row })
+      if (net.holdInsert) {
+        net.holdInsert = false
+        await new Promise<void>(r => net.held.push(r))
+      }
+      if (net.loseInsertAnswer) {
+        net.loseInsertAnswer = false
+        return { error: { message: 'TypeError: Network request failed' }, status: 0 }
+      }
       return { error: null, status: 201 }
+    },
+    select: (_columns: string) => {
+      const filters: [string, unknown][] = []
+      const query = {
+        eq(column: string, value: unknown) { filters.push([column, value]); return query },
+        async limit(n: number) {
+          if (net.offline) return { data: null, error: { message: 'TypeError: fetch failed' }, status: 0 }
+          net.selects.push(Object.fromEntries(filters))
+          if (net.selectFails) return { data: null, error: { message: 'canceling statement due to statement timeout' }, status: 500 }
+          const found = net.rows.filter(r => filters.every(([k, v]) => r[k] === v)).slice(0, n)
+          return { data: found.map((_, i) => ({ id: `row-${i}` })), error: null, status: 200 }
+        },
+      }
+      return query
     },
   }),
   rpc: async (_fn: string, args: any) => {

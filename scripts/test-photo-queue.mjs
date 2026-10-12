@@ -33,7 +33,7 @@ try {
   cpSync(join(repo, 'src/lib/__tests__/photoQueue.mocks.ts'), join(work, 'photoQueue.mocks.ts'))
   cpSync(join(repo, 'src/lib/sha256.ts'), join(work, 'sha256.ts'))
   const scenario = readFileSync(join(repo, 'src/lib/__tests__/photoQueue.scenario.ts'), 'utf8')
-    .replace(`from '../photoQueue'`, `from './photoQueue'`)
+    .replaceAll(`'../photoQueue'`, `'./photoQueue'`)
   writeFileSync(join(work, 'scenario.ts'), scenario)
 
   execSync('npx --yes esbuild photoQueue.ts photoQueue.mocks.ts sha256.ts scenario.ts --format=cjs --platform=node --outdir=out', {
