@@ -284,7 +284,9 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
             await clearPendingArrival(jobId) // consumed — a manual punch must not double-enter
             // Mirror manual clock-in: the job is being worked now. Status guard
             // keeps a teammate's already-started job untouched.
-            await supabase.from('jobs').update({ status: 'in_progress' })
+            // started_at = the fence crossing, like the entry (server keeps it
+            // only on the move into in_progress, if plausible).
+            await supabase.from('jobs').update({ status: 'in_progress', started_at: arrival.at })
               .eq('id', jobId).in('status', ['pending_approval', 'scheduled', 'en_route'])
             await Notifications.scheduleNotificationAsync({
               content: {
