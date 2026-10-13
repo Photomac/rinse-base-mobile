@@ -33,6 +33,7 @@ import { startLocationTracking, maybeStopLocationTracking } from '../lib/locatio
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
 import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive } from '../lib/photoQueue'
 import { cachedRead } from '../lib/dataCache'
+import { noteCachedJobs } from '../lib/cachePrune'
 // Every cached read here is built in lib/jobReads, shared with the offline day
 // pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
 import {
@@ -387,6 +388,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Drain queued offline writes first chance we get (same trigger set as the
     // photo queue: screen mount, app foreground, next write).
     flushOutbox().catch(() => {})
+    // Opened on this phone: its offline copy is kept a week (lib/cachePrune).
+    noteCachedJobs([job]).catch(() => {})
     loadChecklist()
     loadTimeEntries()
     loadPropMeta()

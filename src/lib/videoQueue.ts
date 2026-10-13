@@ -277,3 +277,8 @@ export async function queuedJobVideos(jobId: string): Promise<QueuedJobVideo[]> 
       created_at: v.created_at, failing: v.lastErrorKind === 'server', lastError: v.lastError ?? null,
     }))
 }
+
+/** Jobs with a video still in the queue (lib/cachePrune keeps their offline copy). */
+export async function queuedVideoJobIds(): Promise<string[]> {
+  return [...new Set((await readQueue()).map(v => v.job_id).filter(Boolean))]
+}

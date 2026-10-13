@@ -23,9 +23,12 @@
 // - About 4 reads at a time, and the run stops at the first network failure:
 //   on one bar it must not queue a hundred requests that will each time out.
 // - No images. Photo URLs come along inside rows, the files do not.
+// - After a saved run, stops nobody will need offline any more are dropped
+//   from the cache (lib/cachePrune): the cache would otherwise only grow.
 // - Runs only while the app is open. Downloading with the app never opened
 //   needs a native background task (a store build) — not this file.
 import { warmCache, pruneDataCache, cacheEpoch, writeCacheEntry, readCacheEntry, type CacheRead } from './dataCache'
+import { noteCachedJobs, pruneJobCache } from './cachePrune'
 import { dashTodayRead, homeDayRows, jobPackReads, prepJobs, prepReads, PREP_DAY_KEY, type PackRead } from './jobReads'
 import { dayView, isMyJob, isOfficeRole } from './jobScope'
 import { savedJobScope } from './useJobScope'
@@ -135,6 +138,7 @@ async function runPack(user: any, given: any[] | null): Promise<DayPackResult> {
   const mine = rows.filter(j => isMyJob(j, user.id) &&
     days.includes(dayKey(j.scheduled_start)) && PACKED_STATUSES.includes(j.status))
   for (const job of mine) jobPackReads(job, user).forEach(add)
+  noteCachedJobs(mine).catch(() => {})
 
   // The prep card Home will show each day, in the viewer's Mine / Everyone.
   const scope = isOfficeRole(user.role) ? await savedJobScope(user.id) : 'everyone'
@@ -163,6 +167,8 @@ async function runPack(user: any, given: any[] | null): Promise<DayPackResult> {
     const m = PREP_DAY_KEY.exec(k)
     return !!m && (!m[3] || m[3] < today)
   })
+  // Stops and properties nobody will need offline any more (lib/cachePrune).
+  await pruneJobCache(user, mine).catch(() => {})
 
   const stops: Record<string, number> = {}
   for (const d of days) stops[d] = mine.filter(j => dayKey(j.scheduled_start) === d).length
