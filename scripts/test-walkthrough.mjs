@@ -19,7 +19,9 @@ const work = mkdtempSync(join(tmpdir(), 'walkthrough-test-'))
 
 try {
   writeFileSync(join(work, 'walkthrough.ts'), readFileSync(join(repo, 'src/lib/walkthrough.ts'), 'utf8'))
-  writeFileSync(join(work, 'scenario.ts'), readFileSync(join(repo, 'src/lib/__tests__/walkthrough.scenario.ts'), 'utf8'))
+  writeFileSync(join(work, 'scenario.ts'),
+    readFileSync(join(repo, 'src/lib/__tests__/walkthrough.scenario.ts'), 'utf8')
+      .replace(`from '../walkthrough'`, `from './walkthrough'`))
   cpSync(join(repo, 'src'), join(work, 'src'), { recursive: true })
   execSync('npx --yes esbuild walkthrough.ts scenario.ts --format=cjs --platform=node --outdir=out', {
     cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
