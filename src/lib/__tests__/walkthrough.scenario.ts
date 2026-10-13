@@ -9,7 +9,7 @@
 // "Looks good" per room, a line touched only when something is wrong.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isWalkthroughJob, groupWalkthrough, sectionState, pickupDaysLabel, WALKTHROUGH_BAND } from './walkthrough'
+import { isWalkthroughJob, groupWalkthrough, sectionState, pickupDaysLabel, WALKTHROUGH_BAND } from '../walkthrough'
 
 let failures = 0
 const ok = (name: string, cond: boolean, detail = '') => {
