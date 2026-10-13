@@ -192,9 +192,13 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
       if (isLinen && linenItem && !queued) {
         try {
           const note = `${linenCondEn} ×${linenQty}${description.trim() ? ` — ${description.trim()}` : ''}`
-          const { data: existing } = await supabase.from('job_inventory_log').select('id, notes')
+          // A row an earlier report already stamped gets this note in place of
+          // that one's, not appended: the portals show the row once the report
+          // incident_id names is sent, so appending would publish the earlier,
+          // unsent report's text with this one. It stays on its own report.
+          const { data: existing } = await supabase.from('job_inventory_log').select('id, notes, incident_id')
             .eq('job_id', job.id).eq('inventory_id', linenItem.id).limit(1).maybeSingle()
-          const notes = existing?.notes ? `${existing.notes}\n${note}` : note
+          const notes = existing?.notes && !existing.incident_id ? `${existing.notes}\n${note}` : note
           const { error: ledgerError } = existing
             ? await supabase.from('job_inventory_log').update({ needs_restock: true, notes, incident_id: reportId }).eq('id', existing.id)
             : await supabase.from('job_inventory_log').insert({
