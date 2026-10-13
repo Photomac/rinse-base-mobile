@@ -12,6 +12,8 @@ import { WalkthroughScreen } from './WalkthroughScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
 import { LaundryRunScreen } from './LaundryRunScreen'
 import { JobInspectionScreen } from './JobInspectionScreen'
+import { WalkthroughChecklist } from '../components/WalkthroughChecklist'
+import { isWalkthroughJob } from '../lib/walkthrough'
 import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
 import { PhotoViewer } from '../components/PhotoViewer'
@@ -175,6 +177,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [loadingChecklist, setLoadingChecklist] = useState(false)
   const [itemPhotos, setItemPhotos] = useState<Record<string, number>>({})
   const [activePhotoItem, setActivePhotoItem] = useState<any>(null)
+  // A clean booked as the inspection service carries the walkthrough instead
+  // of a cleaning list: shown by WalkthroughChecklist, not the room accordion.
+  const [walkthroughJob, setWalkthroughJob] = useState(false)
   // Turnover rooms (phase 2): the checklist renders as a room accordion.
   // roomsMeta comes from property_rooms; items carry room_id/item_kind/level/
   // result from the seeded job rows. signoffs = job_room_signoffs for this job.
@@ -795,6 +800,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
     setChecklist(items)
     setChecked(checkedMap)
+    setWalkthroughJob(isWalkthroughJob(rows))
     // Rooms, sign-offs, mode and per-room photo counts — best-effort; an error
     // just leaves the flat 'Other' grouping.
     if (addressId) {
@@ -1500,6 +1506,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   const completedCount = Object.values(checked).filter(Boolean).length
+  // The room accordion's lines: none on a walkthrough clean (its card above has them).
+  const roomChecklist = walkthroughJob ? [] : checklist
   const allChecked = checklist.every(i => checked[i.id])
   const progressPct = checklist.length ? Math.round((completedCount / checklist.length) * 100) : 0
 
@@ -1918,7 +1926,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             jobs, template-less properties) group under "Other". Hidden
             entirely when there is nothing to work — a company running with
             checklists off must not see an empty "0/0" card. */}
-        {isStarted && !isTask && (checklist.length > 0 || evidence.length > 0 || loadingChecklist) && (
+        {/* A clean booked as the inspection service: the walkthrough, sections
+            in the owner's order, one Looks good each. The room card below
+            then holds only the property's own required shots. */}
+        {isStarted && !isTask && walkthroughJob && (
+          <View style={styles.card}>
+            <WalkthroughChecklist job={job} user={user}
+              onAddPhoto={item => { setActivePhotoItem(item); setShowPhotos(true) }}
+              onChanged={() => loadChecklist(true)} />
+          </View>
+        )}
+
+        {isStarted && !isTask && (roomChecklist.length > 0 || evidence.length > 0 || (loadingChecklist && !walkthroughJob)) && (
           <View style={styles.card}>
             {(() => {
               const groups: any[] = []
@@ -1934,7 +1953,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 byId.set(rm.id, g); groups.push(g)
               }
               const other = { key: '__other__', name: 'Other', mode: 'detailed', items: [] as any[] }
-              for (const item of checklist) {
+              for (const item of roomChecklist) {
                 const g = item.room_uid ? byId.get(item.room_uid) : null
                 ;(g || other).items.push(item)
               }
@@ -1966,7 +1985,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
                     <Text style={styles.sectionTitle}>{t('cleaning_checklist')}</Text>
                     <Text style={{ fontSize: 13, fontWeight: '700', color: TEAL }}>
-                      {shown.length > 1 ? `${t('turnover_rooms_done')} ${roomsDone}/${shown.length}` : `${completedCount}/${checklist.length}`}
+                      {shown.length > 1 ? `${t('turnover_rooms_done')} ${roomsDone}/${shown.length}` : `${completedCount}/${roomChecklist.length}`}
                     </Text>
                   </View>
                   <View style={styles.progressBg}><View style={[styles.progressFill, { width: `${progressPct}%` as any }]} /></View>
@@ -2137,7 +2156,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                       </View>
                     )
                   })}
-                  {checklist.some((i: any) => i.result === 'issue') && (
+                  {roomChecklist.some((i: any) => i.result === 'issue') && (
                     <Text style={{ fontSize: 10, color: '#6B7280', marginTop: 4 }}>{t('issue_blocks_note')}</Text>
                   )}
                 </View>
