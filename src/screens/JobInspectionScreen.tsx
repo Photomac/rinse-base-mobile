@@ -17,13 +17,21 @@
 // form here; crew are pointed at their manager instead, the same hand-off the
 // web tab makes.
 //
+// THE WALKTHROUGH IS WHAT THE INSPECTOR CHECKS, ON THIS VISIT. When the
+// company's inspection service has a live walkthrough (set up in Settings →
+// Services on the web), its lines are on the visit itself and show first
+// (WalkthroughChecklist): one "Looks good" per section, a line marked only
+// where something is wrong. That is the walk, not a defect record; the result
+// below is still the inspection's verdict. Its photos open the photo screen
+// in a modal, so the half-filled form underneath is never unmounted.
+//
 // ORDERING MATTERS ON FILING. Writing completed_at fires
 // trg_complete_inspection_job, which completes the visit job. A completed job
 // with an open time entry runs forever and corrupts payroll, so we clock out
 // FIRST (clockOut, owned by JobDetailScreen) and only file if that succeeded.
 
 import React, { useState, useEffect } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image, Modal } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { fmtDateTime } from '../lib/timezone'
@@ -31,6 +39,8 @@ import { useLang } from '../contexts/LangContext'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { PhotoViewer } from '../components/PhotoViewer'
 import { StagingPhotoGroups, stagingViewerPhotos } from '../components/StagingPhotoGroups'
+import { WalkthroughChecklist } from '../components/WalkthroughChecklist'
+import { JobPhotosScreen } from './JobPhotosScreen'
 import type { StagingPhotoRow } from '../lib/stagingRooms'
 import type { TranslationKey } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -106,6 +116,9 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   const [stagingPhotos, setStagingPhotos] = useState<StagingPhotoRow[]>([])
   const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null)
   const [openStd, setOpenStd] = useState<Record<string, boolean>>({})
+  // A walkthrough line's photo: the photo screen opens over this one.
+  const [photoLine, setPhotoLine] = useState<{ title: string; jobItemId: string } | null>(null)
+  const [walkKey, setWalkKey] = useState(0)
 
   const [layer, setLayer] = useState('supervisor')
   const [result, setResult] = useState('')
@@ -284,6 +297,10 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
             <StagingPhotoGroups photos={stagingPhotos} size={120} onOpen={setStagingViewerIndex} />
           </View>
         )}
+
+        {/* The walkthrough: what this inspector checks, section by section.
+            Renders nothing when the visit has none. */}
+        <WalkthroughChecklist job={job} user={user} readOnly={done} onAddPhoto={setPhotoLine} refreshKey={walkKey} />
 
         {/* The parent clean's executed standard — what the crew signed off,
             room by room (§7.9: a score is only fair against the standard).
@@ -469,6 +486,12 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
           </View>
         </>)}
       </ScrollView>
+      <Modal visible={!!photoLine} animationType="slide" onRequestClose={() => setPhotoLine(null)}>
+        {photoLine && (
+          <JobPhotosScreen job={job} user={user} preselectedItem={photoLine}
+            onBack={() => { setPhotoLine(null); setWalkKey(k => k + 1) }} />
+        )}
+      </Modal>
       {stagingViewerIndex != null && stagingPhotos.length > 0 && (
         <PhotoViewer
           photos={stagingViewerPhotos(stagingPhotos, t)}
