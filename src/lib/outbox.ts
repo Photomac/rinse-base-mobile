@@ -56,6 +56,9 @@ export interface OutboxOp {
   values: Record<string, any> | Record<string, any>[]
   /** upsert only: conflict target, e.g. 'id' or 'job_id,task,room' */
   onConflict?: string
+  /** upsert only: insert rows that don't exist yet and leave existing ones as
+   *  they are (ON CONFLICT DO NOTHING). */
+  ignoreDuplicates?: boolean
   /** Ops that only make sense together (a save's new rows, then the delete of
    *  the rows they replace). If one is parked after repeated rejections, the
    *  others still queued are parked with it rather than applied on their own. */
@@ -65,7 +68,7 @@ export interface OutboxOp {
   lastError?: string
 }
 
-export type OutboxWrite = Pick<OutboxOp, 'table' | 'op' | 'match' | 'matchIn' | 'keep' | 'values' | 'onConflict' | 'group'>
+export type OutboxWrite = Pick<OutboxOp, 'table' | 'op' | 'match' | 'matchIn' | 'keep' | 'values' | 'onConflict' | 'ignoreDuplicates' | 'group'>
 
 // RFC-4122-shaped v4 from Math.random — no crypto dep (OTA-safe). These ids
 // only need uniqueness for idempotent replay, not unguessability.
@@ -102,7 +105,10 @@ async function enqueue(w: OutboxWrite): Promise<void> {
 
 async function applyOp(w: OutboxWrite): Promise<{ error: any; status?: number }> {
   if (w.op === 'upsert') {
-    return await supabase.from(w.table).upsert(w.values, w.onConflict ? { onConflict: w.onConflict } : undefined) as any
+    const opts = w.onConflict || w.ignoreDuplicates
+      ? { ...(w.onConflict ? { onConflict: w.onConflict } : {}), ...(w.ignoreDuplicates ? { ignoreDuplicates: true } : {}) }
+      : undefined
+    return await supabase.from(w.table).upsert(w.values, opts) as any
   }
   let q: any = w.op === 'delete' ? supabase.from(w.table).delete() : supabase.from(w.table).update(w.values)
   for (const [k, v] of Object.entries(w.match || {})) q = v === null ? q.is(k, null) : q.eq(k, v)
@@ -278,7 +284,7 @@ export async function overlayPending(
       for (const values of Array.isArray(o.values) ? o.values : [o.values]) {
         if (includeUpsert && !includeUpsert(values)) continue
         const i = out.findIndex(r => keys.every(k => (k in r ? r[k] === values[k] : true)))
-        if (i >= 0) out[i] = { ...out[i], ...values }
+        if (i >= 0) { if (!o.ignoreDuplicates) out[i] = { ...out[i], ...values } }
         else out.push({ ...values })
       }
     } else if (o.op === 'delete') {

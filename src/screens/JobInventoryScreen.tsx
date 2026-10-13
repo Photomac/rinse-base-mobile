@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { cachedQuery } from '../lib/dataCache'
 import { writeThrough, overlayPending, uuid4 } from '../lib/outbox'
+import { planInventorySave, readLogRows, type InventoryLine, type LogRowRead, type SavedLogRow } from '../lib/inventoryLogSave'
+import { inventorySaveWrites } from '../lib/inventoryLogOutbox'
 import { useLang } from '../contexts/LangContext'
 import { tv } from '../lib/vocab'
 import { ti } from '../lib/i18n'
@@ -37,9 +39,8 @@ import { roomLabel } from '../lib/rooms'
 // low flag. The DB trigger auto-flags needs_restock when qty_remaining drops
 // below par, so crew don't need to mark it themselves on counted items.
 // incident_id: a linen incident filed from "Report an issue" links its ledger
-// row to the report. The delete-then-insert save must carry it, or a resave
-// severs the link and re-fires the owner's restock email.
-type LogState = Record<string, { qty_used: number; qty_remaining: string; needs_restock: boolean; notes: string; incident_id?: string | null }>
+// row to the report. The line carries it, so a save never unlinks it.
+type LogState = Record<string, InventoryLine>
 
 export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   const { t, lang } = useLang()
@@ -53,6 +54,11 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   const [items, setItems] = useState<Item[]>([])
   const [rooms, setRooms] = useState<any[]>([])
   const [log, setLog] = useState<LogState>({})
+  // What the database holds for each line, row id included, as last read or
+  // saved (queued counts): the save writes only what differs from this. Ids
+  // minted for lines with no row yet are kept until a save lands or queues.
+  const savedRef = useRef<Record<string, SavedLogRow>>({})
+  const mintedRef = useRef<Record<string, string>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   // Showing the phone's saved copy (no signal), not live data.
@@ -75,7 +81,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
         .order('category', { nullsFirst: false })
         .order('item_name')),
       cachedQuery(`inv:log:${job.id}`, supabase.from('job_inventory_log')
-        .select('id, job_id, inventory_id, qty_used, qty_remaining, needs_restock, notes, incident_id')
+        .select('id, job_id, inventory_id, item_name, qty_used, qty_remaining, needs_restock, notes, incident_id, restocked_at, client_notified_at, created_at')
         .eq('job_id', job.id)),
       cachedQuery(`inv:rooms:${addrId}`, supabase.from('property_rooms')
         .select('id, room_type, instance_no, name, sort_order')
@@ -98,17 +104,10 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
     ))
     // A save still waiting in the outbox shows as saved, not as the old rows.
     const logRows = await overlayPending('job_inventory_log', (logRes.data ?? []) as any[], v => v.job_id === job.id)
-    const map: LogState = {}
-    logRows.forEach((l: any) => {
-      map[l.inventory_id] = {
-        qty_used: l.qty_used ?? 0,
-        qty_remaining: l.qty_remaining != null ? String(l.qty_remaining) : '',
-        needs_restock: !!l.needs_restock,
-        notes: l.notes ?? '',
-        incident_id: l.incident_id ?? null,
-      }
-    })
-    setLog(map)
+    const { lines, saved } = readLogRows(logRows as LogRowRead[])
+    savedRef.current = saved
+    mintedRef.current = {}
+    setLog(lines)
     setLoading(false)
   }
 
@@ -153,44 +152,32 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
 
   async function save() {
     setSaving(true)
-    // Replace all rows for this job — same result as the web JobPanel
-    // InventoryTab, so the crew can edit and resave without duplicating.
+    // Save the list without replacing it, as the web Inventory tab does (the
+    // plan and why are in lib/inventoryLogSave). Rows keep their ids: changed
+    // lines are updated in place, new ones inserted under ids minted here,
+    // emptied ones deleted, untouched ones not written. So a resave no longer
+    // drops what the office stamped on a row (restocked, client notified), and
+    // an untouched flag no longer re-mails the restock alert.
     //
-    // It used to delete first and insert second, live only. On a flaky
-    // connection the delete could land and the insert fail — the job's supply
-    // log gone — and with no signal nothing saved at all. Now the new rows go
-    // first, under ids minted here (a replay can't double them), then the rows
-    // they replace are deleted; both through the outbox, so with no signal the
-    // save queues and replays in order. A rejected write leaves the previous
-    // save intact, and the delete is grouped with it so it can never run alone.
-    const rows = Object.entries(log)
-      .filter(([, v]) => v.qty_used > 0 || v.needs_restock || v.qty_remaining !== '')
-      .map(([inventory_id, v]) => ({
-        id: uuid4(),
-        tenant_id: tenantId,
-        job_id: job.id,
-        inventory_id,
-        item_name: items.find(i => i.id === inventory_id)?.item_name || '',
-        qty_used: v.qty_used || 0,
-        qty_remaining: v.qty_remaining === '' ? null : Number(v.qty_remaining),
-        needs_restock: !!v.needs_restock,
-        notes: v.notes?.trim() || null,
-        incident_id: v.incident_id ?? null,
-      }))
-    const group = uuid4()
-    let queued = false
-    if (rows.length > 0) {
-      const w = await writeThrough({ table: 'job_inventory_log', op: 'upsert', onConflict: 'id', values: rows, group })
-      if (w.error) { setSaving(false); Alert.alert(t('could_not_save'), w.error.message); return }
-      queued = w.queued
-    }
-    const d = await writeThrough({
-      table: 'job_inventory_log', op: 'delete', match: { job_id: job.id }, values: {},
-      keep: rows.length ? { column: 'id', values: rows.map(r => r.id) } : undefined, group,
+    // Every write goes through the outbox, so with no signal the save queues
+    // and replays in order. Each is an upsert or delete by id, so a replay
+    // can't double a row; they share a group, so if one is parked after
+    // repeated rejections the rest are parked with it instead of landing alone.
+    const plan = planInventorySave({
+      tenantId, jobId: job.id, lines: log, saved: savedRef.current, catalog: items,
+      minted: mintedRef.current, newId: uuid4, normalizeNotes: n => n.trim() || null,
     })
-    if (d.error) { setSaving(false); Alert.alert(t('could_not_save'), d.error.message); return }
+    mintedRef.current = { ...mintedRef.current, ...plan.minted }
+    let queued = false
+    for (const w of inventorySaveWrites(plan, job.id, uuid4())) {
+      const r = await writeThrough(w)
+      if (r.error) { setSaving(false); Alert.alert(t('could_not_save'), r.error.message); return }
+      queued = queued || r.queued
+    }
+    savedRef.current = plan.saved
+    mintedRef.current = {}
     setSaving(false); setSaved(true)
-    if (queued || d.queued) Alert.alert('📡', t('queued_offline'))
+    if (queued) Alert.alert('📡', t('queued_offline'))
     setTimeout(() => setSaved(false), 2200)
   }
 
