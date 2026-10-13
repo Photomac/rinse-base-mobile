@@ -17,7 +17,7 @@ export const net = {
   rejectTables: new Set<string>(),
   /** Reject only this op kind on rejectTables (unset = every op). */
   rejectOp: null as string | null,
-  applied: [] as { table: string; op: string; values: any; filters: string[] }[],
+  applied: [] as { table: string; op: string; values: any; filters: string[]; opts?: any }[],
   /** Server-side RUNNING per-job entries, keyed `${job_id}|${user_id}`. Only
    *  consulted once a test seeds it; mirrors job_time_entries_one_open_per_job. */
   openWork: new Map<string, { id: string; clocked_in_at: string }>(),
@@ -26,7 +26,7 @@ export const net = {
 const filterVal = (filters: string[], k: string) =>
   filters.find(f => f.startsWith(`${k}=eq.`))?.slice(k.length + 4)
 
-function result(table: string, op: string, values: any, filters: string[]) {
+function result(table: string, op: string, values: any, filters: string[], opts?: any) {
   if (!net.online) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
   if (net.rejectTables.has(table) && (!net.rejectOp || net.rejectOp === op)) {
     return { error: { message: 'violates row-level security' }, status: 403 }
@@ -53,14 +53,14 @@ function result(table: string, op: string, values: any, filters: string[]) {
       }
     }
   }
-  net.applied.push({ table, op, values, filters })
+  net.applied.push({ table, op, values, filters, ...(opts ? { opts } : {}) })
   return { error: null, status: 201 }
 }
 
 // Thenable builder: resolves lazily like postgrest-js, so .eq()/.is()/.not()
 // chains work. Filters are recorded as text so tests can check what a delete
 // would have matched.
-function builder(table: string, op: string, values: any) {
+function builder(table: string, op: string, values: any, opts?: any) {
   const filters: string[] = []
   const p: any = {
     eq: (k: string, v: any) => { filters.push(`${k}=eq.${v}`); return p },
@@ -69,7 +69,7 @@ function builder(table: string, op: string, values: any) {
     in: (k: string, v: any[]) => { filters.push(`${k}=in.(${v.join(',')})`); return p },
     order: () => p,
     limit: () => p,
-    then: (f: any) => Promise.resolve(result(table, op, values, filters)).then(f),
+    then: (f: any) => Promise.resolve(result(table, op, values, filters, opts)).then(f),
   }
   return p
 }
@@ -77,7 +77,7 @@ function builder(table: string, op: string, values: any) {
 export const supabase = {
   from: (table: string) => ({
     select: (_cols?: string) => builder(table, 'select', null),
-    upsert: (values: any, _opts?: any) => builder(table, 'upsert', values),
+    upsert: (values: any, opts?: any) => builder(table, 'upsert', values, opts),
     update: (values: any) => builder(table, 'update', values),
     delete: () => builder(table, 'delete', null),
   }),
