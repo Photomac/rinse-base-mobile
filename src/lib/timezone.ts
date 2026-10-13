@@ -235,6 +235,19 @@ export function endOfDayInTz(date: Date): Date {
   return new Date(startOfDayInTz(nextish).getTime() - 1)
 }
 
+/** The last millisecond of the day AFTER `date`'s, in the tenant's zone — the
+ *  upper bound of Home's read, which carries tomorrow so the copy saved
+ *  tonight still holds the morning's jobs offline. */
+export function endOfTomorrowInTz(date: Date): Date {
+  // Noon tomorrow is inside tomorrow whatever DST does around midnight.
+  return endOfDayInTz(new Date(endOfDayInTz(date).getTime() + 12 * 3600_000))
+}
+
+/** Tomorrow's 'YYYY-MM-DD' in the tenant's zone. */
+export function tomorrowKey(): string {
+  return dayKey(new Date(endOfDayInTz(new Date()).getTime() + 12 * 3600_000))
+}
+
 /** Midnight on the 1st of `date`'s month, in the tenant's zone — the lower
  *  bound of the "this month" stats, which have to agree with the owner's. */
 export function startOfMonthInTz(date: Date): Date {

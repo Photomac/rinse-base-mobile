@@ -106,7 +106,11 @@ check('proxy punch (office on a cleaner\'s clean): the note and "Got it" sit in 
 check('a clean already under way asks with no "Not yet"', /if \(crewNoteNeedsAck && isStarted && !recordsForOthers[^)]*\)\s*\{\s*setNotePrompt\(p => p \?\? \{ then: null \}\)/.test(screen), true)
 check('"Not yet" only when a start is waiting', /onNotYet=\{notePrompt\?\.then \? \(\) => setNotePrompt\(null\) : null\}/.test(screen), true)
 check('the acknowledgment never goes through the pay outbox', /writeThrough\(\{\s*table: 'job_crew_note_acks'/.test(screen), false)
-check('the note is read on its own, failing soft', /cachedQuery\(`crewnote:\$\{job\.id\}`, supabase\.from\('jobs'\)\s*\.select\('crew_note, crew_note_at_clock_in'\)/.test(screen), true)
+// The read itself lives in src/lib/jobReads.ts (shared with the offline day pack).
+const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
+check('the note is read on its own, failing soft',
+  [/cachedRead\(crewNoteRead\(job\.id\)\)/.test(screen),
+   /key: `crewnote:\$\{jobId\}`,\s*q: \(\) => supabase\.from\('jobs'\)\s*\.select\('crew_note, crew_note_at_clock_in'\)/.test(reads)], [true, true])
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)

@@ -125,19 +125,23 @@ check('only jobs with a route order get a stop; the rest are skipped, not counte
 const dash = readFileSync(join(repo, 'src/screens/DashboardScreen.tsx'), 'utf8')
 const sched = readFileSync(join(repo, 'src/screens/ScheduleScreen.tsx'), 'utf8')
 const hook = readFileSync(join(repo, 'src/lib/useJobScope.ts'), 'utf8')
+// Home's day read and its today filter live in src/lib/jobReads.ts (shared
+// with the offline day pack).
+const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
 check('the toggle renders for the office only, on both screens',
   [/\{isOffice && \(\s*<View style=\{styles\.scopeRow\}>\s*<JobScopeToggle scope=\{scope\} onChange=\{setScope\} \/>/.test(dash),
    /\{isOffice && \(\s*<View style=\{styles\.scopeRow\}>\s*<JobScopeToggle scope=\{scope\} onChange=\{setScope\} \/>/.test(sched)], [true, true])
 check('crew are never narrowed again by the scope (their rows are already their own)',
   [/const viewScope: JobScope = isOffice \? scope : 'everyone'/.test(dash), /const viewScope: JobScope = isOffice \? scope : 'everyone'/.test(sched)], [true, true])
 check('crew rows are filtered with the same predicate Mine uses',
-  [(dash.match(/\.filter\(\(j: any\) => isMyJob\(j, user\.id\)\)/g) || []).length, (sched.match(/\.filter\(\(j: any\) => isMyJob\(j, user\.id\)\)/g) || []).length], [2, 1])
+  [(dash.match(/\.filter\(\(j: any\) => isMyJob\(j, user\.id\)\)/g) || []).length, (sched.match(/\.filter\(\(j: any\) => isMyJob\(j, user\.id\)\)/g) || []).length,
+   /homeDayRows\(todayRes\.data, user, today\)/.test(dash), /\(rows \?\? \[\]\)\.filter\(j => isMyJob\(j, user\.id\)\)/.test(reads)], [1, 1, true, true])
 check('no inline job_assignments ownership check left on either screen',
   /job_assignments\?\.some/.test(dash + sched), false)
 const query = (src, from, to) => { const i = src.indexOf(from); return i < 0 ? '' : src.slice(i, src.indexOf(to, i)) }
 const ownerMonth = query(dash, 'cachedQuery(`dash:month:', ': supabase.from')
 check('every query Mine reads carries the plain job_assignments(user_id) embed',
-  [query(dash, 'cachedQuery(`dash:today:', 'cachedQuery(`dash:month:'), ownerMonth, query(dash, 'cachedQuery(`dash:stranded:', 'job_time_entries'), query(sched, 'cachedQuery(`sched:', 'setOffline')]
+  [query(reads, 'export function dashTodayRead(', 'export function homeDayRows('), ownerMonth, query(dash, 'cachedQuery(`dash:stranded:', 'job_time_entries'), query(sched, 'cachedQuery(`sched:', 'setOffline')]
     .map(q => /job_assignments(!job_assignments_job_id_fkey)?\(user_id\)/.test(q)), [true, true, true, true])
 check('Home\'s counts and stop badge come from the scoped day',
   [/\{day\.done\}/.test(dash), /\{day\.remaining\}/.test(dash), /const routeStops = day\.stops/.test(dash), /<PrepCard user=\{user\} jobs=\{todayJobs\}/.test(dash)], [true, true, true, true])

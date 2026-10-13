@@ -29,7 +29,8 @@ import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/
 import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
 import { clearDataCache } from './src/lib/dataCache'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
-import { flushOutbox } from './src/lib/outbox'
+import { flushOutbox, onOutboxDrained } from './src/lib/outbox'
+import { prefetchDays, isDayChangePush } from './src/lib/offlinePrefetch'
 import { flushIncidentNotifies } from './src/lib/incidentNotify'
 import { flushSOSQueue, resumableSOS } from './src/lib/sosQueue'
 import * as Notifications from 'expo-notifications'
@@ -227,6 +228,8 @@ function AppInner() {
         table: 'job_assignments',
         filter: `user_id=eq.${user.id}`,
       }, () => {
+        // A new stop: save it for offline now, not in up to 10 minutes.
+        prefetchDays(user, { force: true }).catch(() => {})
         if (throttled()) return
         Notifications.scheduleNotificationAsync({
           content: { title: '✅ New job assigned', body: `You have a new job scheduled`, sound: true },
@@ -247,7 +250,9 @@ function AppInner() {
         if (!old?.scheduled_start || job.scheduled_start === old.scheduled_start) return
         const { data: mine } = await supabase.from('job_assignments')
           .select('id').eq('job_id', job.id).eq('user_id', user.id).limit(1).maybeSingle()
-        if (!mine || throttled()) return
+        if (!mine) return
+        prefetchDays(user, { force: true }).catch(() => {})
+        if (throttled()) return
         const newTime = fmtTime(job.scheduled_start)
         Notifications.scheduleNotificationAsync({
           content: { title: '📅 Job rescheduled', body: `Your job has been moved to ${newTime}`, sound: true },
@@ -323,24 +328,42 @@ function AppInner() {
     // (queue) to have landed.
     // Walkthrough videos drain on their own, alongside: one can take many
     // minutes on a weak bar, and nothing in the chain below should wait on it.
-    const drain = () => {
+    // `pack`: also refresh the offline day pack (lib/offlinePrefetch) once the
+    // queued writes are in — on login and on every return to the foreground,
+    // not on the 2-minute timer (the pack keeps its own 10-minute pace).
+    const drain = (pack = false) => {
       refreshOpenJobs()
       // An SOS goes first and on its own: it must never wait behind a photo
       // upload that can take minutes on one bar.
       flushSOSQueue().catch(() => {})
       flushVideoQueue().catch(() => {})
       flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}).then(() => flushIncidentNotifies()).catch(() => {})
+        .then(() => { if (pack) return prefetchDays(user) }).catch(() => {})
     }
-    drain()
+    drain(true)
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') drain()
+      if (state === 'active') drain(true)
     })
     // Also retry while the app simply stays open: a crew driving back into
     // coverage with the app on screen never backgrounds it, so the foreground
     // trigger alone left photos waiting. Both drains are cheap no-ops when
     // nothing is queued, and flushQueue ignores overlapping calls.
     const iv = setInterval(() => { if (AppState.currentState === 'active') drain() }, 120_000)
-    return () => { sub.remove(); clearInterval(iv) }
+    // Queued writes just synced: the phone is back on signal.
+    const offDrained = onOutboxDrained(() => { prefetchDays(user).catch(() => {}) })
+    return () => { sub.remove(); clearInterval(iv); offDrained() }
+  }, [user])
+
+  // The office assigned this phone a clean (notify-crew-assigned, data.type
+  // 'job_assigned'): save the day for offline now, whether the push arrives
+  // with the app open or is tapped. They dispatch the night before, while
+  // phones are on home Wi-Fi.
+  useEffect(() => {
+    if (!user) return
+    const onPush = (data: any) => { if (isDayChangePush(data)) prefetchDays(user, { force: true }).catch(() => {}) }
+    const received = Notifications.addNotificationReceivedListener(n => onPush(n.request.content.data))
+    const tapped = Notifications.addNotificationResponseReceivedListener(r => onPush(r.notification.request.content.data))
+    return () => { received.remove(); tapped.remove() }
   }, [user])
 
   // An SOS this phone never got to the server (app killed in a dead zone, dead

@@ -57,10 +57,14 @@ check('exactly 4: all shown', line(six.slice(0, 4), 'owner'), 'Di E. (lead) · A
 const CREW = 'crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))'
 const dash = readFileSync(join(repo, 'src/screens/DashboardScreen.tsx'), 'utf8')
 const sched = readFileSync(join(repo, 'src/screens/ScheduleScreen.tsx'), 'utf8')
-const todayQuery = dash.slice(dash.indexOf('cachedQuery(`dash:today:'), dash.indexOf('cachedQuery(`dash:month:'))
+// Home's day read lives in src/lib/jobReads.ts (shared with the offline day pack).
+const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
+const todayQuery = /cachedRead\(dashTodayRead\(/.test(dash)
+  ? reads.slice(reads.indexOf('export function dashTodayRead('), reads.indexOf('export function homeDayRows('))
+  : ''
 check('Today fetches the crew through the aliased, FK-named embed', todayQuery.includes(CREW), true)
 check('Schedule fetches the crew through the aliased, FK-named embed', sched.includes(CREW), true)
-check('no unhinted users embed anywhere on these screens (PGRST201)', /job_assignments[^)]*users\(/.test(dash + sched), false)
+check('no unhinted users embed anywhere on these screens (PGRST201)', /job_assignments[^)]*users\(/.test(dash + sched + reads), false)
 check('Today and Schedule cards render the crew line, unassigned shown to the office only',
   [/<CrewLine crew=\{job\.crew\} viewerId=\{user\.id\} showUnassigned=\{canSeeClientNames\} \/>/.test(dash),
    /<CrewLine crew=\{job\.crew\} viewerId=\{user\.id\} showUnassigned=\{canSeeClientNames\} \/>/.test(sched)], [true, true])

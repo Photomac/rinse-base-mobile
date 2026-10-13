@@ -59,10 +59,23 @@ check('someone else\'s open punch never makes me look clocked in', crewClockFor(
 // ── JobDetailScreen ──────────────────────────────────────────────────────────
 const screen = readFileSync(join(repo, 'src/screens/JobDetailScreen.tsx'), 'utf8')
 const fn = (name) => { const i = screen.indexOf(`function ${name}(`); return i < 0 ? '' : screen.slice(i, screen.indexOf('\n  }\n', i)) }
-check('the viewer\'s own timer still reads only their own entries', /if \(!wholeJob\) q = q\.eq\('user_id', user\.id\)/.test(fn('loadTimeEntries')), true)
+// The reads themselves live in src/lib/jobReads.ts (shared with the offline
+// day pack); the screen calls them by name.
+const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
+const builder = (name) => {
+  const i = [`export const ${name} = (`, `export function ${name}(`].map(s => reads.indexOf(s)).find(i => i >= 0) ?? -1
+  if (i < 0) return ''
+  const next = reads.indexOf('\nexport ', i + 1)
+  return reads.slice(i, next < 0 ? undefined : next)
+}
+check('the viewer\'s own timer still reads only their own entries',
+  [/cachedRead\(timeEntriesRead\(job\.id, user\.id, wholeJob\)\)/.test(fn('loadTimeEntries')), /if \(!wholeJob\) q = q\.eq\('user_id', userId\)/.test(builder('timeEntriesRead'))],
+  [true, true])
 check('the crew line reads every punch on the job, not filtered to the viewer',
-  [/\.from\('job_time_entries'\)\s*\.select\('user_id, clocked_in_at, clocked_out_at, pause_reason'\)\s*\.eq\('job_id', job\.id\)\)/.test(fn('loadCrewClock')), /user_id/.test(fn('loadCrewClock').split(".eq('job_id'")[1] ?? '')],
-  [true, false])
+  [/cachedRead\(crewClockRead\(job\.id\)\)/.test(fn('loadCrewClock')),
+   /\.from\('job_time_entries'\)\s*\.select\('user_id, clocked_in_at, clocked_out_at, pause_reason'\)\s*\.eq\('job_id', jobId\),/.test(builder('crewClockRead')),
+   /user_id/.test(builder('crewClockRead').split(".eq('job_id'")[1] ?? '')],
+  [true, true, false])
 check('daily mode shows no per-job status', [/if \(dailyMode \|\| isTask\) return/.test(fn('loadCrewClock')), /if \(dailyMode\) return null/.test(fn('crewClockOf'))], [true, true])
 check('the viewer\'s own line comes from their timer (offline punches count)', /if \(userId === user\.id\) return crewClockFor\(timeEntries\.filter/.test(fn('crewClockOf')), true)
 check('teammates show no status until read, never a guessed "not clocked in"', /return crewClockRows \? crewClockFor\(crewClockRows, userId, finished\) : null/.test(fn('crewClockOf')), true)
