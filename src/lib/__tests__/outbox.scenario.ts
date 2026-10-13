@@ -61,8 +61,9 @@ const settle = () => new Promise(r => setTimeout(r, 10))
   ok('ops behind the poison proceed once it parks', (await pendingOpCount()) === 0 &&
     net.applied.some(a => a.table === 'jobs' && a.values.status === 'completed'))
 
-  // ── Supplies save: new rows first, then delete what they replace ─────────
-  // (JobInventoryScreen.save). The delete must never run on its own.
+  // ── A replace-all save: new rows first, then delete what they replace ────
+  // (JobInventoryScreen.save's shape until it went id-stable; see
+  // inventoryLogSave.scenario.ts). The delete must never run on its own.
   net.rejectTables.clear()
   r = await writeThrough({ table: 'job_inventory_log', op: 'delete', match: {}, values: {} })
   ok('a delete with no filter is refused, not queued', !!r.error && !r.queued && (await pendingOpCount()) === 0)
