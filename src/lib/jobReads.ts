@@ -361,6 +361,33 @@ export function prepReads(user: any, cleans: any[], ymd: string) {
 /** The prep card's day-keyed reads carry the day as their last segment. */
 export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras):([^:]+)(?::(\d{4}-\d{2}-\d{2}))?$/
 
+// ── Whose keys these are (lib/cachePrune) ──────────────────────────────────
+
+// The keys above that belong to ONE job (keyed by its id, then sometimes a
+// user) or to ONE property. cachePrune.ts drops them when no stop worth
+// keeping is left; everything else (Home, Schedule, company settings, the prep
+// card's day keys) is never dropped there. A new per-job or per-property
+// builder must be listed here, or its keys are kept for ever:
+// scripts/test-cache-prune.mjs fails until it is.
+const JOB_KEYS = new Set(['chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
+  'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos',
+  // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
+  'crewNoteAck'])
+const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'wttrash'])
+
+/** The job or property a cache key (without dataCache's prefix) belongs to,
+ *  or null when it belongs to neither. */
+export function cacheKeyOwner(key: string): { job: string } | { property: string } | null {
+  const [kind, a, b] = key.split(':')
+  const job = (id?: string) => (id ? { job: id } : null)
+  const property = (id?: string) => (id ? { property: id } : null)
+  if (kind === 'inv') return a === 'log' || a === 'extras' ? job(b) : a === 'items' || a === 'rooms' ? property(b) : null
+  if (kind === 'nextarr') return a === 'addr' ? property(b) : a === 'ten' ? null : job(a)
+  if (JOB_KEYS.has(kind)) return job(a)
+  if (PROPERTY_KEYS.has(kind)) return property(a)
+  return null
+}
+
 // ── The day pack: everything one job's screens read on open ─────────────────
 
 /** A pack read; `then` names reads that only apply once this one's answer is

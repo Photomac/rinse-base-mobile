@@ -7,3 +7,4 @@ export { prefetchDays, loadDayPack, stopsAhead, DAY_PACK_THROTTLE_MS } from '../
 export { dayView, isMyJob } from '../jobScope'
 export { setCurrentTz, todayKey, tomorrowKey, dayKey } from '../timezone'
 export { writeThrough, flushOutbox, onOutboxDrained } from '../outbox'
+export { noteCachedJobs } from '../cachePrune'

@@ -499,6 +499,33 @@ const scenarios: Record<string, () => Promise<void>> = {
     await c.flushOutbox()
     ok('an empty flush says nothing', told === 1, String(told))
   },
+
+  // A saved run also drops stops nobody will need offline (lib/cachePrune):
+  // a week gone and done. Today's, tomorrow's and an old clean still open stay.
+  async packPrunesStopsNobodyNeeds() {
+    seedServer(); seedSession()
+    let c = load()
+    // Opened on Oct 1: a finished stop at its own property, and one left open.
+    setClock('2026-10-01T16:00:00.000Z')
+    const gone = jobRow('J-gone', '2026-10-01T16:00:00Z', 'completed', [U], 'A4')
+    const stuck = jobRow('J-stuck', '2026-10-01T18:00:00Z', 'in_progress', [U], 'A5')
+    await c.noteCachedJobs([gone, stuck])
+    const stopKeys = (j: string) => [`chkrows:${j}`, `jobmeta:${j}`, `crew:${j}`, `time:${j}:${U}`, `nextarr:${j}`, `inv:log:${j}`]
+    for (const k of [...stopKeys('J-gone'), ...stopKeys('J-stuck'), 'propmeta:A4', 'tmpl:A4', 'propmeta:A5']) {
+      store.set(`dataCache:${k}`, '"saved Oct 1"')
+    }
+    setClock(EVENING)
+    c = relaunch()
+    // Home's last load saved Needs closing: the Oct 1 clean is still open.
+    store.set(`dataCache:dash:stranded:${U}`, JSON.stringify([{ id: 'J-stuck', status: 'in_progress', scheduled_start: stuck.scheduled_start, client_addresses: { id: 'A5' }, job_assignments: [{ user_id: U }] }]))
+    const res = await c.prefetchDays(CREW)
+    ok('saved', res.status === 'saved', res.status)
+    ok('the finished stop from Oct 1 is gone, with its property', stopKeys('J-gone').every(k => !cached(k)) && !cached('propmeta:A4') && !cached('tmpl:A4'),
+      [...stopKeys('J-gone'), 'propmeta:A4'].filter(cached).join(','))
+    ok('the Oct 1 clean still open stays, with its property', stopKeys('J-stuck').every(cached) && cached('propmeta:A5'))
+    ok('tonight\'s and tomorrow\'s stops stay', cached('chkrows:J-red') && cached('propmeta:A2') && cached('chkrows:J-chapel') && cached('jobmeta:J-late'))
+    ok('Home\'s day and the pack line stay', cached(`dash:today:${U}`) && cached(`daypack:${U}`))
+  },
 }
 
 let finished = false

@@ -84,6 +84,11 @@ async function sendAck(row: AckRow): Promise<'sent' | 'offline' | 'refused'> {
   return 'refused'
 }
 
+/** Jobs with a "Got it" still waiting to send (lib/cachePrune keeps their offline copy). */
+export async function pendingAckJobIds(): Promise<string[]> {
+  return [...new Set((await readPending()).map(r => r?.job_id).filter(Boolean))]
+}
+
 /** "Got it": remembered on this device now; sent now, or parked until there is signal. */
 export async function recordAck(row: AckRow): Promise<void> {
   await rememberAck(row.job_id, row.user_id, row.note)

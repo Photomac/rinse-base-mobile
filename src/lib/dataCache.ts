@@ -80,6 +80,13 @@ export async function readCacheEntry<T = any>(key: string): Promise<T | null> {
   try { const raw = await AsyncStorage.getItem(PREFIX + key); return raw == null ? null : JSON.parse(raw) } catch { return null }
 }
 
+/** Every cached read's key, without the prefix. */
+export async function dataCacheKeys(): Promise<string[]> {
+  try {
+    return (await AsyncStorage.getAllKeys()).filter(k => k.startsWith(PREFIX)).map(k => k.slice(PREFIX.length))
+  } catch { return [] }
+}
+
 /** Drop cached reads whose key (without the prefix) matches. */
 export async function pruneDataCache(drop: (key: string) => boolean): Promise<void> {
   try {

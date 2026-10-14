@@ -67,7 +67,9 @@ const tests = join(repo, 'src/lib/__tests__')
 const mocks = join(tests, 'offlineAuth.mocks.ts')
 const MOCKED = ['react-native', '@react-native-async-storage/async-storage', 'expo-location',
   'expo-task-manager', 'expo-notifications', 'expo-image-picker']
-const alias = MOCKED.map(p => `--alias:${p}=${mocks}`).join(' ')
+// The pack's prune asks the photo and video queues which jobs they hold; their
+// file system is a stub folder.
+const alias = [...MOCKED.map(p => `--alias:${p}=${mocks}`), `--alias:expo-file-system=${join(tests, 'stubs/expo-file-system')}`].join(' ')
 const esbuild = (entry, out) => execSync(
   `npx --yes esbuild ${JSON.stringify(entry)} --bundle --platform=node --format=cjs --log-level=error ${alias} --outfile=${JSON.stringify(out)}`,
   { cwd: repo, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, NODE_PATH: join(repo, 'node_modules') } },
@@ -81,6 +83,7 @@ const SCENARIOS = [
   'joinsAndThrottles',
   'signOutMidRunWritesNothing',
   'outboxDrainedSignal',
+  'packPrunesStopsNobodyNeeds',
 ]
 
 try {
