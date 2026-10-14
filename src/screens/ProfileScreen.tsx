@@ -293,6 +293,10 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
             ))
           )}
         </View>
+        {/* Own pay, loaded with the profile through user_private_details()
+            (App.tsx loadUser). Not loaded, the card is left out rather than
+            showing every pay type as "mixed". */}
+        {user.pay_type ? (
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>{t('pay_structure')}</Text>
           <View style={styles.row}>
@@ -302,6 +306,7 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
           {user.hourly_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('hourly_rate')}</Text><Text style={styles.rowValue}>${Number(user.hourly_rate).toFixed(2)}/hr</Text></View>}
           {user.per_job_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('per_job_rate')}</Text><Text style={styles.rowValue}>${Number(user.per_job_rate).toFixed(2)}/job</Text></View>}
         </View>
+        ) : null}
         {/* Sync health — rendered only when something needs attention. Rejected
             ops are writes the crew was told were "queued" (possibly pay); they
             must stay visible here until acknowledged, and dismissing warns to
