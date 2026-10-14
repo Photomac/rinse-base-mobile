@@ -30,13 +30,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { tv } from '../lib/vocab'
 import { translateTexts, normalizeText } from '../lib/machineTranslate'
 import { ti, localeFor } from '../lib/i18n'
-import { cachedQuery } from '../lib/dataCache'
-import { pickNextArrival, shiftYmd, fmtWallTime, type ArrivalRow } from '../lib/nextArrival'
+import { cachedRead } from '../lib/dataCache'
+// Shared with the offline day pack, which saves tomorrow's card tonight.
+import { prepJobs, prepReads } from '../lib/jobReads'
+import { pickNextArrival, fmtWallTime, type ArrivalRow } from '../lib/nextArrival'
 import { todayKey } from '../lib/timezone'
 import { GOLD, GOLD_MUTED, SLATE, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
 
@@ -54,9 +55,7 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
 
   // Only cleans still ahead of (or under) the crew need prep. Laundry runs,
   // tasks and inspections don't take linens or supplies to a property.
-  const cleans = useMemo(() => jobs.filter((j: any) =>
-    (j.job_type ?? 'clean') === 'clean' && j.client_addresses?.id &&
-    ['scheduled', 'en_route', 'in_progress'].includes(j.status)), [jobs])
+  const cleans = useMemo(() => prepJobs(jobs), [jobs])
   const props: Prop[] = useMemo(() => cleans.map((j: any) => ({
     job: j, name: j.client_addresses?.nickname || j.client_addresses?.street || '—',
   })), [cleans])
@@ -75,7 +74,6 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
     let cancelled = false
     ;(async () => {
       const addrIds = [...new Set(props.map(p => p.job.client_addresses.id))]
-      const jobIds = props.map(p => p.job.id)
       const nameByAddr: Record<string, string> = {}
       const jobByAddr: Record<string, any> = {}
       props.forEach(p => { nameByAddr[p.job.client_addresses.id] = p.name; jobByAddr[p.job.client_addresses.id] ||= p.job })
@@ -89,18 +87,12 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
         const m = await translateTexts(lang, names)
         return (s: string) => m.get(normalizeText(s)) ?? tv(lang, s)
       }
+      // Keyed by the day (lib/jobReads): the day pack saves tomorrow's copy
+      // tonight, and a copy may hold more properties than today's — every
+      // line below is looked up by today's own properties and jobs.
+      const reads = prepReads(user, cleans, today)
       const [tenRes, addrRes, resvRes, restockRes] = await Promise.all([
-        cachedQuery(`prep:ten:${user.tenant_id}`, supabase.from('tenants')
-          .select('crew_prep_linens, default_checkin_time').eq('id', user.tenant_id).maybeSingle()),
-        cachedQuery(`prep:addr:${user.id}`, supabase.from('client_addresses')
-          .select('id, lockbox_code, arrival_instructions, laundry_bag_color, default_checkin_time').in('id', addrIds)),
-        // Yesterday → tomorrow, blocks included: a block is only noise when the
-        // stay it echoes or buffers is in view (see lib/nextArrival).
-        cachedQuery(`prep:resv2:${user.id}`, supabase.from('property_reservations')
-          .select('id, address_id, platform, guest_name, calendar_id, checkin_date, checkout_date, checkin_time').in('address_id', addrIds)
-          .gte('checkout_date', shiftYmd(today, -1)).lte('checkin_date', shiftYmd(today, 1)).eq('status', 'confirmed')),
-        cachedQuery(`prep:restock:${user.id}`, supabase.from('job_inventory_log')
-          .select('item_name, jobs!inner(address_id)').eq('needs_restock', true).in('jobs.address_id', addrIds)),
+        cachedRead(reads.tenant), cachedRead(reads.addresses), cachedRead(reads.stays), cachedRead(reads.restock),
       ])
       const tenant: any = tenRes.data ?? {}
       const addrs: any[] = addrRes.data ?? []
@@ -111,11 +103,7 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
       // 🧺 Linens
       if (tenant.crew_prep_linens) {
         const [{ data: linen }, { data: extras }] = await Promise.all([
-          cachedQuery(`prep:linen:${user.id}`, supabase.from('address_inventory')
-            .select('id, address_id, item_name, par_level, sort_order').in('address_id', addrIds)
-            .eq('category', 'Linens').gt('par_level', 0)),
-          cachedQuery(`prep:extras:${user.id}`, supabase.from('turnover_linen_extras')
-            .select('job_id, inventory_id, extra_qty').in('job_id', jobIds)),
+          cachedRead(reads.linen), cachedRead(reads.extras),
         ])
         const invById: Record<string, any> = {}
         ;(linen ?? []).forEach((l: any) => { invById[l.id] = l })
@@ -160,7 +148,7 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
       // office's schedule didn't show as an arrival (Precision H&W, 2026-10-03).
       const arrivals: Record<string, { time: string | null; hold: boolean }> = {}
       const resvByAddr: Record<string, ArrivalRow[]> = {}
-      ;(resvRes.data ?? []).forEach((r: any) => { (resvByAddr[r.address_id] ||= []).push(r) })
+      ;(resvRes.data ?? []).forEach((r: any) => { if (nameByAddr[r.address_id]) (resvByAddr[r.address_id] ||= []).push(r) })
       for (const [id, rows] of Object.entries(resvByAddr)) {
         // pickNextArrival re-filters to today, so an offline cache hit from
         // yesterday can't surface yesterday's arrivals.
@@ -183,7 +171,7 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
       const low: Record<string, Set<string>> = {}
       ;(restockRes.data ?? []).forEach((r: any) => {
         const id = r.jobs?.address_id
-        if (id && r.item_name) (low[id] ||= new Set()).add(r.item_name)
+        if (id && nameByAddr[id] && r.item_name) (low[id] ||= new Set()).add(r.item_name)
       })
       const rx = await mtx(Object.values(low).flatMap(s => [...s]))
       const restockLines = Object.entries(low).map(([id, items]) => ({ text: `${nameByAddr[id]}: ${[...items].map(n => rx(n)).join(', ')}`, job: jobByAddr[id] }))

@@ -652,6 +652,11 @@ export async function queuedJobPhotos(jobId: string): Promise<QueuedJobPhoto[]> 
     }))
 }
 
+/** Jobs with anything still in the queue (lib/cachePrune keeps their offline copy). */
+export async function queuedPhotoJobIds(): Promise<string[]> {
+  return [...new Set((await readQueue()).map(p => p.job_id).filter(Boolean))]
+}
+
 export async function pendingCount(jobId?: string): Promise<number> {
   return (await pendingStatus(jobId)).count
 }

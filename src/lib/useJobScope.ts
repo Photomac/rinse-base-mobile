@@ -21,6 +21,14 @@ function subscribe(fn: () => void) {
 }
 function emit() { listeners.forEach(fn => fn()) }
 
+/** The saved choice, for code outside React (the offline day pack builds the
+ *  prep card Home will show, so it needs the scope Home will show it in). */
+export async function savedJobScope(userId: string): Promise<JobScope> {
+  const known = scopes.get(userId)
+  if (known) return known
+  try { return parseJobScope(await AsyncStorage.getItem(storeKey(userId))) } catch { return 'everyone' }
+}
+
 export function useJobScope(userId: string): [JobScope, (scope: JobScope) => void] {
   const scope = useSyncExternalStore(subscribe, () => scopes.get(userId) ?? 'everyone')
 

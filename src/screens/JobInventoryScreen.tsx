@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { supabase } from '../lib/supabase'
-import { cachedQuery } from '../lib/dataCache'
+import { cachedRead } from '../lib/dataCache'
+// Shared with the offline day pack, which saves exactly these reads ahead of time.
+import { inventoryItemsRead, inventoryLogRead, inventoryRoomsRead, linenExtrasRead } from '../lib/jobReads'
 import { writeThrough, overlayPending, uuid4 } from '../lib/outbox'
 import { planInventorySave, readLogRows, type InventoryLine, type LogRowRead, type SavedLogRow } from '../lib/inventoryLogSave'
 import { inventorySaveWrites } from '../lib/inventoryLogOutbox'
@@ -72,29 +73,17 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
 
   async function load() {
     setLoading(true)
-    // Reads go through cachedQuery like the rest of the job: with no signal the
+    // Reads go through cachedRead like the rest of the job: with no signal the
     // screen shows the last copy this phone saw instead of "no supplies".
     const [invRes, logRes, roomsRes, extraRes] = await Promise.all([
-      cachedQuery(`inv:items:${addrId}`, supabase.from('address_inventory')
-        .select('id, item_name, category, par_level, unit, room_id')
-        .eq('address_id', addrId)
-        .order('category', { nullsFirst: false })
-        .order('item_name')),
-      cachedQuery(`inv:log:${job.id}`, supabase.from('job_inventory_log')
-        .select('id, job_id, inventory_id, item_name, qty_used, qty_remaining, needs_restock, notes, incident_id, restocked_at, client_notified_at, created_at')
-        .eq('job_id', job.id)),
-      cachedQuery(`inv:rooms:${addrId}`, supabase.from('property_rooms')
-        .select('id, room_type, instance_no, name, sort_order')
-        .eq('address_id', addrId)
-        .is('archived_at', null)
-        .order('sort_order')),
+      cachedRead(inventoryItemsRead(addrId)),
+      cachedRead(inventoryLogRead(job.id)),
+      cachedRead(inventoryRoomsRead(addrId)),
       // Extra linen the office added for THIS booking on the Linen Pull Sheet —
       // e.g. a 14-guest group in a house whose par is 10 bath towels. Without
       // this the phone would say "6/6 packed" on a turnover the office says
       // needs four more, and the crew would leave short.
-      cachedQuery(`inv:extras:${job.id}`, supabase.from('turnover_linen_extras')
-        .select('inventory_id, extra_qty')
-        .eq('job_id', job.id)),
+      cachedRead(linenExtrasRead(job.id)),
     ])
     setOffline(invRes.fromCache || logRes.fromCache)
     setItems((invRes.data ?? []) as Item[])

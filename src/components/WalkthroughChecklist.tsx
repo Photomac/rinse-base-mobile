@@ -18,14 +18,15 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator } from 'react-native'
-import { supabase } from '../lib/supabase'
-import { cachedQuery } from '../lib/dataCache'
+import { cachedRead } from '../lib/dataCache'
+// Shared with the offline day pack, which saves exactly these reads ahead of time.
+import { walkthroughLinesRead, walkthroughPhotosRead, trashDaysRead } from '../lib/jobReads'
 import { writeThrough, overlayPending } from '../lib/outbox'
 import { queuedJobPhotos } from '../lib/photoQueue'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
 import { useMachineTranslation } from '../lib/machineTranslate'
-import { groupWalkthrough, sectionState, pickupDaysLabel, WALKTHROUGH_BAND, type WalkthroughLine } from '../lib/walkthrough'
+import { groupWalkthrough, sectionState, pickupDaysLabel, type WalkthroughLine } from '../lib/walkthrough'
 import { GOLD, SLATE_DARK } from '../lib/theme'
 
 const GREEN = '#16A34A'
@@ -59,13 +60,10 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
 
   const load = useCallback(async () => {
     const [{ data }, { data: photos }, addr] = await Promise.all([
-      cachedQuery(`wtlines:${job.id}`, supabase.from('job_checklist_items')
-        .select('id, room, task, sort_order, result, issue_note, photo_required, follow_up, info_key')
-        .eq('job_id', job.id).gte('sort_order', WALKTHROUGH_BAND).order('sort_order')),
-      cachedQuery(`wtphotos:${job.id}`, supabase.from('job_photos')
-        .select('checklist_item_id').eq('job_id', job.id).not('checklist_item_id', 'is', null)),
+      cachedRead(walkthroughLinesRead(job.id)),
+      cachedRead(walkthroughPhotosRead(job.id)),
       addrId
-        ? cachedQuery(`wttrash:${addrId}`, supabase.from('client_addresses').select('trash_pickup_days').eq('id', addrId).maybeSingle())
+        ? cachedRead(trashDaysRead(addrId))
         : Promise.resolve({ data: null }),
     ])
     // Answers queued offline overlay the cached rows (already scoped to this job).

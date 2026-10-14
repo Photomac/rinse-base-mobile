@@ -6,7 +6,7 @@ import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 // Job times render in the tenant's zone, not the phone's — src/lib/timezone.ts.
 import { fmtTime, dayKey } from '../lib/timezone'
-import { pickNextArrival, shiftYmd, fmtWallTime, type ArrivalRow, type NextArrival } from '../lib/nextArrival'
+import { pickNextArrival, fmtWallTime, type ArrivalRow, type NextArrival } from '../lib/nextArrival'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { WalkthroughScreen } from './WalkthroughScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
@@ -32,7 +32,16 @@ import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
 import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive } from '../lib/photoQueue'
-import { cachedQuery } from '../lib/dataCache'
+import { cachedRead } from '../lib/dataCache'
+import { noteCachedJobs } from '../lib/cachePrune'
+// Every cached read here is built in lib/jobReads, shared with the offline day
+// pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
+import {
+  tenantVideoRead, routeStopRead, nextArrivalReads, crewNoteRead, crewNoteAckRead,
+  jobMetaRead, jobCrewRead, propMetaRead, crewClockRead, timeEntriesRead,
+  checklistTemplateRead, checklistRowsRead, tenantSeedRead, roomsRead, roomSignoffsRead,
+  addressModeRead, tenantModeRead, photoRequirementsRead, requirementShotsRead, itemPhotosRead,
+} from '../lib/jobReads'
 import { ackRow, clockInNote, crewNoteText, flushAcks, localAcks, recordAck, type CrewNoteJob } from '../lib/crewNote'
 import { crewClockFor, type CrewClock, type CrewClockEntry } from '../lib/crewClock'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
@@ -370,8 +379,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   useEffect(() => {
     // Fails closed: offline with nothing cached, or a server without the column
     // yet, just leaves the Walkthrough button hidden.
-    cachedQuery(`tenvideo:${user.tenant_id}`, supabase.from('tenants')
-      .select('video_walkthroughs_enabled').eq('id', user.tenant_id).maybeSingle())
+    cachedRead(tenantVideoRead(user.tenant_id))
       .then(({ data }) => setVideoEnabled(!!(data as any)?.video_walkthroughs_enabled))
       .catch(() => {})
   }, [user.tenant_id])
@@ -380,6 +388,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Drain queued offline writes first chance we get (same trigger set as the
     // photo queue: screen mount, app foreground, next write).
     flushOutbox().catch(() => {})
+    // Opened on this phone: its offline copy is kept a week (lib/cachePrune).
+    noteCachedJobs([job]).catch(() => {})
     loadChecklist()
     loadTimeEntries()
     loadPropMeta()
@@ -424,16 +434,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Rank this job among the crew member's own route-ordered jobs for the same
   // day, so the badge is a clean "Stop k of M" (matches the Dashboard).
   async function loadRouteStop() {
-    const day = new Date(job.scheduled_start)
-    const start = new Date(day); start.setHours(0, 0, 0, 0)
-    const end = new Date(day); end.setHours(23, 59, 59, 999)
-    const { data } = await cachedQuery(`route:${job.id}:${user.id}`, supabase.from('jobs')
-      .select('id, route_order, job_assignments!inner(user_id)')
-      .eq('tenant_id', user.tenant_id)
-      .eq('job_assignments.user_id', user.id)
-      .not('route_order', 'is', null)
-      .gte('scheduled_start', start.toISOString())
-      .lte('scheduled_start', end.toISOString()))
+    const { data } = await cachedRead(routeStopRead(job, user))
     if (!data || !data.length) { setRouteStop(null); return }
     const ordered = [...data].sort((a: any, b: any) => a.route_order - b.route_order)
     const idx = ordered.findIndex((j: any) => j.id === job.id)
@@ -447,16 +448,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   async function loadNextArrival() {
     if (isTask || !addr?.id || !job.scheduled_start) return
     const cleanYmd = dayKey(job.scheduled_start)
+    const reads = nextArrivalReads(job, addr.id, user.tenant_id)
     const [{ data: rows }, { data: a }, { data: ten }] = await Promise.all([
-      cachedQuery(`nextarr:${job.id}`, supabase.from('property_reservations')
-        .select('id, platform, guest_name, calendar_id, checkin_date, checkout_date, checkin_time')
-        .eq('address_id', addr.id).eq('status', 'confirmed')
-        .gte('checkout_date', shiftYmd(cleanYmd, -1))
-        .order('checkin_date').limit(60)),
-      cachedQuery(`nextarr:addr:${addr.id}`, supabase.from('client_addresses')
-        .select('default_checkin_time').eq('id', addr.id).maybeSingle()),
-      cachedQuery(`nextarr:ten:${user.tenant_id}`, supabase.from('tenants')
-        .select('default_checkin_time').eq('id', user.tenant_id).maybeSingle()),
+      cachedRead(reads.stays), cachedRead(reads.property), cachedRead(reads.company),
     ])
     if (!rows || !rows.length) { setNextArrival(null); return }
     setNextArrival(pickNextArrival(cleanYmd, rows as ArrivalRow[],
@@ -468,10 +462,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   async function loadCrewNote() {
     flushAcks().catch(() => {})
     const [{ data: jn }, { data: rows }, mine] = await Promise.all([
-      cachedQuery(`crewnote:${job.id}`, supabase.from('jobs')
-        .select('crew_note, crew_note_at_clock_in').eq('id', job.id).maybeSingle()),
-      cachedQuery(`crewnoteack:${job.id}:${user.id}`, supabase.from('job_crew_note_acks')
-        .select('note').eq('job_id', job.id).eq('user_id', user.id)),
+      cachedRead(crewNoteRead(job.id)),
+      cachedRead(crewNoteAckRead(job.id, user.id)),
       localAcks(job.id, user.id),
     ])
     setAckedNotes(Array.from(new Set([...mine, ...((rows as any[]) ?? []).map((r: any) => r.note)])))
@@ -483,11 +475,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   async function loadPropMeta() {
     // Time-boxed crew access code (smart lock) lives on the job, not the list
     // payload — same for the laundry flag and the client's type.
-    const { data: jr } = await cachedQuery(`jobmeta:${job.id}`, supabase
-      .from('jobs')
-      .select('seam_access_code, laundry_done_onsite, pet_fee_applied, checkout_time, checkin_time, window_minutes, urgency, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count, pet_count)')
-      .eq('id', job.id)
-      .maybeSingle())
+    const { data: jr } = await cachedRead(jobMetaRead(job.id))
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
     if (jr) {
       setLaundryDoneOnsite(!!(jr as any).laundry_done_onsite)
@@ -507,20 +495,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
 
     // Full crew roster for this job, lead first.
-    const { data: crewRows } = await cachedQuery(`crew:${job.id}`, supabase
-      .from('job_assignments')
-      .select('is_lead, users!job_assignments_user_id_fkey(id, full_name)')
-      .eq('job_id', job.id)
-      .order('is_lead', { ascending: false }))
+    const { data: crewRows } = await cachedRead(jobCrewRead(job.id))
     setCrewOnJob((crewRows ?? []).map((a: any) => ({ id: a.users?.id, name: a.users?.full_name, isLead: !!a.is_lead })).filter((c: any) => c.id && c.name))
 
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId) return
-    const { data } = await cachedQuery(`propmeta:${addrId}`, supabase
-      .from('client_addresses')
-      .select('bedrooms, bathrooms, sqft, beds, sleeps, crew_notes, lockbox_code, arrival_instructions, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
-      .eq('id', addrId)
-      .maybeSingle())
+    const { data } = await cachedRead(propMetaRead(addrId))
     if (data) {
       setPropMeta(data as any)
       setBagColor((data as any).laundry_bag_color ?? null)
@@ -610,10 +590,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Daily-mode punches carry no job_id, so there is nothing per-job to show.
   async function loadCrewClock() {
     if (dailyMode || isTask) return
-    const { data } = await cachedQuery(`crewclock:${job.id}`, supabase
-      .from('job_time_entries')
-      .select('user_id, clocked_in_at, clocked_out_at, pause_reason')
-      .eq('job_id', job.id))
+    const { data } = await cachedRead(crewClockRead(job.id))
     if (data) setCrewClockRows(data as CrewClockEntry[])
   }
 
@@ -640,12 +617,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // who see (and run) the whole job's clock: the entry they recorded for a
     // cleaner has to survive a reload, or Complete could never close it.
     const wholeJob = recordsForOthers
-    let q = supabase
-      .from('job_time_entries')
-      .select(wholeJob ? '*, users!job_time_entries_user_id_fkey(full_name)' : '*')
-      .eq('job_id', job.id)
-    if (!wholeJob) q = q.eq('user_id', user.id)
-    const { data: fetched } = await cachedQuery(`time:${job.id}:${wholeJob ? 'job' : user.id}`, q.order('clocked_in_at'))
+    const { data: fetched } = await cachedRead(timeEntriesRead(job.id, user.id, wholeJob))
     // Queued offline punches overlay the cached/live rows, so a relaunch in a
     // dead zone still shows the running timer (and can pause/clock out).
     const data = (await overlayPending('job_time_entries', fetched ?? [],
@@ -758,15 +730,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (!quiet) setLoadingChecklist(true)
     const [tmplRes, rowsRes] = await Promise.all([
       addressId
-        ? cachedQuery(`tmpl:${addressId}`, supabase.from('address_checklist_templates')
-            .select('id, room, title, sort_order, requires_photo')
-            .eq('address_id', addressId)
-            .order('room').order('sort_order'))
+        ? cachedRead(checklistTemplateRead(addressId))
         : Promise.resolve({ data: [] as any[] }),
-      cachedQuery(`chkrows:${job.id}`, supabase.from('job_checklist_items')
-        .select('id, room, task, sort_order, completed, photo_required, room_id, item_kind, level, result, issue_note')
-        .eq('job_id', job.id)
-        .order('room').order('sort_order')),
+      cachedRead(checklistRowsRead(job.id)),
     ])
     const tmpl = tmplRes.data || []
     // Queued offline ticks overlay the cached/live rows (rows are already
@@ -784,7 +750,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       rows.forEach(r => { if (r.completed) checkedMap[r.id] = true })
     } else if (tmpl.length > 0) {
       // Template exists but this job was never seeded — ticks upsert rows.
-      items = tmpl.map(item => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title, requires_photo: item.requires_photo || false }))
+      items = tmpl.map((item: any) => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title, requires_photo: item.requires_photo || false }))
     } else {
       // No rows, no template. Companies that deliberately run without
       // checklists get an empty list; everyone else keeps the default.
@@ -792,8 +758,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       // crew of the list they had yesterday.
       let seedMode = 'generated'
       try {
-        const { data: t } = await cachedQuery(`tenseed:${user.tenant_id}`, supabase.from('tenants')
-          .select('default_checklist_seed').eq('id', user.tenant_id).maybeSingle())
+        const { data: t } = await cachedRead(tenantSeedRead(user.tenant_id))
         if ((t as any)?.default_checklist_seed) seedMode = (t as any).default_checklist_seed
       } catch {}
       items = seedMode === 'none' ? [] : DEFAULT_CHECKLIST.map(d => ({ ...d }))
@@ -806,22 +771,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (addressId) {
       try {
         const [roomsRes, signRes, addrRes, tenRes, reqRes, shotRes] = await Promise.all([
-          cachedQuery(`rooms:${addressId}`, supabase.from('property_rooms')
-            .select('id, room_type, instance_no, name, sort_order, execution_mode')
-            .eq('address_id', addressId).is('archived_at', null).order('sort_order')),
-          cachedQuery(`signoffs:${job.id}`, supabase.from('job_room_signoffs')
-            .select('id, room_id, completed_at, job_id').eq('job_id', job.id)),
-          cachedQuery(`addrmode:${addressId}`, supabase.from('client_addresses')
-            .select('checklist_execution_mode').eq('id', addressId)),
-          cachedQuery(`tenmode:${user.tenant_id}`, supabase.from('tenants')
-            .select('checklist_execution_mode').eq('id', user.tenant_id)),
-          cachedQuery(`preq:${addressId}`, supabase.from('property_photo_requirements')
-            .select('id, room_id, required, area_name, sort_order, created_at')
-            .eq('address_id', addressId).order('sort_order')),
-          cachedQuery(`pshot:${job.id}`, supabase.from('job_photos')
-            .select('photo_requirement_id, photo_url, created_at')
-            .eq('job_id', job.id).not('photo_requirement_id', 'is', null)
-            .order('created_at', { ascending: false })),
+          cachedRead(roomsRead(addressId)),
+          cachedRead(roomSignoffsRead(job.id)),
+          cachedRead(addressModeRead(addressId)),
+          cachedRead(tenantModeRead(user.tenant_id)),
+          cachedRead(photoRequirementsRead(addressId)),
+          cachedRead(requirementShotsRead(job.id)),
         ])
         setRoomsMeta(roomsRes.data || [])
         const signRows = await overlayPending('job_room_signoffs', signRes.data || [], v => v.job_id === job.id)
@@ -843,11 +798,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // A photo counts for an item via the canonical checklist_item_id link, or
     // by the legacy caption == task-title match (photos from older bundles /
     // web uploads before the link existed).
-    const { data: photos } = await cachedQuery(`photos:${job.id}`, supabase.from('job_photos').select('caption, checklist_item_id').eq('job_id', job.id))
+    const { data: photos } = await cachedRead(itemPhotosRead(job.id))
     if (photos) {
       const counts: Record<string, number> = {}
       items.forEach(item => {
-        counts[item.id] = photos.filter(p =>
+        counts[item.id] = photos.filter((p: any) =>
           (item.jobItemId && p.checklist_item_id === item.jobItemId) ||
           (!p.checklist_item_id && p.caption === item.title)
         ).length

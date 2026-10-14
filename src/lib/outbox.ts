@@ -191,10 +191,20 @@ export async function writeThrough(w: OutboxWrite): Promise<{ error: any; queued
   return { error: res.error, queued: false }
 }
 
+// Told after a flush that delivered queued writes and left nothing waiting:
+// the phone is back on signal, so it is a good moment to re-read (the offline
+// day pack listens, App.tsx).
+const drainedListeners = new Set<() => void>()
+export function onOutboxDrained(fn: () => void): () => void {
+  drainedListeners.add(fn)
+  return () => { drainedListeners.delete(fn) }
+}
+
 let flushing = false
 export async function flushOutbox(): Promise<void> {
   if (flushing) return
   flushing = true
+  let sent = 0
   try {
     while (true) {
       const q = await readQueue()
@@ -203,6 +213,7 @@ export async function flushOutbox(): Promise<void> {
       const res = await applyOp(op)
       if (!res.error) {
         await writeQueue((await readQueue()).filter(x => x.id !== op.id))
+        sent++
         continue
       }
       if (res.status === 0) break // still offline — keep everything, retry later
@@ -239,6 +250,9 @@ export async function flushOutbox(): Promise<void> {
       }
       await writeQueue(cur.map(x => x.id === op.id ? { ...x, rejects, lastError: msg } : x))
       break // strict FIFO: don't let later ops overtake; retry next flush
+    }
+    if (sent && !(await readQueue()).length) {
+      drainedListeners.forEach(fn => { try { fn() } catch { /* a listener's problem */ } })
     }
   } finally { flushing = false }
 }

@@ -1,0 +1,10 @@
+// Bundle entry for the offline day-pack harness: the real modules under test,
+// bundled with the real supabase-js by scripts/test-offline-day-pack.mjs.
+export { supabase } from '../supabase'
+export { cachedRead, clearDataCache } from '../dataCache'
+export * as reads from '../jobReads'
+export { prefetchDays, loadDayPack, stopsAhead, DAY_PACK_THROTTLE_MS } from '../offlinePrefetch'
+export { dayView, isMyJob } from '../jobScope'
+export { setCurrentTz, todayKey, tomorrowKey, dayKey } from '../timezone'
+export { writeThrough, flushOutbox, onOutboxDrained } from '../outbox'
+export { noteCachedJobs } from '../cachePrune'

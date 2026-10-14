@@ -11,14 +11,17 @@ import { ti, localeFor } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
-import { cachedQuery } from '../lib/dataCache'
+import { cachedQuery, cachedRead } from '../lib/dataCache'
+import { dashTodayRead, homeDayRows } from '../lib/jobReads'
+import { prefetchDays, loadDayPack, onDayPackChange, stopsAhead, type DayPack } from '../lib/offlinePrefetch'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { PrepCard } from '../components/PrepCard'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
 // src/lib/timezone.ts.
-import { fmtTime, fmtDate, dayKey, todayKey, startOfDayInTz, endOfDayInTz, startOfMonthInTz } from '../lib/timezone'
+import { fmtTime, fmtDate, fmtDateTime, dayKey, todayKey, startOfDayInTz, startOfMonthInTz } from '../lib/timezone'
+import { shiftYmd } from '../lib/nextArrival'
 
 export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void; onSOS: () => void }) {
   const { t, lang } = useLang()
@@ -40,6 +43,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [offline, setOffline] = useState(false)
+  // The offline day pack (lib/offlinePrefetch): when it last saved, and how many
+  // stops it holds from today on.
+  const [dayPack, setDayPack] = useState<DayPack | null>(null)
   const sosTimer = useRef<any>(null)
   const sosInterval = useRef<any>(null)
   // Day-long shift clock-in (only when tenant uses 'daily' time tracking)
@@ -58,7 +64,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [scope, setScope] = useJobScope(user.id)
   const viewScope: JobScope = isOffice ? scope : 'everyone'
 
-  const load = useCallback(async () => {
+  // pulled = pull-to-refresh: the crew asked for fresh data, so the day pack
+  // refreshes too instead of waiting out its 10 minutes.
+  const load = useCallback(async (pulled = false) => {
     // Drain queued offline writes first chance we get (pull-to-refresh after
     // driving back into signal is a natural sync moment).
     flushOutbox().catch(() => {})
@@ -66,7 +74,6 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // "Today" is the tenant's day, not the phone's. With the two disagreeing,
     // a late-evening clean sat in one app's today and the other's tomorrow.
     const todayStart = startOfDayInTz(now)
-    const todayEnd = endOfDayInTz(now)
     // Same for the month: these bounds feed crew_pay_for_period, so a phone in
     // another zone must not report a different month's earnings than payroll.
     const monthStart = startOfMonthInTz(now)
@@ -94,13 +101,11 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // Reads go through cachedQuery: last good result survives in AsyncStorage,
     // so a crew member who loaded their day online keeps it when signal drops.
     // All in parallel: the slowest one sets the wait, not the sum of them.
+    // The day read runs to the end of TOMORROW (lib/jobReads), so the copy
+    // saved tonight still has the morning's jobs with no signal. Only today is
+    // shown: every row goes through homeDayRows() below.
     const [todayRes, monthRes, strandedRes, shiftRes] = await Promise.all([
-      cachedQuery(`dash:today:${user.id}`, supabase.from('jobs')
-        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
-        .eq('tenant_id', user.tenant_id)
-        .gte('scheduled_start', todayStart.toISOString())
-        .lte('scheduled_start', todayEnd.toISOString())
-        .order('scheduled_start')),
+      cachedRead(dashTodayRead(user, now)),
       // Monthly stats. For crew, filter to THEIR jobs server-side (inner join)
       // — the old fetch-everything-then-filter pulled every tenant job of the
       // month, which silently truncates at PostgREST's 1,000-row cap on a busy
@@ -147,17 +152,14 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     if (gen !== loadGen.current) return
     setOffline(todayRes.fromCache)
 
-    // Cached rows can be from an EARLIER day — re-filter to the current window
-    // client-side so yesterday's cache never renders as today's jobs. No-op on
-    // live data (the server already filtered).
+    // Today only. The read carries tomorrow too, and cached rows can be from
+    // an EARLIER day, so every row — live or cached — is re-filtered to the
+    // current tenant day; tomorrow's never reach the list, the counts, Mine /
+    // Everyone or the prep card. Crew keep only their own.
     const today = todayKey()
-    const inToday = (j: any) => dayKey(j.scheduled_start) === today
     // Queued offline status changes (en_route/in_progress/completed) overlay
     // the cached/live rows so the day reads right after a relaunch.
-    const myTodayAll = await overlayPending('jobs', (isOwner
-      ? (todayRes.data ?? [])
-      : (todayRes.data ?? []).filter((j: any) => isMyJob(j, user.id))
-    ).filter(inToday))
+    const myTodayAll = await overlayPending('jobs', homeDayRows(todayRes.data, user, today))
 
     setMonthRows((monthRes.data ?? []).filter((j: any) => new Date(j.scheduled_start) >= monthStart))
 
@@ -198,9 +200,23 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // time tracking). Region-based — no tracking, no location writes until an
     // actual clock-in. No-op for daily-shift crews and non-granted phones.
     refreshArrivalGeofences(user).catch(() => {})
+
+    // A live day read: save today's and tomorrow's stops for offline, from the
+    // rows just read (lib/offlinePrefetch; at most every 10 minutes unless
+    // pulled). A cached read means no signal — nothing to save from.
+    if (!todayRes.fromCache && !todayRes.error) {
+      prefetchDays(user, { rows: todayRes.data as any[], force: pulled }).catch(() => {})
+    }
   }, [user])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    let live = true
+    loadDayPack(user.id).then(p => { if (live) setDayPack(p) }).catch(() => {})
+    const off = onDayPackChange((uid, p) => { if (uid === user.id) setDayPack(p) })
+    return () => { live = false; off() }
+  }, [user.id])
 
   // Cancelled jobs used to be filtered out server-side, so a cancellation
   // silently vanished from the crew's day — dayView keeps them apart as
@@ -306,12 +322,20 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   // Dispatcher-suggested driving order → "Stop k of M" for the crew's day,
   // ranked over the jobs shown: on Mine, the viewer's own stops (see routeStops).
   const routeStops = day.stops
+  const packStops = stopsAhead(dayPack, todayKey())
+  // "8:42 PM" today, "Yesterday 8:42 PM", else the date.
+  const packTime = (at: string) => {
+    const d = dayKey(at)
+    if (d === todayKey()) return fmtTime(at, localeFor(lang))
+    if (d === shiftYmd(todayKey(), -1)) return `${t('yesterday')} ${fmtTime(at, localeFor(lang))}`
+    return fmtDateTime(at, localeFor(lang))
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView
         contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load() }} tintColor={GOLD} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true) }} tintColor={GOLD} />}
       >
         {/* Header */}
         <View style={styles.header}>
@@ -361,6 +385,14 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           <View style={styles.offlineBanner}>
             <Text style={styles.offlineBannerText}>📡 {t('offline_cached')}</Text>
           </View>
+        )}
+
+        {/* What the offline day pack holds. Hidden for an office user with
+            no stops of their own — "0 stops" every day is noise there. */}
+        {packStops != null && !(isOffice && packStops === 0) && dayPack && (
+          <Text style={styles.dayPackLine}>
+            ✓ {ti(t(packStops === 1 ? 'offline_pack_saved_one' : 'offline_pack_saved'), { time: packTime(dayPack.at), n: String(packStops) })}
+          </Text>
         )}
 
         {/* Day-long shift clock-in (daily mode) */}
@@ -562,6 +594,7 @@ const styles = StyleSheet.create({
   scroll: { paddingBottom: 40 },
   offlineBanner: { marginHorizontal: 16, marginTop: 12, backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1, borderRadius: 10, padding: 10 },
   offlineBannerText: { color: '#92400E', fontSize: 12, fontWeight: '700', textAlign: 'center' },
+  dayPackLine: { marginHorizontal: 16, marginTop: 10, fontSize: 11, color: '#64748B', textAlign: 'center' },
   startDayBtn:{ marginHorizontal: 16, marginTop: 16, backgroundColor: GOLD, borderRadius: 14, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' },
   startDayBtnText: { color: SLATE, fontSize: 17, fontWeight: '800' },
   shiftCardOn: { marginHorizontal: 16, marginTop: 16, backgroundColor: '#ECFDF5', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#A7F3D0' },

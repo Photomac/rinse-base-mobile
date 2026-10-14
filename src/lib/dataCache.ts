@@ -15,6 +15,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const PREFIX = 'dataCache:'
 
+// Bumped by clearDataCache(). A warm that started before a sign-out must not
+// write the previous account's rows back afterwards.
+let epoch = 0
+
 export async function cachedQuery<T = any>(
   key: string,
   query: PromiseLike<{ data: T | null; error: any }>,
@@ -33,10 +37,70 @@ export async function cachedQuery<T = any>(
   return { data: res.data, error: res.error, fromCache: false }
 }
 
+/** A cached read: its cache key and the query, built only when it runs.
+ *  The builders live in lib/jobReads.ts, shared by the screens and the
+ *  offline day pack so both use the same key and the same select. */
+export interface CacheRead {
+  key: string
+  q: () => PromiseLike<any>
+}
+
+export function cachedRead<T = any>(r: CacheRead) {
+  return cachedQuery<T>(r.key, r.q())
+}
+
+/**
+ * Run a read for the cache only (the offline day pack): store a good answer
+ * under the same key cachedRead() falls back to. Never reads the cache back.
+ * `status` 0 = the network failed; any other failure is a server answer.
+ * Nothing is stored once the cache has been cleared since `sinceEpoch`
+ * (cacheEpoch() when the caller's run began).
+ */
+export async function warmCache(r: CacheRead, sinceEpoch: number = epoch): Promise<{ ok: boolean; status: number; data: any }> {
+  let res: any
+  try { res = await r.q() } catch { return { ok: false, status: 0, data: null } }
+  if (res.error) return { ok: false, status: Number(res.status) || 0, data: null }
+  if (sinceEpoch === epoch) {
+    try { await AsyncStorage.setItem(PREFIX + r.key, JSON.stringify(res.data ?? null)) } catch { /* best effort */ }
+  }
+  return { ok: true, status: Number(res.status) || 200, data: res.data }
+}
+
+/** Changes on every clearDataCache(); pass it back to writeCacheEntry(). */
+export function cacheEpoch(): number { return epoch }
+
+/** A value kept with the cached reads (dropped with them at sign-out).
+ *  Skipped when the cache was cleared since `sinceEpoch`. */
+export async function writeCacheEntry(key: string, value: any, sinceEpoch: number): Promise<void> {
+  if (sinceEpoch !== epoch) return
+  try { await AsyncStorage.setItem(PREFIX + key, JSON.stringify(value)) } catch { /* best effort */ }
+}
+
+export async function readCacheEntry<T = any>(key: string): Promise<T | null> {
+  try { const raw = await AsyncStorage.getItem(PREFIX + key); return raw == null ? null : JSON.parse(raw) } catch { return null }
+}
+
+/** Every cached read's key, without the prefix. */
+export async function dataCacheKeys(): Promise<string[]> {
+  try {
+    return (await AsyncStorage.getAllKeys()).filter(k => k.startsWith(PREFIX)).map(k => k.slice(PREFIX.length))
+  } catch { return [] }
+}
+
+/** Drop cached reads whose key (without the prefix) matches. */
+export async function pruneDataCache(drop: (key: string) => boolean): Promise<void> {
+  try {
+    const keys = (await AsyncStorage.getAllKeys())
+      .filter(k => k.startsWith(PREFIX) && drop(k.slice(PREFIX.length)))
+    if (keys.length) await AsyncStorage.multiRemove(keys)
+  } catch { /* best effort */ }
+}
+
 // Sign-out hygiene: drop every cached read (jobs, checklists, property info
 // carry addresses and lockbox codes — they must not outlive the account on a
 // shared device).
 export async function clearDataCache(): Promise<void> {
+  epoch++
   try {
     const keys = await AsyncStorage.getAllKeys()
     const mine = keys.filter(k => k.startsWith(PREFIX))
