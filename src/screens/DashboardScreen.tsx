@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { CrewLine } from '../components/CrewLine'
+import { kindParts } from '../lib/cleanKind'
 import { JobScopeToggle } from '../components/JobScopeToggle'
 import { CrewGroupHeader } from '../components/CrewGroupHeader'
 import { useJobScope } from '../lib/useJobScope'
@@ -27,6 +28,8 @@ import { shiftYmd } from '../lib/nextArrival'
 
 export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void; onSOS: () => void }) {
   const { t, lang } = useLang()
+  // What kind of clean each card is: see lib/cleanKind.
+  const kindLabels = { turnover: t('turnover'), backToBack: t('back_to_back') }
   // The day as loaded (cancelled included, in working order). What renders —
   // list, counts, active/next job, route stops — is derived from it below, so
   // flipping Mine / Everyone needs no reload.
@@ -542,7 +545,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     <View style={[styles.jobDot, { backgroundColor: isDone ? '#10B981' : isActive ? '#F59E0B' : '#3B82F6' }]} />
                     <View style={styles.jobInfo}>
                       <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}</Text>
-                      <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}{job.is_turnover ? ' · 🏠 ' + t('turnover') : ''}{job.window_minutes != null ? ' · ↔ ' + t('back_to_back') : ''}</Text>
+                      <Text style={styles.jobTime}>{[fmtTime(job.scheduled_start), ...kindParts(job, kindLabels)].join(' · ')}</Text>
                       <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                     </View>
                     {stop && (
