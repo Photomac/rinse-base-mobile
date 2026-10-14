@@ -27,6 +27,7 @@ import { flushQueue } from './src/lib/photoQueue'
 import { flushVideoQueue } from './src/lib/videoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
 import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
+import { USERS_READABLE_COLUMNS, fetchMyPay } from './src/lib/userPrivateDetails'
 import { clearDataCache } from './src/lib/dataCache'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
 import { flushOutbox, onOutboxDrained } from './src/lib/outbox'
@@ -156,9 +157,19 @@ function AppInner() {
     // the login, else the active row linked by auth_user_id. Both candidates
     // in one read (RLS shows at most these two); `.maybeSingle()` errored when
     // both were readable and sent us to the offline copy.
-    const { data: rows, error } = await supabase.from('users').select('*').or(myUsersRowFilter(authId))
-    const data = pickMyUsersRow(rows, authId)
+    // Named columns, not '*': signed-in users can't SELECT a users row's pay,
+    // SSN, bank or address columns (src/lib/userPrivateDetails.ts).
+    const { data: rows, error } = await supabase.from('users').select(USERS_READABLE_COLUMNS).or(myUsersRowFilter(authId))
+    // any: the profile carries the company settings (_tz, ...) and pay below.
+    const data: any = pickMyUsersRow(rows, authId)
     if (data) {
+      // The Profile tab's pay card: the person's own pay, kept with the profile
+      // so it still shows offline. Only these three fields; nothing else
+      // private is stored on the phone. Unreadable now, the card is left out.
+      try {
+        const pay = await fetchMyPay(data.id)
+        if (pay) Object.assign(data, pay)
+      } catch (e) { console.warn('Own pay load failed:', e) }
       let settings: CompanySettings | null = null
       try { settings = await companySettings(data.tenant_id) } catch { /* unreadable, same as an error */ }
       if (!settings) {
