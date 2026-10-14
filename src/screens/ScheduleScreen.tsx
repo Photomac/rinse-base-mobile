@@ -6,8 +6,10 @@ import { useLang } from '../contexts/LangContext'
 import { CrewLine } from '../components/CrewLine'
 import { kindParts } from '../lib/cleanKind'
 import { JobScopeToggle } from '../components/JobScopeToggle'
+import { CrewGroupHeader } from '../components/CrewGroupHeader'
 import { useJobScope } from '../lib/useJobScope'
 import { isOfficeRole, isMyJob, jobsInScope, type JobScope } from '../lib/jobScope'
+import { crewGroups, listItems } from '../lib/crewGroups'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
@@ -108,6 +110,12 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
 
   const today = todayKey()
   const selectedJobs = getJobsForDay(selectedDate)
+  // Everyone, crew by crew, as on Home (lib/crewGroups): the picked day in one
+  // section per person. Mine, and every crew phone, keep the plain list.
+  const youLabel = t('crew_you')
+  const selectedGroups = useMemo(() => (isOffice && viewScope === 'everyone' ? crewGroups(selectedJobs, user.id, youLabel) : null),
+    [isOffice, viewScope, selectedJobs, user.id, youLabel])
+  const selectedItems = useMemo(() => listItems(selectedJobs, {}, selectedGroups), [selectedJobs, selectedGroups])
 
   function buildMonthGrid() {
     const year = anchor.getFullYear()
@@ -255,7 +263,9 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
             <View style={styles.emptyDay}>
               <Text style={styles.emptyText}>{viewScope === 'mine' ? t('no_jobs_day_mine') : t('no_jobs_day')}</Text>
             </View>
-          ) : selectedJobs.map((job: any) => {
+          ) : selectedItems.map(item => {
+            if (item.kind === 'header') return <CrewGroupHeader key={`crew:${item.group.id}`} kind={item.group.kind} label={item.group.label} n={item.group.jobs.length} />
+            const job = item.job
             const addr = job.client_addresses as any
             const color = STATUS_COLORS[job.status] || GOLD
             const kind = kindParts(job, kindLabels)
