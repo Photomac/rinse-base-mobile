@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { CrewLine } from '../components/CrewLine'
+import { kindParts } from '../lib/cleanKind'
 import { JobScopeToggle } from '../components/JobScopeToggle'
 import { useJobScope } from '../lib/useJobScope'
 import { isOfficeRole, isMyJob, jobsInScope, type JobScope } from '../lib/jobScope'
@@ -38,6 +39,8 @@ type ViewMode = 'month' | 'week'
 
 export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
   const { t } = useLang()
+  // What kind of clean each card is: see lib/cleanKind.
+  const kindLabels = { turnover: t('turnover'), backToBack: t('back_to_back') }
   const DAY_NAMES = [t('day_sun'), t('day_mon'), t('day_tue'), t('day_wed'), t('day_thu'), t('day_fri'), t('day_sat')]
   const [jobs, setJobs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -65,7 +68,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     // online. Cached rows carry scheduled_start, so day placement stays right
     // even when the cache is a day or two old.
     const { data, fromCache } = await cachedQuery(`sched:${user.id}`, supabase.from('jobs')
-      .select('id, job_number, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
+      .select('id, job_number, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', start.toISOString())
       .lte('scheduled_start', end.toISOString())
@@ -255,6 +258,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
           ) : selectedJobs.map((job: any) => {
             const addr = job.client_addresses as any
             const color = STATUS_COLORS[job.status] || GOLD
+            const kind = kindParts(job, kindLabels)
             return (
               <TouchableOpacity key={job.id} style={[styles.jobCard, { borderLeftColor: color }]} onPress={() => onJobPress(job)}>
                 <View style={{ flex: 1 }}>
@@ -266,7 +270,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                   </View>
                   <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}</Text>
                   {(!job.job_type || job.job_type === 'clean' || job.job_type === 'inspection') && <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>}
-                  {job.is_turnover && <Text style={styles.turnoverTag}>🏠 {t('turnover')}{job.window_minutes != null ? `  ·  ↔ ${t('back_to_back')}` : ''}</Text>}
+                  {kind.length > 0 && <Text style={styles.kindTag}>{kind.join('  ·  ')}</Text>}
                   <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                 </View>
                 <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
@@ -321,5 +325,5 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 10, fontWeight: '700', textTransform: 'capitalize' },
   jobClient: { fontSize: 14, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
   jobAddress: { fontSize: 11, color: '#94A3B8' },
-  turnoverTag: { fontSize: 10, color: '#06B6D4', fontWeight: '700', marginTop: 3 },
+  kindTag: { fontSize: 10, color: '#06B6D4', fontWeight: '700', marginTop: 3 },
 })
