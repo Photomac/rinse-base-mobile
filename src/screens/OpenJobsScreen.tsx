@@ -42,6 +42,7 @@ const RESULT_KEY: Record<string, string> = {
   time_off: 'open_jobs_r_time_off',
   off_that_day: 'open_jobs_r_off_day',
   double_booked: 'open_jobs_r_double',
+  first_tier_only: 'open_jobs_r_first_tier',
 }
 
 export function isOpenJob(j: any, now = Date.now()): boolean {
@@ -49,6 +50,15 @@ export function isOpenJob(j: any, now = Date.now()): boolean {
     && ['pending_approval', 'scheduled'].includes(j.status)
     && new Date(j.scheduled_start).getTime() > now
     && (j.job_assignments?.length ?? 0) < Math.max(Number(j.max_crew ?? 1), 1)
+}
+
+/** Crew first, then everyone (web migration 20261014230000): inside its
+ *  first-pick window (jobs.open_to_all_at) a clean is its property's default
+ *  crew's alone — claim_open_job refuses anyone else — so only they see it. */
+export function offeredFirstTo(j: any, userId: string, now = Date.now()): 'all' | 'me' | 'others' {
+  if (!j.open_to_all_at || new Date(j.open_to_all_at).getTime() <= now) return 'all'
+  const crew: string[] = j.client_addresses?.default_crew ?? []
+  return crew.includes(userId) ? 'me' : 'others'
 }
 
 export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
@@ -67,7 +77,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const now = new Date()
     const res = await cachedQuery(`openjobs:${user.tenant_id}`, supabase
       .from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, max_crew, open_for_claims_at, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), service_types(name), job_assignments(user_id, claimed_at)')
+      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, max_crew, open_for_claims_at, open_to_all_at, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, default_crew), service_types(name), job_assignments(user_id, claimed_at)')
       .eq('tenant_id', user.tenant_id)
       .not('open_for_claims_at', 'is', null)
       .in('status', ['pending_approval', 'scheduled'])
@@ -77,7 +87,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
       .limit(200))
     setOffline(res.fromCache)
     const rows = res.data ?? []
-    setJobs(rows.filter((j: any) => isOpenJob(j, now.getTime())))
+    setJobs(rows.filter((j: any) => isOpenJob(j, now.getTime()) && offeredFirstTo(j, user.id, now.getTime()) !== 'others'))
     // Board cleans this person claimed. A full one drops out of the open list,
     // so it needs its own row here — that is where "give back" lives.
     setMine(rows.filter((j: any) => (j.job_assignments ?? []).some((a: any) => a.user_id === user.id && a.claimed_at)))
@@ -217,6 +227,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
                     {job.is_turnover ? <Text style={[styles.badge, styles.badgeTurnover]}>🏠 {t('turnover')}</Text> : null}
                     {(job.service_types as any)?.name ? <Text style={[styles.badge, styles.badgeService]}>{(job.service_types as any).name}</Text> : null}
                     <Text style={[styles.badge, styles.badgeSpots]}>{ti(t('open_jobs_spots'), { taken: String(taken), cap: String(cap) })}</Text>
+                    {offeredFirstTo(job, user.id) === 'me' ? <Text style={[styles.badge, styles.badgeFirst]}>⭐ {t('open_jobs_first_tag')}</Text> : null}
                   </View>
                 </View>
               </View>
@@ -266,6 +277,7 @@ const styles = StyleSheet.create({
   badgeTurnover: { backgroundColor: '#FEE2E2', color: '#991B1B' },
   badgeService: { backgroundColor: '#F1F5F9', color: '#475569' },
   badgeSpots: { backgroundColor: '#DBEAFE', color: '#1E40AF' },
+  badgeFirst: { backgroundColor: '#DCFCE7', color: '#15803D' },
   claimBtn: { marginTop: 12, backgroundColor: GOLD, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   sectionTitle: { fontSize: 12, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 },
   mineRow: { backgroundColor: '#fff', borderRadius: 12, padding: 12, marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: '#A7F3D0' },
