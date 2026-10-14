@@ -144,7 +144,7 @@ check('every query Mine reads carries the plain job_assignments(user_id) embed',
   [query(reads, 'export function dashTodayRead(', 'export function homeDayRows('), ownerMonth, query(dash, 'cachedQuery(`dash:stranded:', 'job_time_entries'), query(sched, 'cachedQuery(`sched:', 'setOffline')]
     .map(q => /job_assignments(!job_assignments_job_id_fkey)?\(user_id\)/.test(q)), [true, true, true, true])
 check('Home\'s counts and stop badge come from the scoped day',
-  [/\{day\.done\}/.test(dash), /\{day\.remaining\}/.test(dash), /const routeStops = day\.stops/.test(dash), /<PrepCard user=\{user\} jobs=\{todayJobs\}/.test(dash)], [true, true, true, true])
+  [/\{day\.done\}/.test(dash), /\{day\.remaining\}/.test(dash), /listItems\(day\.jobs, day\.stops, groups\)/.test(dash), /<PrepCard user=\{user\} jobs=\{todayJobs\}/.test(dash)], [true, true, true, true])
 check('Schedule\'s grid, day list and count read the scoped jobs',
   [/for \(const j of shown\)/.test(sched), /String\(shown\.length\)/.test(sched)], [true, true])
 check('the choice is saved per user on the phone, Everyone until read',

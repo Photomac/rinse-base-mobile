@@ -5,8 +5,10 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { CrewLine } from '../components/CrewLine'
 import { JobScopeToggle } from '../components/JobScopeToggle'
+import { CrewGroupHeader } from '../components/CrewGroupHeader'
 import { useJobScope } from '../lib/useJobScope'
 import { isOfficeRole, isMyJob, jobsInScope, dayView, type JobScope } from '../lib/jobScope'
+import { crewGroups, listItems } from '../lib/crewGroups'
 import { ti, localeFor } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
@@ -227,6 +229,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const cancelledToday = day.cancelled
   const activeJob = day.active
   const nextJob = day.next
+  // Everyone, crew by crew (lib/crewGroups): the office's whole day in one
+  // section per person, each numbered "Stop k of M" over that person's stops.
+  // Mine, and every crew phone, keep the plain list and the day's stops.
+  const youLabel = t('crew_you')
+  const groups = useMemo(() => (isOffice && viewScope === 'everyone' ? crewGroups(day.jobs, user.id, youLabel) : null),
+    [isOffice, viewScope, day.jobs, user.id, youLabel])
+  const todayItems = useMemo(() => listItems(day.jobs, day.stops, groups), [day.jobs, day.stops, groups])
   // Still open after the offline overlay (load()), and narrowed like the day.
   const needsClosing = useMemo(() => jobsInScope(strandedRows, user.id, viewScope)
     .filter((j: any) => j.status === 'in_progress' || j.status === 'en_route'), [strandedRows, user.id, viewScope])
@@ -319,9 +328,6 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const now = new Date()
   const hour = now.getHours()
   const greeting = hour < 12 ? t('good_morning') : hour < 17 ? t('good_afternoon') : t('good_evening')
-  // Dispatcher-suggested driving order → "Stop k of M" for the crew's day,
-  // ranked over the jobs shown: on Mine, the viewer's own stops (see routeStops).
-  const routeStops = day.stops
   const packStops = stopsAhead(dayPack, todayKey())
   // "8:42 PM" today, "Yesterday 8:42 PM", else the date.
   const packTime = (at: string) => {
@@ -521,11 +527,16 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                 <View style={styles.emptyCard}>
                   <Text style={styles.emptyText}>{viewScope === 'mine' ? t('no_jobs_today_mine') : t('no_jobs_today')} 🌟</Text>
                 </View>
-              ) : todayJobs.map((job: any) => {
+              ) : todayItems.map(item => {
+                if (item.kind === 'header') return <CrewGroupHeader key={`crew:${item.group.id}`} kind={item.group.kind} label={item.group.label} n={item.group.jobs.length} />
+                const job = item.job
                 const addr = job.client_addresses
                 const isDone = job.status === 'completed'
                 const isActive = job.status === 'in_progress'
-                const stop = routeStops[job.id]
+                // Dispatcher-suggested driving order → "Stop k of M", ranked over
+                // the viewer's own stops on Mine, each person's in a section (see
+                // routeStops, crewGroups).
+                const stop = item.stops[job.id]
                 return (
                   <TouchableOpacity key={job.id} style={[styles.jobRow, isDone && { opacity: 0.5 }]} onPress={() => onJobPress(job)}>
                     <View style={[styles.jobDot, { backgroundColor: isDone ? '#10B981' : isActive ? '#F59E0B' : '#3B82F6' }]} />
@@ -545,7 +556,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               })}
 
               {/* Cancelled today — the job doesn't just vanish; the crew sees
-                  what happened and why (first line of the cancellation note). */}
+                  what happened and why (first line of the cancellation note).
+                  Under crew sections they get their own header, so they don't
+                  read as the last person's. */}
+              {groups && cancelledToday.length > 0 && <CrewGroupHeader kind="cancelled" n={cancelledToday.length} />}
               {cancelledToday.map((job: any) => {
                 const addr = job.client_addresses
                 const reason = (job.internal_notes || '').split('\n')[0]
