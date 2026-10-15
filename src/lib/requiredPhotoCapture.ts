@@ -4,6 +4,10 @@
 // and photo_type 'after' so one capture also clears the baseline after-photo
 // rule. Extracted from JobPhotosScreen when evidence capture moved into the
 // rooms (2026-08-24).
+//
+// Also a Check first line's photo (lib/checkFirst.ts): tagged with
+// check_first_line_id instead. The database never counts that one as the
+// clean's after photo, though it is saved as photo_type 'after'.
 import { Alert } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { ensureCameraCapture } from './permissions'
@@ -45,6 +49,42 @@ export async function captureRequiredPhoto(
       // shot from its local file right away, and the next one can be taken
       // without waiting out a slow bar. (Awaiting it here also mistook "queued
       // behind a photo already uploading" for "no signal".)
+      void flushQueue().catch(() => {})
+      return { status: 'captured', localUri: uri }
+    } catch (e: any) {
+      Alert.alert(t('upload_failed'), e.message || t('could_not_upload'))
+      return { status: 'failed' }
+    }
+  } catch {
+    return { status: 'cancelled' } // permission race / camera unavailable — no crash
+  }
+}
+
+/** A Check first "photo" line's photo ("Spa photo"). The caller ticks the line
+ *  once it is captured: the photo itself uploads in the background. */
+export async function captureCheckFirstPhoto(
+  line: { id: string; body: string },
+  ctx: CaptureCtx,
+  t: (k: any) => string,
+): Promise<CaptureResult> {
+  if (await ensureCameraCapture() !== 'granted') return { status: 'cancelled' }
+  try {
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false })
+    if (result.canceled) return { status: 'cancelled' }
+    const uri = result.assets[0].uri
+    const takenAt = Date.now()
+    try {
+      await enqueuePhoto({
+        uri,
+        tenant_id: ctx.tenantId,
+        job_id: ctx.jobId,
+        user_id: ctx.userId,
+        photo_type: 'after',
+        caption: line.body,
+        check_first_line_id: line.id,
+        visible_to_client: true,
+        taken_at: takenAt,
+      })
       void flushQueue().catch(() => {})
       return { status: 'captured', localUri: uri }
     } catch (e: any) {

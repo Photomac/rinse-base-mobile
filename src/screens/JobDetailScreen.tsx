@@ -23,15 +23,16 @@ import { IncidentReportCard } from '../components/IncidentReportCard'
 import { uploadImageToJobPhotos } from '../lib/chatAttachments'
 import { InspectionResultCard } from '../components/InspectionResultCard'
 import { CrewNoteBanner, CrewNoteModal } from '../components/CrewNoteModal'
+import { CheckFirstCard, CheckFirstModal, type CheckFirstView } from '../components/CheckFirst'
 import { useLang } from '../contexts/LangContext'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { ti, localeFor } from '../lib/i18n'
-import { captureRequiredPhoto } from '../lib/requiredPhotoCapture'
+import { captureRequiredPhoto, captureCheckFirstPhoto } from '../lib/requiredPhotoCapture'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
-import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive } from '../lib/photoQueue'
+import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, queuedJobPhotos, type QueuedJobPhoto } from '../lib/photoQueue'
 import { cachedRead } from '../lib/dataCache'
 import { noteCachedJobs } from '../lib/cachePrune'
 // Every cached read here is built in lib/jobReads, shared with the offline day
@@ -41,10 +42,16 @@ import {
   jobMetaRead, jobCrewRead, propMetaRead, crewClockRead, timeEntriesRead,
   checklistTemplateRead, checklistRowsRead, tenantSeedRead, roomsRead, roomSignoffsRead,
   addressModeRead, tenantModeRead, photoRequirementsRead, requirementShotsRead, itemPhotosRead,
+  checkFirstLinesRead, checkFirstTicksRead, checkFirstPhotosRead, checkFirstStartRead, checkFirstTenantRead,
 } from '../lib/jobReads'
 import { ackRow, clockInNote, crewNoteText, flushAcks, localAcks, recordAck, type CrewNoteJob } from '../lib/crewNote'
 import { crewClockFor, type CrewClock, type CrewClockEntry } from '../lib/crewClock'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
+import {
+  activeLines, firstClockIn, startedAt, localBlockers, tickRow, seenRow, TICK_CONFLICT, SEEN_CONFLICT,
+  type CheckFirstLine, type CheckFirstTick,
+} from '../lib/checkFirst'
+import { isMyJob } from '../lib/jobScope'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -326,6 +333,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // The open "Before you start" window. `then` is the start it interrupted, run
   // after "Got it"; null = asked on a clean already under way (no "Not yet").
   const [notePrompt, setNotePrompt] = useState<{ then: (() => void) | null } | null>(null)
+  // When "Got it" last closed that window (the Check first window waits for it to go).
+  const noteClosedAt = useRef(0)
+  // "Check first" (lib/checkFirst.ts): the property's own list, ticked on every
+  // clean there. null = nothing to show: no lines, not a clean, or no answer.
+  const [checkFirst, setCheckFirst] = useState<CheckFirstView | null>(null)
+  // The Check first window at Start; `then` is the start it holds.
+  const [cfPrompt, setCfPrompt] = useState<{ then: () => void | Promise<void> } | null>(null)
+  const [cfBusy, setCfBusy] = useState<string | null>(null)
+  const cfLoadSeq = useRef(0)
+  // The property has lines: photo events reload the card (none: no extra reads).
+  const cfHasLines = useRef(false)
+  const cfY = useRef(0)
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
   // the cash + bags reconciliation form replaces them.
   const isLaundry = job.job_type === 'laundry_run'
@@ -362,6 +381,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     ...checklist.map((i: any) => i.title), ...checklist.map((i: any) => i.room),
     ...roomsMeta.map((r: any) => r.name),
     ...evidence.map((e: any) => e.area_name),
+    ...(checkFirst?.lines ?? []).map(l => l.body),
   ])
   const dailyMode = user._timeMode === 'daily'
   const isClockedIn = !!activeEntry && !isPaused
@@ -375,6 +395,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // deliberately excluded — pause closes the entry too, and that state already
   // has its Resume action.
   const isStrandedInProgress = job.status === 'in_progress' && !activeEntry && !isPaused
+  // Check first: who may tick (the server takes a tick only from someone on the
+  // clean, or the office), and when the clean started, as the gate reads it (a
+  // line written after that doesn't block it).
+  const onThisClean = crewOnJob.some(c => c.id === user.id) || isMyJob(job, user.id)
+  const cfCanTick = !isTask && job.status !== 'completed' && (onThisClean || isAdminRole)
+  const cfStarted = startedAt(firstClockIn([...timeEntries, ...(crewClockRows ?? [])]), checkFirst?.jobStartedAt)
 
   useEffect(() => {
     // Fails closed: offline with nothing cached, or a server without the column
@@ -396,6 +422,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     loadNextArrival().catch(() => {})
     loadRouteStop()
     loadCrewNote().catch(() => {})
+    loadCheckFirst().catch(() => {})
     loadPhotoRequirements()
   }, [])
 
@@ -418,15 +445,24 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       if (clockTimer) clearTimeout(clockTimer)
       clockTimer = setTimeout(() => { loadCrewClock().catch(() => {}) }, 300)
     }
+    // A teammate's Check first photo shows on the card. (Their ticks show on
+    // the next load: the tick tables aren't streamed.)
+    let cfTimer: ReturnType<typeof setTimeout> | null = null
+    const reloadPhotos = () => {
+      reload()
+      if (cfTimer) clearTimeout(cfTimer)
+      if (cfHasLines.current) cfTimer = setTimeout(() => { loadCheckFirst().catch(() => {}) }, 300)
+    }
     const channel = supabase
       .channel(`job-detail-${job.id}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'job_checklist_items', filter: `job_id=eq.${job.id}` }, reload)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'job_photos', filter: `job_id=eq.${job.id}` }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'job_photos', filter: `job_id=eq.${job.id}` }, reloadPhotos)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'job_time_entries', filter: `job_id=eq.${job.id}` }, reloadClock)
       .subscribe()
     return () => {
       if (timer) clearTimeout(timer)
       if (clockTimer) clearTimeout(clockTimer)
+      if (cfTimer) clearTimeout(cfTimer)
       supabase.removeChannel(channel)
     }
   }, [job.id])
@@ -468,6 +504,103 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     ])
     setAckedNotes(Array.from(new Set([...mine, ...((rows as any[]) ?? []).map((r: any) => r.note)])))
     if (jn) setCrewNote({ crew_note: (jn as any).crew_note ?? null, crew_note_at_clock_in: !!(jn as any).crew_note_at_clock_in })
+  }
+
+  // Check first: the property's lines, then (only where it has some) this
+  // clean's ticks, line photos and start. Every read fails soft: no answer
+  // shows no card and blocks nothing. Ticks queued offline overlay the copy,
+  // and a line photo still on the phone counts as taken (the gate asks for its
+  // row separately once it lands). The newest load wins.
+  async function loadCheckFirst(): Promise<CheckFirstView | null> {
+    const seq = ++cfLoadSeq.current
+    const addrId = job.client_addresses?.id || job.address_id
+    if (isTask || !addrId) return null
+    const [{ data: rows }, { data: ten }] = await Promise.all([
+      cachedRead(checkFirstLinesRead(addrId)), cachedRead(checkFirstTenantRead(user.tenant_id)),
+    ])
+    const lines = activeLines(((rows as CheckFirstLine[] | null) ?? []))
+    if (seq === cfLoadSeq.current) cfHasLines.current = lines.length > 0
+    if (!lines.length) {
+      if (seq === cfLoadSeq.current) setCheckFirst(null)
+      return null
+    }
+    const [{ data: tickRows }, { data: photoRows }, { data: jr }, queued] = await Promise.all([
+      cachedRead(checkFirstTicksRead(job.id)),
+      cachedRead(checkFirstPhotosRead(job.id)),
+      cachedRead(checkFirstStartRead(job.id)),
+      queuedJobPhotos(job.id).catch((): QueuedJobPhoto[] => []),
+    ])
+    const ticks = (await overlayPending('job_check_first_ticks', (tickRows as any[]) ?? [],
+      v => v.job_id === job.id)) as CheckFirstTick[]
+    const photos: Record<string, string> = {}
+    for (const p of (photoRows as any[]) ?? []) if (p.check_first_line_id && !photos[p.check_first_line_id]) photos[p.check_first_line_id] = p.photo_url
+    const saving: string[] = []
+    for (const q of queued) {
+      if (!q.check_first_line_id) continue
+      saving.push(q.check_first_line_id)
+      if (!photos[q.check_first_line_id]) photos[q.check_first_line_id] = q.localUri
+    }
+    const view: CheckFirstView = {
+      lines, ticks, photos, saving,
+      required: (ten as any)?.check_first_required === true,
+      jobStartedAt: (jr as any)?.started_at ?? null,
+    }
+    if (seq === cfLoadSeq.current) setCheckFirst(view)
+    return view
+  }
+
+  // Who ticked a line: the name the server sent, else this person (a tick
+  // still on the phone), else a teammate on the roster.
+  function cfTickerName(k: CheckFirstTick): string {
+    if (k.users?.full_name) return k.users.full_name
+    if (k.user_id === user.id) return user.full_name || '—'
+    return crewOnJob.find(c => c.id === k.user_id)?.name || '—'
+  }
+
+  // A tick: kept on screen at once, and sent through the outbox, so offline it
+  // queues AHEAD of a later Complete (strict FIFO) and the gate sees it first.
+  // Idempotent (ON CONFLICT DO NOTHING): a teammate's earlier tick stands.
+  // Only a real server refusal takes it back.
+  async function writeCheckFirstTick(line: CheckFirstLine): Promise<boolean> {
+    const row = tickRow({ tenantId: user.tenant_id, jobId: job.id, userId: user.id, line })
+    setCheckFirst(v => (v && !v.ticks.some(k => k.line_id === line.id)
+      ? { ...v, ticks: [...v.ticks, { ...row, users: { full_name: user.full_name ?? null } }] } : v))
+    const { error } = await writeThrough({
+      table: 'job_check_first_ticks', op: 'upsert', onConflict: TICK_CONFLICT, ignoreDuplicates: true, values: row,
+    })
+    if (error) {
+      setCheckFirst(v => (v ? { ...v, ticks: v.ticks.filter(k => !(k.line_id === line.id && k.user_id === user.id && k.ticked_at === row.ticked_at)) } : v))
+      Alert.alert(t('error'), t('could_not_save'))
+      return false
+    }
+    loadCheckFirst().catch(() => {})
+    return true
+  }
+
+  async function tickCheckFirst(line: CheckFirstLine) {
+    if (cfBusy || !cfCanTick) return
+    setCfBusy(line.id)
+    await writeCheckFirstTick(line)
+    setCfBusy(null)
+  }
+
+  // A photo line: the photo first (queued, uploads in the background), then
+  // the tick. The gate wants both: the tick now, the photo's row once it lands.
+  async function shootCheckFirst(line: CheckFirstLine) {
+    if (cfBusy || !cfCanTick) return
+    setCfBusy(line.id)
+    const res = await captureCheckFirstPhoto({ id: line.id, body: line.body },
+      { tenantId: user.tenant_id, jobId: job.id, userId: user.id }, t)
+    if (res.status === 'captured') {
+      const uri = res.localUri
+      setCheckFirst(v => (v ? {
+        ...v,
+        saving: v.saving.includes(line.id) ? v.saving : [...v.saving, line.id],
+        photos: uri && !v.photos[line.id] ? { ...v.photos, [line.id]: uri } : v.photos,
+      } : v))
+      await writeCheckFirstTick(line)
+    }
+    setCfBusy(null)
   }
 
   // Beds/baths/sqft aren't in the list-screen job payload, so fetch them here —
@@ -846,7 +979,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // now happens in the background after capture — refresh the count when one
   // of this job's photos lands.
   useEffect(() => onPhotoQueueChange(e => {
-    if (e.uploadedJobId === job.id) { loadPhotoRequirements(); refreshIfShotListChanged() }
+    if (e.uploadedJobId === job.id) {
+      loadPhotoRequirements(); refreshIfShotListChanged()
+      if (cfHasLines.current) loadCheckFirst().catch(() => {})
+    }
   }), [job.id])
 
   // The office can rebuild this property's checklist or remove a room while the
@@ -938,15 +1074,44 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   function handleClockIn() {
     if (recordsForOthers) { setRecordForOpen(true); return }
     // The office asked for this note to be read at clock-in: the punch waits
-    // for "Got it" (once per wording; an edited note asks again).
-    if (crewNoteNeedsAck) { setNotePrompt({ then: () => clockInAs(null) }); return }
-    clockInAs(null)
+    // for "Got it" (once per wording; an edited note asks again). Then the
+    // property's Check first window, when it has a list; then the punch.
+    if (crewNoteNeedsAck) { setNotePrompt({ then: () => askCheckFirst(() => clockInAs(null)) }); return }
+    askCheckFirst(() => clockInAs(null))
   }
 
-  // Daily mode's "start" is its clock-in: same window.
+  // Daily mode's "start" is its clock-in: same windows.
   function handleStartDaily() {
-    if (crewNoteNeedsAck && !recordsForOthers) { setNotePrompt({ then: startJobDaily }); return }
-    startJobDaily()
+    if (crewNoteNeedsAck && !recordsForOthers) { setNotePrompt({ then: () => askCheckFirst(startJobDaily) }); return }
+    askCheckFirst(startJobDaily)
+  }
+
+  // The Check first window, after the note's and before the start it holds.
+  // Only for someone who can tick (on the clean, or the office) and not for
+  // desk staff recording a cleaner's hours: the list is on top of the screen
+  // for them either way. Ticking isn't needed to start, only to complete.
+  function askCheckFirst(start: () => void | Promise<void>) {
+    if (!checkFirst || !cfCanTick || recordsForOthers) { void start(); return }
+    // iOS doesn't show a window while another is still closing: straight
+    // after the note's "Got it", let that one go first.
+    const wait = Date.now() - noteClosedAt.current < 1000 ? 450 : 0
+    if (wait) setTimeout(() => setCfPrompt({ then: start }), wait)
+    else setCfPrompt({ then: start })
+  }
+
+  // "Start the clean": the start first (its punch is somebody's pay and goes
+  // ahead of anything else in the outbox), then who saw the list, for the
+  // office. "Seen" never holds up or stops the start.
+  async function startFromCheckFirst() {
+    const then = cfPrompt?.then ?? null
+    setCfPrompt(null)
+    try { await then?.() } finally {
+      const { error } = await writeThrough({
+        table: 'job_check_first_seen', op: 'upsert', onConflict: SEEN_CONFLICT, ignoreDuplicates: true,
+        values: seenRow({ tenantId: user.tenant_id, jobId: job.id, userId: user.id }),
+      })
+      if (error) console.warn('check first seen not recorded:', error.message)
+    }
   }
 
   // Started without the window (the arrival auto clock-in, the web, or a start
@@ -964,6 +1129,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     const note = crewNoteAtClockIn
     const then = notePrompt?.then ?? null
     setNotePrompt(null)
+    noteClosedAt.current = Date.now()
     if (note) {
       setAckedNotes(prev => (prev.includes(note) ? prev : [...prev, note]))
       recordAck(ackRow({ tenantId: user.tenant_id, jobId: job.id, userId: user.id, note })).catch(() => {})
@@ -1208,13 +1374,36 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       return
     }
 
+    // Check first, by the phone's own copy, fresh: every line ticked and a
+    // photo line's photo taken (one still on the phone counts). Offline the
+    // gate below can't be asked and the Complete is queued; a refusal by the
+    // server's gate would then park it. Only where the company turned it on;
+    // a read that fails blocks nothing. On a bar too weak to answer soon, the
+    // copy already on screen stands in.
+    setSaving(true)
+    const cf = await Promise.race([
+      loadCheckFirst().catch(() => null),
+      new Promise<CheckFirstView | null>(resolve => setTimeout(() => resolve(checkFirst), 8_000)),
+    ])
+    setSaving(false)
+    if (cf) {
+      const left = localBlockers(cf.required, cf.lines, new Set(cf.ticks.map(k => k.line_id)), new Set(Object.keys(cf.photos)),
+        startedAt(firstClockIn([...timeEntries, ...(crewClockRows ?? [])]), cf.jobStartedAt))
+      if (left.length > 0) {
+        alertCheckFirst(left.map(x => ({ body: x.line.body, photo: x.state === 'needs_photo' })))
+        return
+      }
+    }
+
     // Photos upload in the background, so some may still be on the phone; give
     // them a chance to land now so the gate below sees them. Capped: on one
     // weak bar a full queue can take many minutes, and a Complete tap that
     // silently hangs reads as broken — the gate below says what's going on.
+    // Writes queued offline (Check first ticks among them) go too, or the gate
+    // would answer from before them.
     setSaving(true)
     try {
-      await Promise.race([flushQueue(), new Promise(resolve => setTimeout(resolve, 10_000))])
+      await Promise.race([Promise.all([flushQueue(), flushOutbox()]), new Promise(resolve => setTimeout(resolve, 10_000))])
     } catch { /* offline — handled below */ }
     setSaving(false)
 
@@ -1337,6 +1526,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         return
       }
 
+      // Check first lines (check_first_unticked / check_first_photo_missing;
+      // task = the line's wording, requirement_id = its id). Named, and the
+      // card on top is where they're done. A line this phone has already
+      // ticked is still on its way (the outbox): say so rather than ask again.
+      const cfLeft = blockers.filter((b: any) => b.code === 'check_first_unticked' || b.code === 'check_first_photo_missing')
+      if (cfLeft.length > 0) {
+        const doneHere = (b: any) => b.code === 'check_first_unticked'
+          ? !!cf?.ticks.some(k => k.line_id === b.requirement_id)
+          : !!cf?.photos[b.requirement_id]
+        if (cfLeft.every(doneHere)) { Alert.alert('📡', t('queued_offline')); return }
+        alertCheckFirst(cfLeft.filter((b: any) => !doneHere(b))
+          .map((b: any) => ({ body: String(b.task ?? ''), photo: b.code === 'check_first_photo_missing' })))
+        return
+      }
+
       // Any other blocker code (future gate rules): block instead of silently
       // falling through — web and mobile must never disagree on completion.
       Alert.alert(t('error'), t('completion_blocked_generic'))
@@ -1369,6 +1573,20 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
 
     await completeJobNoPhotoCheck()
+  }
+
+  // "Check first: tick these before completing", naming the lines, then back
+  // to the card at the top of the screen.
+  function alertCheckFirst(left: { body: string; photo: boolean }[]) {
+    const list = (photo: boolean) => left.filter(x => x.photo === photo).map(x => tx(x.body))
+    const todo = list(false), photos = list(true)
+    const msg = [
+      todo.length ? ti(t('check_first_blocked_unticked'), { list: `\n\n• ${todo.join('\n• ')}` }) : null,
+      photos.length ? ti(t('check_first_blocked_photo'), { list: `\n\n• ${photos.join('\n• ')}` }) : null,
+    ].filter(Boolean).join('\n\n')
+    Alert.alert(`☑️ ${t('check_first_title')}`, msg, [{ text: t('ok'), onPress: () => {
+      scrollRef.current?.scrollTo({ y: Math.max(0, cfY.current - 12), animated: true })
+    } }])
   }
 
   // Clock out the active entry — the clock-out IS the paid duration. Offline it
@@ -1495,6 +1713,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll}>
+        {/* Check first: the property's own list, the very first thing on the
+            screen, before and after Start (cleans only). */}
+        {!!checkFirst && !isTask && (
+          <View onLayout={e => { cfY.current = e.nativeEvent.layout.y }}>
+            <CheckFirstCard view={checkFirst} started={cfStarted} canTick={cfCanTick} busy={cfBusy}
+              tx={tx} nameOf={cfTickerName} onTick={tickCheckFirst} onPhoto={shootCheckFirst} />
+          </View>
+        )}
         {/* The office's note for this clean, pinned on top. */}
         {!!crewNoteShown && (
           <CrewNoteBanner note={crewNoteShown} translated={tx(crewNoteShown)} atClockIn={!!crewNoteAtClockIn} confirmed={!crewNoteNeedsAck} />
@@ -2204,6 +2430,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       {!!crewNoteAtClockIn && (
         <CrewNoteModal visible={!!notePrompt} note={crewNoteAtClockIn} translated={tx(crewNoteAtClockIn)} place={propLabel}
           onGotIt={acknowledgeCrewNote} onNotYet={notePrompt?.then ? () => setNotePrompt(null) : null} />
+      )}
+
+      {/* "Check first" at Start, after the note: tick here, then "Start the
+          clean" carries on with the start; "Not yet" backs out of it. */}
+      {!!checkFirst && (
+        <CheckFirstModal visible={!!cfPrompt} place={propLabel} view={checkFirst} started={cfStarted} canTick={cfCanTick}
+          busy={cfBusy} tx={tx} nameOf={cfTickerName} onTick={tickCheckFirst} onPhoto={shootCheckFirst}
+          onStart={startFromCheckFirst} onNotYet={() => setCfPrompt(null)} />
       )}
 
       {/* Pause modal */}

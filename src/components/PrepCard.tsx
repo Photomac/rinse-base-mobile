@@ -17,12 +17,15 @@
 //                          cross-listing echoes are skipped (lib/nextArrival).
 //   🧴 Restock            — supplies still flagged low at today's properties.
 //   🔑 Access             — no lockbox code AND no arrival instructions.
+//   ☑ Check first today  — the Check first lines (lib/checkFirst.ts) at today's
+//                          properties, grouped by property. Read here, ticked
+//                          on the clean itself.
 //
 // Deliberately NOT a "read notes" line: property crew_notes are standing notes
 // present on nearly every property, and 94% of cleans carry a sync-written
 // internal_notes ("X checking out, next guest in 4d"). Either would show every
-// single day. A line needs a real "must read" signal the office sets — which
-// doesn't exist yet.
+// single day. Check first is the "must read" signal the office sets on purpose,
+// and the only one shown here.
 //
 // Ticks are per crew member, per tenant day, stored on the phone only — they
 // are a personal checklist, not a record anyone else reads.
@@ -38,6 +41,7 @@ import { cachedRead } from '../lib/dataCache'
 // Shared with the offline day pack, which saves tomorrow's card tonight.
 import { prepJobs, prepReads } from '../lib/jobReads'
 import { pickNextArrival, fmtWallTime, type ArrivalRow } from '../lib/nextArrival'
+import { linesByProperty } from '../lib/checkFirst'
 import { todayKey } from '../lib/timezone'
 import { GOLD, GOLD_MUTED, SLATE, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
 
@@ -91,14 +95,26 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
       // tonight, and a copy may hold more properties than today's — every
       // line below is looked up by today's own properties and jobs.
       const reads = prepReads(user, cleans, today)
-      const [tenRes, addrRes, resvRes, restockRes] = await Promise.all([
+      const [tenRes, addrRes, resvRes, restockRes, cfRes] = await Promise.all([
         cachedRead(reads.tenant), cachedRead(reads.addresses), cachedRead(reads.stays), cachedRead(reads.restock),
+        cachedRead(reads.checkFirst),
       ])
       const tenant: any = tenRes.data ?? {}
       const addrs: any[] = addrRes.data ?? []
       const addrById: Record<string, any> = {}
       addrs.forEach(a => { addrById[a.id] = a })
       const out: Section[] = []
+
+      // ☑ Check first — first: it is the one the office asked to be read.
+      // One line per property, its lines in the office's order (📷 = a photo
+      // is asked for). Read-only: they're ticked on the clean.
+      const cfBy = linesByProperty(((cfRes.data as any[]) ?? []).filter((l: any) => nameByAddr[l.address_id]))
+      const cx = await mtx(Object.values(cfBy).flatMap(ls => ls.map((l: any) => String(l.body))))
+      const cfLines = addrIds.filter(id => cfBy[id]?.length).map(id => ({
+        text: `${nameByAddr[id]}: ${cfBy[id].map((l: any) => `${cx(l.body)}${l.photo_required ? ' 📷' : ''}`).join(' · ')}`,
+        job: jobByAddr[id],
+      }))
+      if (cfLines.length) out.push({ key: 'checkfirst', icon: '☑', title: t('check_first_prep_title'), lines: cfLines })
 
       // 🧺 Linens
       if (tenant.crew_prep_linens) {

@@ -59,6 +59,10 @@ export interface PendingPhoto {
   // The `missing_required_area_photo` gate matches on this ONLY — there is no
   // caption fallback — so it must survive the offline queue intact.
   photo_requirement_id?: string | null
+  // The Check first line (property_check_first_lines) this photo answers, sent
+  // as job_photos.check_first_line_id. Present only on such a photo, so every
+  // other entry, and the row it becomes, is exactly as before.
+  check_first_line_id?: string
   visible_to_client: boolean
   // Set on an incident-report photo: once in storage it is appended to that
   // job_damage_reports row (append_incident_report_photo) instead of becoming a
@@ -185,6 +189,8 @@ export async function enqueuePhoto(p: {
   uri: string; tenant_id: string; job_id: string; user_id: string;
   photo_type: string; caption: string | null; checklist_item_id?: string | null;
   photo_requirement_id?: string | null;
+  /** A Check first line's photo (lib/checkFirst.ts). */
+  check_first_line_id?: string | null;
   visible_to_client: boolean;
   incident_report_id?: string | null;
   /** When it was taken (ms): Date.now() as the camera returns it, or exifTakenAt() for a library photo. */
@@ -216,6 +222,7 @@ export async function enqueuePhoto(p: {
     caption: p.caption,
     checklist_item_id: p.checklist_item_id ?? null,
     photo_requirement_id: p.photo_requirement_id ?? null,
+    ...(p.check_first_line_id ? { check_first_line_id: p.check_first_line_id } : {}),
     visible_to_client: p.visible_to_client,
     ...(p.incident_report_id ? { incident_report_id: p.incident_report_id, also_job_photo: true } : {}),
     created_at: Date.now(),
@@ -274,16 +281,20 @@ export async function pendingIncidentPhotos(reportId: string): Promise<number> {
 }
 
 // PostgREST refusing a column it doesn't know: this bundle reached phones
-// before the migration adding taken_at (or photo_sha256) reached the database.
-// The photo matters more than its capture time or fingerprint, so its row is
-// written without it.
+// before the migration adding taken_at (or photo_sha256, or
+// check_first_line_id) reached the database. The photo matters more than its
+// capture time, fingerprint or Check first link, so its row is written
+// without it. PostgREST says so as PGRST204 ('column'); Postgres itself, should
+// it get that far, as 42703 ("column").
 function unknownColumn(error: any, column: string): boolean {
-  return error?.code === 'PGRST204' && typeof error?.message === 'string' && error.message.includes(`'${column}'`)
+  if (typeof error?.message !== 'string') return false
+  if (error.code === 'PGRST204') return error.message.includes(`'${column}'`)
+  return error.code === '42703' && error.message.includes(`"${column}"`)
 }
 
-// The row's columns newer than the database may be (2026-10-12). PostgREST
-// names one unknown column at a time.
-const NEW_COLUMNS = ['taken_at', 'photo_sha256'] as const
+// The row's columns newer than the database may be (2026-10-12; Check first
+// 2026-10-15). PostgREST names one unknown column at a time.
+const NEW_COLUMNS = ['taken_at', 'photo_sha256', 'check_first_line_id'] as const
 function unknownNewColumn(error: any, row: Record<string, unknown>): string | undefined {
   return NEW_COLUMNS.find(c => c in row && unknownColumn(error, c))
 }
@@ -358,6 +369,8 @@ async function insertRow(entry: PendingPhoto, photoUrl: string, sha256: Promise<
     photo_requirement_id: entry.photo_requirement_id ?? null,
     visible_to_client: entry.visible_to_client,
   }
+  // Only on a Check first photo: every other row is sent exactly as before.
+  if (entry.check_first_line_id) row.check_first_line_id = entry.check_first_line_id
   if (entry.taken_at != null && Number.isFinite(entry.taken_at)) row.taken_at = new Date(entry.taken_at).toISOString()
   // The fingerprint goes last, so this writer's request body is the one
   // before it plus that one field (the edge logs tell writers apart by
@@ -631,6 +644,8 @@ export interface QueuedJobPhoto {
   caption: string | null
   visible_to_client: boolean
   created_at: number
+  /** The Check first line it answers, if any (lib/checkFirst.ts). */
+  check_first_line_id: string | null
   /** The server rejected it (not just no signal). */
   failing: boolean
   /** Being uploaded right now. */
@@ -647,6 +662,7 @@ export async function queuedJobPhotos(jobId: string): Promise<QueuedJobPhoto[]> 
     .map(p => ({
       id: p.id, localUri: resolveLocal(p.localUri), photo_type: p.photo_type, caption: p.caption,
       visible_to_client: p.visible_to_client, created_at: p.created_at,
+      check_first_line_id: p.check_first_line_id ?? null,
       failing: p.lastErrorKind === 'server',
       uploading: p.id === uploadingId,
     }))

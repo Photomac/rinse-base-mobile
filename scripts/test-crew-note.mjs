@@ -10,7 +10,9 @@
 //   • a refused row is dropped, never retried forever;
 // and, in JobDetailScreen.tsx, that both starts (clock-in, daily start) wait for
 // "Got it", that the acknowledgment never goes through the pay outbox, and that
-// a clean already under way asks with no way to skip.
+// a clean already under way asks with no way to skip. Since Check first
+// (2026-10-15) the start "Got it" lets go of is the property's Check first
+// window (askCheckFirst), which then runs the punch: the note still comes first.
 //
 // Usage: node scripts/test-crew-note.mjs
 import { registerHooks } from 'node:module'
@@ -94,11 +96,20 @@ check('the device memory is under the prefix sign-out clears', [...store.keys()]
 const screen = readFileSync(join(repo, 'src/screens/JobDetailScreen.tsx'), 'utf8')
 const fn = (name) => { const i = screen.indexOf(`function ${name}(`); return i < 0 ? '' : screen.slice(i, screen.indexOf('\n  }\n', i)) }
 const clockIn = fn('handleClockIn')
-check('clock-in: the punch waits for "Got it"',
-  clockIn.indexOf('crewNoteNeedsAck') > 0 && clockIn.indexOf('setNotePrompt({ then: () => clockInAs(null) })') > 0
-    && clockIn.indexOf('crewNoteNeedsAck') < clockIn.lastIndexOf('clockInAs(null)'), true)
-check('daily start: same window, and the button uses it',
-  [/setNotePrompt\(\{ then: startJobDaily \}\)/.test(fn('handleStartDaily')), /onPress=\{handleStartDaily\}/.test(screen), /onPress=\{startJobDaily\}/.test(screen)], [true, true, false])
+check('clock-in: the punch waits for "Got it" (then the Check first window)',
+  clockIn.indexOf('crewNoteNeedsAck') > 0 && clockIn.indexOf('setNotePrompt({ then: () => askCheckFirst(() => clockInAs(null)) })') > 0
+    && clockIn.indexOf('crewNoteNeedsAck') < clockIn.lastIndexOf('askCheckFirst(() => clockInAs(null))'), true)
+check('daily start: same windows, and the button uses them',
+  [/setNotePrompt\(\{ then: \(\) => askCheckFirst\(startJobDaily\) \}\)/.test(fn('handleStartDaily')), /onPress=\{handleStartDaily\}/.test(screen), /onPress=\{startJobDaily\}/.test(screen)], [true, true, false])
+const ask = fn('askCheckFirst')
+check('the Check first window holds the start, or passes it straight through (no list, can\'t tick, desk staff)',
+  [/if \(!checkFirst \|\| !cfCanTick \|\| recordsForOthers\) \{ void start\(\); return \}/.test(ask), /setCfPrompt\(\{ then: start \}\)/.test(ask)], [true, true])
+check('after "Got it", the Check first window waits for the note\'s to close (iOS)',
+  [/noteClosedAt\.current = Date\.now\(\)/.test(fn('acknowledgeCrewNote')), /Date\.now\(\) - noteClosedAt\.current < 1000/.test(ask)], [true, true])
+const startCf = fn('startFromCheckFirst')
+check('"Start the clean" runs the start, then records "seen" (never instead of it)',
+  startCf.indexOf('await then?.()') > 0 && startCf.indexOf("table: 'job_check_first_seen'") > startCf.indexOf('await then?.()'), true)
+check('"Not yet" in the Check first window backs out of the start', /onNotYet=\{\(\) => setCfPrompt\(null\)\}/.test(screen), true)
 check('proxy punch (office on a cleaner\'s clean): the note and "Got it" sit in the record-for window, and every punch button waits for it',
   [/crewNoteNeedsAck && !!crewNoteAtClockIn && \(\s*<View style=\{\{ marginBottom: 6 \}\}>\s*<CrewNoteBanner/.test(screen),
    /onPress=\{\(\) => clockInAs\(c\.id\)\} disabled=\{saving \|\| crewNoteNeedsAck\}/.test(screen),

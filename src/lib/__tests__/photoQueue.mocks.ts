@@ -71,6 +71,9 @@ export const net = {
   noTakenAtColumn: false,
   /** The database doesn't have job_photos.photo_sha256 yet. */
   noSha256Column: false,
+  /** The database doesn't have job_photos.check_first_line_id yet, said the
+   *  way PostgREST says it (PGRST204) or the way Postgres does (42703). */
+  noCheckFirstColumn: false as false | 'PGRST204' | '42703',
   attaches: [] as { p_report_id: string; p_url: string }[],
   attachResult: 'ok' as 'ok' | 'no_report',
   /** Who is signed in on the phone (the bearer token names them). */
@@ -155,6 +158,11 @@ export const supabase = {
       }
       if (net.noSha256Column && 'photo_sha256' in row) {
         return { error: { code: 'PGRST204', message: "Could not find the 'photo_sha256' column of 'job_photos' in the schema cache" }, status: 400 }
+      }
+      if (net.noCheckFirstColumn && 'check_first_line_id' in row) {
+        return net.noCheckFirstColumn === 'PGRST204'
+          ? { error: { code: 'PGRST204', message: "Could not find the 'check_first_line_id' column of 'job_photos' in the schema cache" }, status: 400 }
+          : { error: { code: '42703', message: 'column "check_first_line_id" of relation "job_photos" does not exist' }, status: 400 }
       }
       net.rows.push({ ...row })
       if (net.holdInsert) {

@@ -245,6 +245,47 @@ export const itemPhotosRead = (jobId: string): CacheRead => ({
   q: () => supabase.from('job_photos').select('caption, checklist_item_id').eq('job_id', jobId),
 })
 
+// ── Check first (lib/checkFirst.ts) ─────────────────────────────────────────
+// Each its own read, so a failed one shows nothing and blocks nothing.
+
+/** The property's Check first lines (archived ones are never shown). */
+export const checkFirstLinesRead = (addrId: string): CacheRead => ({
+  key: `cflines:${addrId}`,
+  q: () => supabase.from('property_check_first_lines')
+    .select('id, body, photo_required, sort_order, created_at, archived_at')
+    .eq('address_id', addrId).is('archived_at', null)
+    .order('sort_order').order('created_at'),
+})
+
+/** Who ticked which line on this clean, and when. */
+export const checkFirstTicksRead = (jobId: string): CacheRead => ({
+  key: `cfticks:${jobId}`,
+  q: () => supabase.from('job_check_first_ticks')
+    .select('line_id, user_id, line_text, ticked_at, users!job_check_first_ticks_user_id_fkey(full_name)')
+    .eq('job_id', jobId),
+})
+
+/** The photos photo lines asked for (URLs only). */
+export const checkFirstPhotosRead = (jobId: string): CacheRead => ({
+  key: `cfphotos:${jobId}`,
+  q: () => supabase.from('job_photos')
+    .select('check_first_line_id, photo_url')
+    .eq('job_id', jobId).not('check_first_line_id', 'is', null),
+})
+
+/** When the clean started (daily mode has no clock-in): a line written after it doesn't block. */
+export const checkFirstStartRead = (jobId: string): CacheRead => ({
+  key: `cfstart:${jobId}`,
+  q: () => supabase.from('jobs').select('started_at').eq('id', jobId).maybeSingle(),
+})
+
+/** The company's switch (tenants.check_first_required): lines block Complete only when on. */
+export const checkFirstTenantRead = (tenantId: string): CacheRead => ({
+  key: `cften:${tenantId}`,
+  q: () => supabase.from('tenants')
+    .select('check_first_required').eq('id', tenantId).maybeSingle(),
+})
+
 // ── Supplies (JobInventoryScreen) ───────────────────────────────────────────
 
 export const inventoryItemsRead = (addrId: string): CacheRead => ({
@@ -355,11 +396,18 @@ export function prepReads(user: any, cleans: any[], ymd: string) {
       q: () => supabase.from('turnover_linen_extras')
         .select('job_id, inventory_id, extra_qty').in('job_id', jobIds),
     } as CacheRead,
+    // Check first lines at the day's properties (lib/checkFirst.ts).
+    checkFirst: {
+      key: `prep:cflines:${user.id}:${ymd}`,
+      q: () => supabase.from('property_check_first_lines')
+        .select('address_id, body, photo_required, sort_order, created_at, archived_at').in('address_id', addrIds)
+        .is('archived_at', null),
+    } as CacheRead,
   }
 }
 
 /** The prep card's day-keyed reads carry the day as their last segment. */
-export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras):([^:]+)(?::(\d{4}-\d{2}-\d{2}))?$/
+export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^:]+)(?::(\d{4}-\d{2}-\d{2}))?$/
 
 // ── Whose keys these are (lib/cachePrune) ──────────────────────────────────
 
@@ -370,10 +418,10 @@ export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras):([^:]+)(?::
 // builder must be listed here, or its keys are kept for ever:
 // scripts/test-cache-prune.mjs fails until it is.
 const JOB_KEYS = new Set(['chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
-  'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos',
+  'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'cfticks', 'cfphotos', 'cfstart',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
   'crewNoteAck'])
-const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'wttrash'])
+const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'wttrash', 'cflines'])
 
 /** The job or property a cache key (without dataCache's prefix) belongs to,
  *  or null when it belongs to neither. */
@@ -439,6 +487,15 @@ export function jobPackReads(job: any, user: any): PackRead[] {
   // The Supplies screen (cleans only).
   if (!isTask && addrId) {
     reads.push(inventoryItemsRead(addrId), inventoryLogRead(job.id), inventoryRoomsRead(addrId), linenExtrasRead(job.id))
+  }
+  // loadCheckFirst (cleans only): the clean's ticks, line photos and start are
+  // read only at a property that has lines.
+  if (!isTask && addrId) {
+    reads.push(
+      checkFirstTenantRead(user.tenant_id),
+      { ...checkFirstLinesRead(addrId), then: rows => (Array.isArray(rows) && rows.length
+        ? [checkFirstTicksRead(job.id), checkFirstPhotosRead(job.id), checkFirstStartRead(job.id)] : []) },
+    )
   }
   // An inspection visit opens the walkthrough directly.
   if (job.job_type === 'inspection') reads.push(...walkthrough())

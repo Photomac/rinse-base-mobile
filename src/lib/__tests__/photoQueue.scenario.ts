@@ -56,7 +56,7 @@ function reset() {
   setRawQueue([])
   net.offline = false; net.hold = false; net.held = []; net.slow.clear()
   net.attempts = []; net.uploads = []; net.readFrom = []; net.rows = []; net.attaches = []
-  net.attachResult = 'ok'; net.inserts = []; net.noTakenAtColumn = false; net.noSha256Column = false
+  net.attachResult = 'ok'; net.inserts = []; net.noTakenAtColumn = false; net.noSha256Column = false; net.noCheckFirstColumn = false
   net.token = 'A'; net.storage.clear(); net.loseAnswer.clear(); net.refuseNew = false; net.heads = []; net.headFails = false
   net.loseInsertAnswer = false; net.holdInsert = false; net.selectFails = false; net.selects = []
   unreadable.clear(); fsReads.length = 0; reported.length = 0
@@ -292,6 +292,35 @@ function reset() {
   await flushQueue()
   ok('neither new column: three tries, one row, the photo saved without both',
     net.inserts.length === 3 && net.rows.length === 1 && !('photo_sha256' in net.rows[0]) && !('taken_at' in net.rows[0]) && rawQueue().length === 0)
+
+  // ── A Check first line's photo (job_photos.check_first_line_id, 2026-10-15) ─
+  // Sent only on such a photo: every other row is exactly what it was.
+  reset()
+  await enqueuePhoto({ ...base, uri: shot(), taken_at: shotAt })
+  ok('an ordinary photo: no check_first_line_id in its queue entry', rawQueue().length === 1 && !('check_first_line_id' in rawQueue()[0]))
+  await flushQueue()
+  ok('…nor in its row: the same columns, in the same order, as before',
+    JSON.stringify(Object.keys(net.rows[0])) === JSON.stringify(['tenant_id', 'job_id', 'user_id', 'photo_url', 'photo_type', 'caption',
+      'checklist_item_id', 'photo_requirement_id', 'visible_to_client', 'taken_at', 'photo_sha256']))
+
+  reset()
+  await enqueuePhoto({ ...base, uri: shot(), taken_at: shotAt, caption: 'Spa photo', check_first_line_id: 'L-spa' })
+  ok('a Check first photo is listed with its line while it waits', (await queuedJobPhotos('J1'))[0]?.check_first_line_id === 'L-spa')
+  await flushQueue()
+  ok('…and its row carries the line, after the columns every row has, the fingerprint still last',
+    net.rows.length === 1 && net.rows[0].check_first_line_id === 'L-spa' && net.rows[0].photo_type === 'after' &&
+    Object.keys(net.rows[0]).indexOf('check_first_line_id') === Object.keys(net.rows[0]).indexOf('visible_to_client') + 1 &&
+    Object.keys(net.rows[0]).pop() === 'photo_sha256' && rawQueue().length === 0)
+
+  for (const how of ['PGRST204', '42703'] as const) {
+    reset()
+    net.noCheckFirstColumn = how
+    await enqueuePhoto({ ...base, uri: shot(), taken_at: shotAt, caption: 'Spa photo', check_first_line_id: 'L-spa' })
+    await flushQueue()
+    ok(`no check_first_line_id column (${how}): tried once more without it, saved with everything else`,
+      net.inserts.length === 2 && 'check_first_line_id' in net.inserts[0] && !('check_first_line_id' in net.inserts[1]) &&
+      net.rows.length === 1 && net.rows[0].taken_at === '2026-10-12T15:04:30.000Z' && !!net.rows[0].photo_sha256 && rawQueue().length === 0)
+  }
 
   // ── Shared phone: storage refuses the retry, but the file is there ───────
   // Crew A's upload lands, the answer is lost, A signs out, B signs in. Only
