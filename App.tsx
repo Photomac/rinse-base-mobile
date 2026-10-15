@@ -1,6 +1,6 @@
 import { Sentry } from './src/lib/sentry' // first: initializes Sentry before anything else
 import React, { useState, useEffect, useRef } from 'react'
-import { View, Text, StyleSheet, ActivityIndicator, AppState } from 'react-native'
+import { View, Text, StyleSheet, ActivityIndicator, AppState, Image } from 'react-native'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { NavigationContainer } from '@react-navigation/native'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
@@ -392,8 +392,8 @@ function AppInner() {
   if (loading) {
     return (
       <View style={styles.loading}>
-        <View style={styles.logo}><Text style={styles.logoText}>RB</Text></View>
-        <ActivityIndicator color={GOLD} style={{ marginTop: 24 }} />
+        <Image source={require('./assets/logo-horizontal-dark.png')} style={styles.logo} resizeMode="contain" accessibilityLabel="Rinsebase" />
+        <ActivityIndicator color={GOLD} style={{ marginTop: 28 }} />
       </View>
     )
   }
@@ -528,6 +528,7 @@ export default Sentry.wrap(App)
 
 const styles = StyleSheet.create({
   loading: { flex: 1, backgroundColor: SLATE_DARK, alignItems: 'center', justifyContent: 'center' },
-  logo: { width: 72, height: 72, borderRadius: 20, backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center' },
-  logoText: { color: '#fff', fontSize: 28, fontWeight: '800' },
+  // The horizontal brand logo (light-on-dark variant of the website's
+  // horizontal_logo_dark), rendered 1500x321 so it stays sharp at 3x.
+  logo: { width: 260, height: 260 * 321 / 1500 },
 })
