@@ -11,8 +11,9 @@
 //   • a saved roster says "not on it" only when the job's own assignments
 //     agree; with no roster read yet, nobody loses the button;
 //   • once the server has refused this person here, the note stays;
-// and, in the screen and strings, that Clock in and Resume give way to the
-// note, a 42501 says "not on this clean" instead of "check your signal", the
+// and, in the screen and strings, that Clock in, Resume and Complete give way
+// to the note (Complete since rinsebase-app #1493; Pause stays, an inspection
+// keeps its button), a 42501 says "not on this clean" instead of "check your signal", the
 // roster is read with user_id and marked live or saved, and the two strings
 // exist in all three languages.
 //
@@ -74,10 +75,21 @@ check('the screen gates with notAssignedHere, the office being owner/manager/dis
 check('Clock in and Resume are hidden when not on the clean; the note shows in their place',
   [/\{!isStarted && !notOnThisClean && \(\s*<TouchableOpacity[^>]*onPress=\{handleClockIn\}/.test(screen),
    /\{isPaused && !notOnThisClean && \(\s*<TouchableOpacity[^>]*onPress=\{handleResume\}/.test(screen),
-   /\{notOnThisClean && \(!isStarted \|\| isPaused\) && \([\s\S]{0,300}t\('not_on_this_clean'\)/.test(screen)], [true, true, true])
-check('Pause and Complete are not gated (a running entry can still be closed)',
-  [/\{isClockedIn && \(\s*<TouchableOpacity[^>]*onPress=\{handlePause\}/.test(screen),
-   /\{\(isClockedIn \|\| isStrandedInProgress\) && \(/.test(screen)], [true, true])
+   /\{notOnThisClean && \(!isStarted \|\| isPaused \|\| \(\(isClockedIn \|\| isStrandedInProgress\) && completeNotOnClean\)\) && \([\s\S]{0,300}t\('not_on_this_clean'\)/.test(screen)], [true, true, true])
+// Complete too (rinsebase-app #1493: crew change only a clean they're on). An
+// inspection closes by filing its result, which that rule doesn't touch.
+check('Complete gives way to the note when not on the clean, timed and daily; an inspection keeps its button',
+  [/const completeNotOnClean = notOnThisClean && !isInspection/.test(screen),
+   /\{\(isClockedIn \|\| isStrandedInProgress\) && !completeNotOnClean && \(\s*<TouchableOpacity/.test(screen),
+   /\) : completeNotOnClean \? \(\s*<View[^>]*>\s*<Text[^>]*>\{t\('not_on_this_clean'\)\}/.test(screen),
+   (screen.match(/onPress: completeJob/g) || []).length], [true, true, true, 2])
+check('Pause is not gated (a running entry can still be closed)',
+  /\{isClockedIn && \(\s*<TouchableOpacity[^>]*onPress=\{handlePause\}/.test(screen), true)
+const complete = screen.slice(screen.indexOf('async function completeJob('), screen.indexOf('async function completeJobNoPhotoCheck('))
+const guardAt = complete.indexOf('if (completeNotOnClean)')
+check('completeJob refuses before any write when not on the clean, after the inspection branch',
+  [guardAt > complete.indexOf('if (isInspection)'), guardAt > 0 && guardAt < complete.indexOf('completeJobNoPhotoCheck()'),
+   /if \(completeNotOnClean\) \{\s*Alert\.alert\(t\('error'\), t\('not_on_this_clean'\)\)\s*return\s*\}/.test(complete)], [true, true, true])
 const clockIn = screen.slice(screen.indexOf('async function clockInAs('), screen.indexOf('function announceRequiredPhotos'))
 const resume = screen.slice(screen.indexOf('async function handleResume('), screen.indexOf('async function canSignOffAsViewer'))
 const refused = screen.slice(screen.indexOf('function clockInRefused('), screen.indexOf('function announceRequiredPhotos'))
