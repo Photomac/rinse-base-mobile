@@ -51,7 +51,7 @@ import {
   activeLines, firstClockIn, startedAt, localBlockers, tickRow, seenRow, TICK_CONFLICT, SEEN_CONFLICT,
   type CheckFirstLine, type CheckFirstTick,
 } from '../lib/checkFirst'
-import { isMyJob } from '../lib/jobScope'
+import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -301,6 +301,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [bookedPets, setBookedPets] = useState<number | null>(null)
   // Everyone working this job (lead first) — crew see who they're working with.
   const [crewOnJob, setCrewOnJob] = useState<{ id: string; name: string; isLead: boolean }[]>([])
+  // Who the server lists on this clean (job_assignments.user_id), and whether
+  // that answer is live or this phone's saved copy. null until the read answers.
+  const [roster, setRoster] = useState<Roster | null>(null)
+  // The server refused this person's clock-in here as not on the clean (42501).
+  const [refusedHere, setRefusedHere] = useState(false)
   // Everyone's punches on this job, for the on-the-clock status beside each
   // name. null until read — no status is better than a wrong "not clocked in".
   const [crewClockRows, setCrewClockRows] = useState<CrewClockEntry[] | null>(null)
@@ -400,6 +405,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // line written after that doesn't block it).
   const onThisClean = crewOnJob.some(c => c.id === user.id) || isMyJob(job, user.id)
   const cfCanTick = !isTask && job.status !== 'completed' && (onThisClean || isAdminRole)
+  // Crew lists show only their own cleans, but a stale Home or a cached day
+  // can still open one they were taken off. The server refuses their punch
+  // there (#1487), so Clock in and Resume give way to "ask the office to add
+  // you" (lib/jobScope.ts notAssignedHere).
+  const notOnThisClean = notAssignedHere(job, user.id, { office: isAdminRole, roster, refused: refusedHere })
   const cfStarted = startedAt(firstClockIn([...timeEntries, ...(crewClockRows ?? [])]), checkFirst?.jobStartedAt)
 
   useEffect(() => {
@@ -628,7 +638,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     }
 
     // Full crew roster for this job, lead first.
-    const { data: crewRows } = await cachedRead(jobCrewRead(job.id))
+    const { data: crewRows, fromCache: crewFromCache } = await cachedRead(jobCrewRead(job.id))
+    if (crewRows) setRoster({ ids: (crewRows as any[]).map(a => a.user_id ?? a.users?.id).filter(Boolean), live: !crewFromCache })
     setCrewOnJob((crewRows ?? []).map((a: any) => ({ id: a.users?.id, name: a.users?.full_name, isLead: !!a.is_lead })).filter((c: any) => c.id && c.name))
 
     const addrId = job.client_addresses?.id || job.address_id
@@ -1190,7 +1201,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     const running = entryErr?.code === '23505' ? await fetchOpenEntry(entry.user_id) : null
     if (entryErr && !running) {
       setSaving(false)
-      Alert.alert(t('error'), t('clock_in_failed'))
+      clockInRefused(entryErr)
       return
     }
     if (queued) Alert.alert('📡', t('queued_offline'))
@@ -1226,6 +1237,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     loadTimeEntries()
     setSaving(false)
     announceRequiredPhotos()
+  }
+
+  // A server answer to a clock-in or resume (a dead network queues instead).
+  // 42501 for crew is the insert rule: not assigned to this clean (#1487).
+  // Say so, and swap the button for the same words, rather than "check your
+  // signal", which sends them to retry something that can only fail again.
+  function clockInRefused(err: any) {
+    if (err?.code === '42501' && !isAdminRole) {
+      setRefusedHere(true)
+      Alert.alert(t('error'), t('not_on_this_clean_failed'))
+      return
+    }
+    Alert.alert(t('error'), t('clock_in_failed'))
   }
 
   /**
@@ -1324,7 +1348,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     const running = resumeErr?.code === '23505' ? await fetchOpenEntry(user.id) : null
     if (resumeErr && !running) {
       setSaving(false)
-      Alert.alert(t('error'), t('clock_in_failed'))
+      clockInRefused(resumeErr)
       return
     }
     setActiveEntry(running ?? entry)
@@ -2069,7 +2093,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {/* Action buttons */}
           {!dailyMode && job.status !== 'completed' && (
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-              {!isStarted && (
+              {/* Not on this clean: the server would refuse the punch, so
+                  say why in place of Clock in and Resume. Pause and Complete
+                  stay: an entry already running can still be closed. */}
+              {notOnThisClean && (!isStarted || isPaused) && (
+                <View style={[styles.timeEntry, { flex: 1, marginBottom: 0, backgroundColor: '#FFFBEB', borderColor: '#FCD34D' }]}>
+                  <Text style={[styles.timeEntryText, { color: '#92400E' }]}>{t('not_on_this_clean')}</Text>
+                </View>
+              )}
+              {!isStarted && !notOnThisClean && (
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={handleClockIn} disabled={saving}>
                   {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>{t('clock_in_short')}</Text>}
                 </TouchableOpacity>
@@ -2097,7 +2129,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                   <Text style={styles.clockBtnText}>✓ {isInspection ? t('insp_complete') : t('complete_job')}</Text>
                 </TouchableOpacity>
               )}
-              {isPaused && (
+              {isPaused && !notOnThisClean && (
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={handleResume} disabled={saving}>
                   {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>{t('resume')}</Text>}
                 </TouchableOpacity>
