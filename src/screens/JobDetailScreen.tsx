@@ -410,6 +410,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // there (#1487), so Clock in and Resume give way to "ask the office to add
   // you" (lib/jobScope.ts notAssignedHere).
   const notOnThisClean = notAssignedHere(job, user.id, { office: isAdminRole, roster, refused: refusedHere })
+  // Complete too: the server changes only a clean the crew member is on
+  // (jobs_update, rinsebase-app #1493), so a Complete there would clock them
+  // out and then leave the clean open behind a "done" screen. Pause stays, to
+  // stop their clock. An inspection closes by filing its result
+  // (job_inspections), which that rule doesn't touch, so it keeps its button.
+  const completeNotOnClean = notOnThisClean && !isInspection
   const cfStarted = startedAt(firstClockIn([...timeEntries, ...(crewClockRows ?? [])]), checkFirst?.jobStartedAt)
 
   useEffect(() => {
@@ -1389,6 +1395,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       ])
       return
     }
+    // Not on this clean: the completion would change nothing on the server.
+    if (completeNotOnClean) {
+      Alert.alert(t('error'), t('not_on_this_clean'))
+      return
+    }
     // Photo requirements — cleans only; laundry runs have no property to
     // photograph (their proof is the reconciliation form).
     if (isTask) { await completeJobNoPhotoCheck(); return }
@@ -2074,6 +2085,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL }]} onPress={handleStartDaily} disabled={saving}>
                   {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>{t('start_job')}</Text>}
                 </TouchableOpacity>
+              ) : completeNotOnClean ? (
+                <View style={[styles.timeEntry, { flex: 1, marginBottom: 0, backgroundColor: '#FFFBEB', borderColor: '#FCD34D' }]}>
+                  <Text style={[styles.timeEntryText, { color: '#92400E' }]}>{t('not_on_this_clean')}</Text>
+                </View>
               ) : (
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#10B981' }]} onPress={() => {
                   // An inspection is closed by filing its result — go straight
@@ -2093,10 +2108,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {/* Action buttons */}
           {!dailyMode && job.status !== 'completed' && (
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-              {/* Not on this clean: the server would refuse the punch, so
-                  say why in place of Clock in and Resume. Pause and Complete
-                  stay: an entry already running can still be closed. */}
-              {notOnThisClean && (!isStarted || isPaused) && (
+              {/* Not on this clean: the server would refuse the punch and
+                  leave the clean as it is, so say why in place of Clock in,
+                  Resume and Complete. Pause stays: an entry already running
+                  can still be closed. */}
+              {notOnThisClean && (!isStarted || isPaused || ((isClockedIn || isStrandedInProgress) && completeNotOnClean)) && (
                 <View style={[styles.timeEntry, { flex: 1, marginBottom: 0, backgroundColor: '#FFFBEB', borderColor: '#FCD34D' }]}>
                   <Text style={[styles.timeEntryText, { color: '#92400E' }]}>{t('not_on_this_clean')}</Text>
                 </View>
@@ -2111,7 +2127,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                   <Text style={styles.clockBtnText}>⏸ {t('pause')}</Text>
                 </TouchableOpacity>
               )}
-              {(isClockedIn || isStrandedInProgress) && (
+              {(isClockedIn || isStrandedInProgress) && !completeNotOnClean && (
                 <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#10B981', flex: 1 }]} onPress={() => {
                   if (isInspection) { setShowInspection(true); return }
                   // elapsedMinutes is the sum of CLOSED entries once the timer
