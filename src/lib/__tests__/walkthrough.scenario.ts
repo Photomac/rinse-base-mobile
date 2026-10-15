@@ -67,7 +67,10 @@ ok('the inspection shows the walkthrough, read-only once filed', insp.includes('
 ok('its photo screen opens in a modal (the form stays mounted)', insp.includes('<Modal visible={!!photoLine}') && insp.includes('preselectedItem={photoLine}'))
 
 const detail = src('screens/JobDetailScreen.tsx')
-ok('a clean is a walkthrough clean when every row is in the band', detail.includes('setWalkthroughJob(isWalkthroughJob(rows))'))
+// The checklist card's load lives in lib/checklistCard; the screen shows its view.
+const card = src('lib/checklistCard.ts')
+ok('a clean is a walkthrough clean when every row is in the band',
+  card.includes('walkthrough: isWalkthroughJob(rows)') && detail.includes('setWalkthroughJob(v.walkthrough)'))
 ok('the room accordion drops walkthrough lines, keeps the shots', detail.includes('const roomChecklist = walkthroughJob ? [] : checklist') && detail.includes('for (const item of roomChecklist)'))
 ok('the clean screen renders the walkthrough card', detail.includes('<WalkthroughChecklist job={job} user={user}'))
 

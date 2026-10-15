@@ -100,6 +100,13 @@ export async function isReachable(): Promise<boolean> {
   return probing
 }
 
+/** Did the last round trip to Supabase fail? False before any answer. Asks
+ *  nothing of the network: a screen uses it to stop waiting on reads that
+ *  will most likely time out, and shows its saved copy instead. */
+export function lastTripFailed(): boolean {
+  return !!last && !last.ok
+}
+
 function holdForSignal(maxMs: number): Promise<void> {
   return new Promise(resolve => {
     const release = () => { clearTimeout(timer); onReach.delete(release); resolve() }

@@ -46,11 +46,12 @@ const SCREENS = {
   'src/screens/JobInventoryScreen.tsx': 'Supplies',
   'src/components/WalkthroughChecklist.tsx': 'the walkthrough',
   'src/components/PrepCard.tsx': 'the prep card',
+  'src/lib/checklistCard.ts': 'the stop\'s checklist card',
 }
 for (const [file, what] of Object.entries(SCREENS)) {
   const src = read(file)
   check(`${what}: no cachedQuery() with its own key`, !/\bcachedQuery\(/.test(src))
-  const used = [...src.matchAll(/\bcachedRead\(\s*(\w+)\(/g)].map(m => m[1])
+  const used = [...src.matchAll(/\b(?:cachedRead|readSoon)\(\s*(\w+)\(/g)].map(m => m[1])
   const viaBundle = [...src.matchAll(/=\s*(\w+Reads)\(/g)].map(m => m[1])  // nextArrivalReads(...), prepReads(...)
   const all = [...new Set([...used, ...viaBundle])]
   const unpacked = all.filter(n => !packed.has(n))
@@ -84,6 +85,10 @@ const SCENARIOS = [
   'signOutMidRunWritesNothing',
   'outboxDrainedSignal',
   'packPrunesStopsNobodyNeeds',
+  'checklistOnAHangingLink',
+  'checklistNothingSavedWaitsOnce',
+  'checklistOnATrickle',
+  'checklistSpinnerAlwaysClears',
 ]
 
 try {

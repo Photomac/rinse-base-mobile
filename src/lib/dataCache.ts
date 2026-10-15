@@ -49,6 +49,39 @@ export function cachedRead<T = any>(r: CacheRead) {
   return cachedQuery<T>(r.key, r.q())
 }
 
+type ReadResult<T> = { data: T | null; error: any; fromCache: boolean }
+
+/** A read that may be answered from the saved copy before the live answer is
+ *  in. `late` is that live answer (or the saved copy again, if the network
+ *  fails), still to come; null when this is already the final answer. */
+export type SoonRead<T = any> = ReadResult<T> & { late: Promise<ReadResult<T>> | null }
+
+/**
+ * cachedRead() for a card that must not sit behind a spinner on a weak signal.
+ * On a link that swallows requests, cachedRead() only falls back to the saved
+ * copy when the read deadline runs out (15 s, netFetch.ts). This waits at most
+ * `waitMs` for the live answer, then answers with the saved copy and hands
+ * the live answer over in `late`. With nothing saved it waits for the live
+ * answer, as cachedRead() does.
+ */
+export async function readSoon<T = any>(r: CacheRead, waitMs: number): Promise<SoonRead<T>> {
+  const live: Promise<ReadResult<T>> = cachedRead<T>(r)
+    .catch(error => ({ data: null, error, fromCache: false }))
+  let timer: any
+  const inTime = await Promise.race([
+    live,
+    new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), waitMs) }),
+  ])
+  clearTimeout(timer)
+  if (inTime) return { ...inTime, late: null }
+  let raw: string | null = null
+  try { raw = await AsyncStorage.getItem(PREFIX + r.key) } catch { /* nothing saved, then */ }
+  if (raw != null) {
+    try { return { data: JSON.parse(raw), error: null, fromCache: true, late: live } } catch { /* unreadable: wait */ }
+  }
+  return { ...(await live), late: null }
+}
+
 /**
  * Run a read for the cache only (the offline day pack): store a good answer
  * under the same key cachedRead() falls back to. Never reads the cache back.
