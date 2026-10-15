@@ -138,6 +138,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
       .map(q => ({
         id: `queued:${q.id}`, photo_url: q.localUri, photo_type: q.photo_type, caption: q.caption,
         visible_to_client: q.visible_to_client, queued: true, failing: q.failing, uploading: q.uploading,
+        check_first_line_id: q.check_first_line_id,
       })),
     ...serverPhotos,
   ]
@@ -353,10 +354,14 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
     ])
   }
 
+  // A Check first line's photo ("Spa photo") is saved as 'after' but is never
+  // the clean's after photo (the completion gate skips it), so it is listed
+  // with the other photos, not counted under After.
+  const checkFirstPhoto = (p: any) => !!p.check_first_line_id
   const beforePhotos  = photos.filter(p => p.photo_type === 'before')
-  const afterPhotos   = photos.filter(p => p.photo_type === 'after')
+  const afterPhotos   = photos.filter(p => p.photo_type === 'after' && !checkFirstPhoto(p))
   const damagePhotos  = photos.filter(p => p.photo_type === 'issue' || p.photo_type === 'damage')
-  const generalPhotos = photos.filter(p => p.photo_type === 'general')
+  const generalPhotos = photos.filter(p => p.photo_type === 'general' || (p.photo_type === 'after' && checkFirstPhoto(p)))
 
   // Flattened in section render order, so tapping a thumbnail opens the
   // viewer on that photo.

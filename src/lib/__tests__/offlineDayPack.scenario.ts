@@ -87,7 +87,7 @@ function jobRow(id: string, start: string, status: string, crew: string[], addr:
     scheduled_start: at(start), scheduled_end: at(new RealDate(RealDate.parse(start) + 3 * 3600_000).toISOString()),
     is_turnover: true, route_order: null, window_minutes: null, job_type: 'clean', internal_notes: '',
     seam_access_code: null, laundry_done_onsite: false, pet_fee_applied: false, checkout_time: null, checkin_time: null, urgency: null,
-    crew_note: null, crew_note_at_clock_in: false,
+    crew_note: null, crew_note_at_clock_in: false, started_at: null,
     clients: { full_name: 'Red Rock Rentals', phone: '555-0100', client_type: 'property_manager' },
     client_addresses: { id: a.id, street: a.street, city: 'Sedona', nickname: a.nickname, lockbox_code: a.lockbox_code, lat: 34.87, lng: -111.76, photo_url: addressRow(a).photo_url },
     job_assignments: crew.map(u => ({ user_id: u })),
@@ -113,7 +113,7 @@ function seedServer() {
   server.tables = {
     jobs,
     client_addresses: Object.values(ADDR).map(addressRow),
-    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true }],
+    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true }],
     job_assignments: jobs.flatMap(j => j.crew.map((c: any) => ({ job_id: j.id, user_id: c.user_id, is_lead: c.is_lead, users: { id: c.user_id, full_name: NAMES[c.user_id] } }))),
     address_checklist_templates: [
       { id: 'tp1', address_id: 'A2', room: 'Kitchen', title: 'Wipe counters', sort_order: 1, requires_photo: false },
@@ -145,6 +145,16 @@ function seedServer() {
       { id: 'lg1', job_id: 'J-prev', inventory_id: 'inv-tp', item_name: 'Toilet paper', qty_used: 4, qty_remaining: 1, needs_restock: true, notes: null, incident_id: null, restocked_at: null, client_notified_at: null, created_at: at('2026-10-10T00:00:00Z'), jobs: { address_id: 'A2' } },
     ],
     turnover_linen_extras: [{ job_id: 'J-red', inventory_id: 'inv-towel', extra_qty: 2 }],
+    // Check first at Red Rock Casita (rinse-base-app 20261015130534): two lines,
+    // one archived, and the plants already ticked on J-red.
+    property_check_first_lines: [
+      { id: 'cf1', tenant_id: T, address_id: 'A2', body: 'Water all the plants', photo_required: false, sort_order: 1, created_at: at('2026-10-01T00:00:00Z'), updated_at: at('2026-10-01T00:00:00Z'), archived_at: null },
+      { id: 'cf2', tenant_id: T, address_id: 'A2', body: 'Spa photo', photo_required: true, sort_order: 2, created_at: at('2026-10-01T00:00:00Z'), updated_at: at('2026-10-01T00:00:00Z'), archived_at: null },
+      { id: 'cf0', tenant_id: T, address_id: 'A2', body: 'Old line', photo_required: false, sort_order: 0, created_at: at('2026-09-01T00:00:00Z'), updated_at: at('2026-09-02T00:00:00Z'), archived_at: at('2026-09-02T00:00:00Z') },
+    ],
+    job_check_first_ticks: [
+      { id: 'tk1', tenant_id: T, job_id: 'J-red', line_id: 'cf1', user_id: U, line_text: 'Water all the plants', ticked_at: at('2026-10-13T20:00:00Z'), created_at: at('2026-10-13T20:00:00Z'), users: { full_name: 'Nichole' } },
+    ],
     job_time_entries: [], job_room_signoffs: [], job_photos: [], job_crew_note_acks: [],
   }
 }
@@ -370,6 +380,9 @@ const scenarios: Record<string, () => Promise<void>> = {
       // Its Supplies screen (JobInventoryScreen)
       invItems: R.inventoryItemsRead(addrId), invLog: R.inventoryLogRead(job.id),
       invRooms: R.inventoryRoomsRead(addrId), invExtras: R.linenExtrasRead(job.id),
+      // Its Check first card and the local check before Complete
+      cften: R.checkFirstTenantRead(T), cflines: R.checkFirstLinesRead(addrId),
+      cfticks: R.checkFirstTicksRead(job.id), cfphotos: R.checkFirstPhotosRead(job.id), cfstart: R.checkFirstStartRead(job.id),
     }
     const got: Record<string, any> = {}
     const missing: string[] = []
@@ -388,6 +401,13 @@ const scenarios: Record<string, () => Promise<void>> = {
     ok('the next arrival', (got.nextarr.data || []).some((r: any) => r.guest_name === 'Rivera'))
     ok('"Stop 1 of 2"', (got.route.data || []).length === 2, ids(got.route.data || []))
     ok('supplies, with the office\'s extra linen', (got.invItems.data || []).length === 2 && got.invExtras.data?.[0]?.extra_qty === 2)
+    ok('Check first: the lines in the office\'s order, not the archived one, the tick and who made it, the company\'s switch',
+      (got.cflines.data || []).map((l: any) => l.body).join('|') === 'Water all the plants|Spa photo' &&
+      got.cfticks.data?.[0]?.line_id === 'cf1' && got.cfticks.data?.[0]?.users?.full_name === 'Nichole' &&
+      got.cften.data?.check_first_required === true && got.cfstart.data?.started_at === null,
+      (got.cflines.data || []).map((l: any) => l.body).join('|'))
+    ok('Check first: a clean at a property with no lines saves no ticks, photos or start',
+      cached('cflines:A3') && !cached('cfticks:J-chapel') && !cached('cfphotos:J-chapel') && !cached('cfstart:J-chapel'))
 
     // The walkthrough clean's walkthrough (WalkthroughChecklist).
     const chapel = day.jobs.find((j: any) => j.id === 'J-chapel')
@@ -396,10 +416,12 @@ const scenarios: Record<string, () => Promise<void>> = {
 
     // "Get ready for today" (PrepCard), over Home's day.
     const prep = R.prepReads(CREW, R.prepJobs(day.jobs), c.todayKey())
-    const [pa, pl, pr] = [await c.cachedRead(prep.addresses), await c.cachedRead(prep.linen), await c.cachedRead(prep.stays)]
+    const [pa, pl, pr, pc] = [await c.cachedRead(prep.addresses), await c.cachedRead(prep.linen), await c.cachedRead(prep.stays), await c.cachedRead(prep.checkFirst)]
     ok('the prep card: door codes, linens, arrivals',
       pa.fromCache && (pa.data || []).some((a: any) => a.lockbox_code === '4321') && pl.fromCache && (pl.data || []).length === 1 && pr.fromCache,
       `addr ${pa.fromCache}/${(pa.data || []).length} linen ${pl.fromCache}/${(pl.data || []).length} stays ${pr.fromCache}`)
+    ok('the prep card: today\'s Check first lines', pc.fromCache && (pc.data || []).map((l: any) => l.body).sort().join('|') === 'Spa photo|Water all the plants',
+      `${pc.fromCache}/${(pc.data || []).length}`)
   },
 
   // Live, Home still shows ONLY today, though the read now carries tomorrow.

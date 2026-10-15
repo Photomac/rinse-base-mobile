@@ -84,17 +84,18 @@ const STOP_KEYS = (J: string) => [
   `chkrows:${J}`, `jobmeta:${J}`, `crew:${J}`, `crewclock:${J}`, `time:${J}:${U}`, `time:${J}:job`,
   `photos:${J}`, `pshot:${J}`, `signoffs:${J}`, `inv:log:${J}`, `inv:extras:${J}`, `nextarr:${J}`,
   `route:${J}:${U}`, `crewnote:${J}`, `crewnoteack:${J}:${U}`, `crewNoteAck:${J}:${U}`, `wtlines:${J}`, `wtphotos:${J}`,
+  `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`,
 ]
 const PROPERTY_KEYS = (A: string) => [
   `tmpl:${A}`, `rooms:${A}`, `addrmode:${A}`, `preq:${A}`, `propmeta:${A}`,
-  `inv:items:${A}`, `inv:rooms:${A}`, `wttrash:${A}`, `nextarr:addr:${A}`,
+  `inv:items:${A}`, `inv:rooms:${A}`, `wttrash:${A}`, `nextarr:addr:${A}`, `cflines:${A}`,
 ]
 // Per user / per company / per day, and the phone's other stores: never touched.
 const OTHER_KEYS = [
   `dataCache:dash:today:${U}`, `dataCache:dash:month:${U}`, `dataCache:dash:pay:${U}`, `dataCache:dash:shift:${U}`,
   `dataCache:sched:${U}`, `dataCache:track:open:${U}`, `dataCache:track:mode:${T}`, `dataCache:openjobs:${T}`,
   `dataCache:tenvideo:${T}`, `dataCache:tenseed:${T}`, `dataCache:tenmode:${T}`, `dataCache:nextarr:ten:${T}`,
-  `dataCache:prep:ten:${T}`, `dataCache:prep:addr:${U}:2026-10-13`, `dataCache:daypack:${U}`, `dataCache:crewNoteAckPending`,
+  `dataCache:cften:${T}`, `dataCache:prep:ten:${T}`, `dataCache:prep:addr:${U}:2026-10-13`, `dataCache:prep:cflines:${U}:2026-10-13`, `dataCache:daypack:${U}`, `dataCache:crewNoteAckPending`,
   'writeOutbox', 'writeOutboxRejected', 'rinsebase.photoQueue.v1', 'language', `jobScope:${U}`, `prep:${U}:2026-09-01`,
   'arrival:J-old', 'mt:es:abc:12',
 ]
@@ -164,6 +165,11 @@ const scenarios: Record<string, () => Promise<void>> = {
       photoRequirementsRead: () => R.photoRequirementsRead(A),
       requirementShotsRead: () => R.requirementShotsRead(J),
       itemPhotosRead: () => R.itemPhotosRead(J),
+      checkFirstLinesRead: () => R.checkFirstLinesRead(A),
+      checkFirstTicksRead: () => R.checkFirstTicksRead(J),
+      checkFirstPhotosRead: () => R.checkFirstPhotosRead(J),
+      checkFirstStartRead: () => R.checkFirstStartRead(J),
+      checkFirstTenantRead: () => R.checkFirstTenantRead(T),
       inventoryItemsRead: () => R.inventoryItemsRead(A),
       inventoryLogRead: () => R.inventoryLogRead(J),
       inventoryRoomsRead: () => R.inventoryRoomsRead(A),

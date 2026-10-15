@@ -149,7 +149,7 @@ async function runPack(user: any, given: any[] | null): Promise<DayPackResult> {
     if (!cleans.length) continue
     const p = prepReads(user, cleans, d)
     tenantRead = p.tenant
-    add(p.addresses); add(p.stays); add(p.restock)
+    add(p.addresses); add(p.stays); add(p.restock); add(p.checkFirst)
     linen.push(p.linen, p.extras)
   }
   // Linen lines only for a company that turned them on (tenants.crew_prep_linens).
