@@ -76,7 +76,6 @@ export const translations = {
     reset_password_short: 'Password must be at least 8 characters.',
     reset_resend: 'Resend code',
     back_to_login: '← Back to sign in',
-    tagline: 'STR Cleaning Software',
     // Dashboard
     good_morning: 'Good morning', good_afternoon: 'Good afternoon', good_evening: 'Good evening',
     today: 'Today', yesterday: 'Yesterday', done_label: 'Done', remaining: 'Remaining', this_month: 'This month',
@@ -766,7 +765,6 @@ export const translations = {
     reset_password_short: 'La contraseña debe tener al menos 8 caracteres.',
     reset_resend: 'Reenviar código',
     back_to_login: '← Volver a iniciar sesión',
-    tagline: 'Gestión profesional de limpieza',
     // Dashboard
     good_morning: 'Buenos días', good_afternoon: 'Buenas tardes', good_evening: 'Buenas noches',
     today: 'Hoy', yesterday: 'Ayer', done_label: 'Hechos', remaining: 'Pendientes', this_month: 'Este mes',
@@ -1448,7 +1446,6 @@ export const translations = {
     reset_password_short: 'A senha precisa ter pelo menos 8 caracteres.',
     reset_resend: 'Reenviar código',
     back_to_login: '← Voltar para o login',
-    tagline: 'Gestão profissional de limpeza',
     // Dashboard
     good_morning: 'Bom dia', good_afternoon: 'Boa tarde', good_evening: 'Boa noite',
     today: 'Hoje', yesterday: 'Ontem', done_label: 'Feitos', remaining: 'Restantes', this_month: 'Este mês',

@@ -79,9 +79,8 @@ export function LoginScreen() {
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <StatusBar barStyle="dark-content" />
       <View style={styles.logoSection}>
-        <Image source={require('../../assets/icon.png')} style={styles.logoMark} />
-        <Text style={styles.appName}>Rinsebase</Text>
-        <Text style={styles.tagline}>{t('tagline')}</Text>
+        {/* The logo carries "STR Cleaning Software" itself, so no tagline line. */}
+        <Image source={require('../../assets/logo-horizontal-light.png')} style={styles.logo} resizeMode="contain" accessibilityLabel="Rinsebase" />
       </View>
 
       {mode === 'login' && (
@@ -143,10 +142,8 @@ export function LoginScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: SURFACE, paddingHorizontal: 24, justifyContent: 'center' },
   logoSection: { alignItems: 'center', marginBottom: 40 },
-  logoMark: { width: 88, height: 88, borderRadius: 22, marginBottom: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.12, shadowRadius: 16 },
-
-  appName: { color: TEXT, fontSize: 28, fontWeight: '800', marginBottom: 6 },
-  tagline: { color: TEXT_MUTED, fontSize: 13 },
+  // Same size as the loading screen's logo (App.tsx), so it doesn't jump.
+  logo: { width: 260, height: 260 * 321 / 1500 },
   form: { backgroundColor: CARD, borderRadius: 20, padding: 24, borderWidth: 1, borderColor: BORDER, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.06, shadowRadius: 16 },
   formTitle: { color: TEXT, fontSize: 18, fontWeight: '800', marginBottom: 6 },
   formSub: { color: TEXT_MUTED, fontSize: 13, lineHeight: 19, marginBottom: 4 },
