@@ -1379,13 +1379,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // gate below can't be asked and the Complete is queued; a refusal by the
     // server's gate would then park it. Only where the company turned it on;
     // a read that fails blocks nothing. On a bar too weak to answer soon, the
-    // copy already on screen stands in.
-    setSaving(true)
-    const cf = await Promise.race([
-      loadCheckFirst().catch(() => null),
-      new Promise<CheckFirstView | null>(resolve => setTimeout(() => resolve(checkFirst), 8_000)),
-    ])
-    setSaving(false)
+    // copy already on screen stands in. Only at a property that had lines when
+    // the screen loaded: every other Complete (most companies have no list)
+    // must not wait on a read for one.
+    let cf: CheckFirstView | null = null
+    if (cfHasLines.current) {
+      setSaving(true)
+      cf = await Promise.race([
+        loadCheckFirst().catch(() => null),
+        new Promise<CheckFirstView | null>(resolve => setTimeout(() => resolve(checkFirst), 8_000)),
+      ])
+      setSaving(false)
+    }
     if (cf) {
       const left = localBlockers(cf.required, cf.lines, new Set(cf.ticks.map(k => k.line_id)), new Set(Object.keys(cf.photos)),
         startedAt(firstClockIn([...timeEntries, ...(crewClockRows ?? [])]), cf.jobStartedAt))
