@@ -8,7 +8,7 @@ import { supabase, isSignedOut } from './src/lib/supabase'
 import { LoginScreen } from './src/screens/LoginScreen'
 import { DashboardScreen } from './src/screens/DashboardScreen'
 import { ScheduleScreen } from './src/screens/ScheduleScreen'
-import { OpenJobsScreen } from './src/screens/OpenJobsScreen'
+import { OpenJobsScreen, offeredFirstTo } from './src/screens/OpenJobsScreen'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
@@ -297,14 +297,18 @@ function AppInner() {
   const refreshOpenJobs = async () => {
     if (!user) return
     try {
-      const { count } = await supabase.from('jobs')
-        .select('id', { count: 'exact', head: true })
+      // Counted here, not by the database: a clean still offered to another
+      // property's crew first (jobs.open_to_all_at) isn't this person's to see.
+      const { data } = await supabase.from('jobs')
+        .select('id, open_to_all_at, client_addresses!jobs_address_id_fkey(default_crew)')
         .eq('tenant_id', user.tenant_id)
         .not('open_for_claims_at', 'is', null)
         .in('status', ['pending_approval', 'scheduled'])
         .eq('crew_filled', false)
         .gt('scheduled_start', new Date().toISOString())
-      setOpenJobsCount(count ?? 0)
+        .limit(500)
+      const now = Date.now()
+      setOpenJobsCount((data ?? []).filter((j: any) => offeredFirstTo(j, user.id, now) !== 'others').length)
     } catch { /* badge is best-effort */ }
   }
 
