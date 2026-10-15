@@ -38,6 +38,33 @@ export function isMyJob(job: any, viewerId: string): boolean {
   return Array.isArray(job?.job_assignments) && job.job_assignments.some((a: any) => a?.user_id === viewerId)
 }
 
+/** A clean's crew as the server lists it (job_assignments.user_id), and
+ *  whether that is a live answer or this phone's saved copy. */
+export interface Roster { ids: string[]; live: boolean }
+
+/**
+ * The viewer is crew and not on this clean, so the server would refuse their
+ * clock-in or resume: the insert rule on job_time_entries lets crew start an
+ * entry only on a clean they're assigned to (rinsebase-app #1487). The office
+ * records for anyone. The screen then says "ask the office to add you" in
+ * place of the button.
+ *
+ * Only once it is known, so someone who is on the clean never loses the button:
+ *  - a live roster decides (the list the screen was opened from may predate
+ *    the office taking them off);
+ *  - a saved roster says "not on it" only if the job's own assignments agree;
+ *  - with no roster read yet, it isn't known.
+ * `refused`: the server already refused this person's punch here (42501).
+ */
+export function notAssignedHere(job: any, viewerId: string, opts: { office: boolean; roster: Roster | null; refused?: boolean }): boolean {
+  if (opts.office) return false
+  if (opts.refused) return true
+  const { roster } = opts
+  if (!roster) return false
+  if (roster.live) return !roster.ids.includes(viewerId)
+  return !roster.ids.includes(viewerId) && !isMyJob(job, viewerId)
+}
+
 /** The jobs to show. Everyone: all of them, untouched. Mine: the viewer's own,
  *  in the order given. */
 export function jobsInScope<T>(jobs: T[], viewerId: string, scope: JobScope): T[] {

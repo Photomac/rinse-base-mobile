@@ -133,11 +133,12 @@ export const jobMetaRead = (jobId: string): CacheRead => ({
     .maybeSingle(),
 })
 
-/** Everyone on the job, lead first. */
+/** Everyone on the job, lead first. user_id is who the server counts as on
+ *  it (is_my_job), even where the name can't be read. */
 export const jobCrewRead = (jobId: string): CacheRead => ({
   key: `crew:${jobId}`,
   q: () => supabase.from('job_assignments')
-    .select('is_lead, users!job_assignments_user_id_fkey(id, full_name)')
+    .select('user_id, is_lead, users!job_assignments_user_id_fkey(id, full_name)')
     .eq('job_id', jobId)
     .order('is_lead', { ascending: false }),
 })

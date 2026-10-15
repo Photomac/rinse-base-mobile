@@ -191,6 +191,61 @@ const settle = () => new Promise(r => setTimeout(r, 10))
   ok('…queue drains', (await pendingOpCount()) === 0)
   net.openWork.clear()
 
+  // A clock-in delivered with its answer lost, then the person is taken off
+  // the clean (rinsebase-app #1487: crew may insert an entry only on a clean
+  // they're assigned to). The replay is refused with 42501, because the insert
+  // rule is checked on the proposed row before ON CONFLICT finds the stored
+  // one. The row and its pay are intact: the op WAS delivered, so it must go
+  // quietly. A false "dropped" invites the office to "+ Add" the hours again.
+  net.applied.length = 0
+  const rejectedBefore8 = (await rejectedOps()).length
+  const reportedBefore8 = reported.length
+  const lostId = uuid4()
+  net.loseAcks = 1
+  r = await writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: {
+    id: lostId, job_id: 'J8', user_id: 'U1', clocked_in_at: '2026-10-15T14:00:00.000Z', entry_type: 'work', source: 'manual',
+  } })
+  ok('lost ack: the clock-in landed but read as offline, so it queues', r.queued === true && net.storedEntries.has(lostId))
+  net.notOnClean.add('J8')
+  // The check can't get through: nothing is decided, nothing counted.
+  net.readsOffline = true
+  await writeThrough({ table: 'job_time_entries', op: 'update', match: { id: lostId }, values: {
+    clocked_out_at: '2026-10-15T16:00:00.000Z', duration_minutes: 120,
+  } })
+  for (let i = 0; i < 5; i++) { await settle(); await flushOutbox() }
+  ok('refused replay, read-back offline: held through 5 flushes, not parked',
+    (await pendingOpCount()) === 2 && (await rejectedOps()).length === rejectedBefore8 && reported.length === reportedBefore8)
+  net.readsOffline = false
+  await settle()
+  await flushOutbox()
+  ok('refused replay of a STORED clock-in is dropped as delivered: queue drains', (await pendingOpCount()) === 0)
+  ok('…nothing parked, nothing reported', (await rejectedOps()).length === rejectedBefore8 && reported.length === reportedBefore8)
+  ok('…the replay itself never landed a second time',
+    net.applied.filter(a => a.op === 'upsert' && a.values?.id === lostId).length === 1)
+  ok('…and the clock-out queued behind it closes the stored entry',
+    net.applied.some(a => a.op === 'update' && a.filters.includes(`id=eq.${lostId}`) && !!a.values?.clocked_out_at))
+
+  // A clock-in queued offline, and the person taken off the clean before signal
+  // returned: no row on the server. That is a real refusal and still parks
+  // after five flushes and is reported, as any other.
+  net.online = false
+  const newId = uuid4()
+  await writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: {
+    id: newId, job_id: 'J9', user_id: 'U1', clocked_in_at: '2026-10-15T15:00:00.000Z', entry_type: 'work', source: 'manual',
+  } })
+  net.notOnClean.add('J9')
+  await settle()
+  net.online = true
+  for (let i = 0; i < 4; i++) { await settle(); await flushOutbox() }
+  ok('refused NEW clock-in: still queued after 4 flushes', (await pendingOpCount()) === 1)
+  await settle()
+  await flushOutbox()
+  const lastReport = reported[reported.length - 1] || ''
+  ok('…parked on the 5th', (await pendingOpCount()) === 0 && (await rejectedOps()).some(x => (x.values as any)?.id === newId))
+  ok('…and reported', reported.length === reportedBefore8 + 1 && lastReport.includes('job_time_entries') && lastReport.includes('row-level security'))
+  ok('…it never landed', !net.storedEntries.has(newId))
+  net.notOnClean.clear()
+
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }
   console.log('\nAll outbox invariants hold.')
 })()

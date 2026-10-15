@@ -29,6 +29,15 @@
 //   23505). They are on the clock; it was started twice. resolveWorkStart()
 //   folds the queued one into the running one instead of parking it (and
 //   stalling everything queued behind it for five flushes).
+// - And one more: a time-entry upsert refused with 42501 whose rows are
+//   already on the server. The insert rule allows crew an entry only on a
+//   clean they're assigned to (rinsebase-app #1487), and Postgres checks it
+//   on the proposed row BEFORE ON CONFLICT finds the stored one. So a replay
+//   whose ack was lost, after the office took the person off the clean, is
+//   refused although its row landed the first time. alreadyStored() reads the
+//   ids back; if every row is there the op was delivered and is dropped
+//   quietly. A false "dropped" on the Profile screen invites the office to
+//   "+ Add" the hours again, which pays them twice.
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { reportClientError } from './errorReporter'
@@ -166,6 +175,27 @@ async function resolveWorkStart(op: OutboxOp): Promise<'resolved' | 'offline' | 
   return 'resolved'
 }
 
+// ── A delivered clock-in refused on replay ───────────────────────────────
+function isRefusedTimeEntry(op: OutboxOp, err: any): boolean {
+  return op.table === 'job_time_entries' && op.op === 'upsert' && err?.code === '42501'
+}
+
+/**
+ * Are all the rows this upsert writes already stored? Then an earlier attempt
+ * landed and only its answer was lost. Read by id: the read rule is the whole
+ * company's, so the person can still see their entry on a clean they were
+ * taken off. Anything short of every row is 'missing', and the op is counted
+ * as a rejection like any other (a new clock-in there still parks and reports).
+ */
+async function alreadyStored(op: OutboxOp): Promise<'stored' | 'offline' | 'missing'> {
+  const ids = (Array.isArray(op.values) ? op.values : [op.values]).map((v: any) => v?.id).filter(Boolean)
+  if (!ids.length) return 'missing'
+  const read: any = await supabase.from(op.table).select('id').in('id', ids)
+  if (read.error) return read.status === 0 ? 'offline' : 'missing'
+  const found = new Set((read.data ?? []).map((r: any) => r.id))
+  return ids.every((id: string) => found.has(id)) ? 'stored' : 'missing'
+}
+
 /**
  * Perform a write now if possible, queue it if the network is down.
  * Returns { queued: true } when the op is safely on-device (treat as success —
@@ -223,6 +253,15 @@ export async function flushOutbox(): Promise<void> {
         if (settled === 'offline') break
         // 'unresolved' is counted like any rejection below, so a start that
         // somehow keeps losing still surfaces instead of looping forever.
+      }
+      if (isRefusedTimeEntry(op, res.error)) {
+        const seen = await alreadyStored(op)
+        if (seen === 'stored') {
+          await writeQueue((await readQueue()).filter(x => x.id !== op.id))
+          sent++
+          continue
+        }
+        if (seen === 'offline') break
       }
       const rejects = (op.rejects || 0) + 1
       const msg = String(res.error?.message || res.error)

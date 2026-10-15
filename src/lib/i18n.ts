@@ -425,6 +425,10 @@ export const translations = {
     photo_updated: 'Photo updated!',
     clock_in_failed: "Couldn't clock you in — check your signal and try again. Your time was NOT started.",
     clock_out_failed: "Couldn't save your clock-out — check your signal and try again. Your time is still running.",
+    // Crew on a clean they aren't assigned to: the server refuses the punch
+    // (rinsebase-app #1487), so say why instead of blaming the signal.
+    not_on_this_clean: "You're not on this clean — ask the office to add you.",
+    not_on_this_clean_failed: "You're not on this clean — ask the office to add you. Your time was NOT started.",
     pending_upload: 'waiting to upload',
     takehome_title: 'Take-home laundry',
     takehome_hint: 'Taking laundry home to wash? Log the bags — it adds your bonus to payroll.',
@@ -1108,6 +1112,8 @@ export const translations = {
     photo_updated: '¡Foto actualizada!',
     clock_in_failed: 'No se pudo registrar tu entrada — revisa tu señal e inténtalo de nuevo. Tu tiempo NO comenzó.',
     clock_out_failed: 'No se pudo guardar tu salida — revisa tu señal e inténtalo de nuevo. Tu tiempo sigue corriendo.',
+    not_on_this_clean: 'No estás en esta limpieza — pide a la oficina que te agregue.',
+    not_on_this_clean_failed: 'No estás en esta limpieza — pide a la oficina que te agregue. Tu tiempo NO comenzó.',
     pending_upload: 'esperando para subir',
     takehome_title: 'Ropa para lavar en casa',
     takehome_hint: '¿Te llevas ropa a casa para lavar? Registra las bolsas — tu bono se agrega a la nómina.',
@@ -1788,6 +1794,8 @@ export const translations = {
     photo_updated: 'Foto atualizada!',
     clock_in_failed: 'Não foi possível bater seu ponto — verifique o sinal e tente de novo. Seu tempo NÃO começou.',
     clock_out_failed: 'Não foi possível salvar sua saída — verifique o sinal e tente de novo. Seu tempo continua correndo.',
+    not_on_this_clean: 'Você não está nesta limpeza — peça ao escritório para incluir você.',
+    not_on_this_clean_failed: 'Você não está nesta limpeza — peça ao escritório para incluir você. Seu tempo NÃO começou.',
     pending_upload: 'aguardando envio',
     takehome_title: 'Roupa para lavar em casa',
     takehome_hint: 'Vai levar roupa para lavar em casa? Registre as sacolas — o bônus entra na sua folha de pagamento.',

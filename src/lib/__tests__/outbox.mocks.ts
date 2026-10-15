@@ -21,15 +21,39 @@ export const net = {
   /** Server-side RUNNING per-job entries, keyed `${job_id}|${user_id}`. Only
    *  consulted once a test seeds it; mirrors job_time_entries_one_open_per_job. */
   openWork: new Map<string, { id: string; clocked_in_at: string }>(),
+  /** Cleans the caller is no longer on. A job_time_entries upsert there is
+   *  refused the way job_time_entries_insert refuses it (rinsebase-app #1487):
+   *  42501, checked on the proposed row before ON CONFLICT, so even a row
+   *  that is already stored is refused. */
+  notOnClean: new Set<string>(),
+  /** job_time_entries ids the server holds (every upsert that landed). */
+  storedEntries: new Set<string>(),
+  /** The next N writes land on the server but their answer is lost: the
+   *  phone sees a dead network (status 0). */
+  loseAcks: 0,
+  /** Reads fail like a dead network while writes still get through. */
+  readsOffline: false,
 }
 
 const filterVal = (filters: string[], k: string) =>
   filters.find(f => f.startsWith(`${k}=eq.`))?.slice(k.length + 4)
+const filterIn = (filters: string[], k: string) =>
+  filters.find(f => f.startsWith(`${k}=in.(`))?.slice(k.length + 5, -1).split(',')
 
 function result(table: string, op: string, values: any, filters: string[], opts?: any) {
-  if (!net.online) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
+  if (!net.online || (op === 'select' && net.readsOffline)) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
   if (net.rejectTables.has(table) && (!net.rejectOp || net.rejectOp === op)) {
     return { error: { message: 'violates row-level security' }, status: 403 }
+  }
+  if (table === 'job_time_entries' && op === 'select' && filterIn(filters, 'id')) {
+    const ids = filterIn(filters, 'id')!.filter(id => net.storedEntries.has(id))
+    return { data: ids.map(id => ({ id })), error: null, status: 200 }
+  }
+  if (table === 'job_time_entries' && op === 'upsert') {
+    const rows = Array.isArray(values) ? values : [values]
+    if (rows.some(r => net.notOnClean.has(r?.job_id))) {
+      return { error: { code: '42501', message: 'new row violates row-level security policy for table "job_time_entries"' }, status: 403 }
+    }
   }
   if (table === 'job_time_entries' && net.openWork.size) {
     if (op === 'select') {
@@ -54,6 +78,13 @@ function result(table: string, op: string, values: any, filters: string[], opts?
     }
   }
   net.applied.push({ table, op, values, filters, ...(opts ? { opts } : {}) })
+  if (table === 'job_time_entries' && op === 'upsert') {
+    for (const r of Array.isArray(values) ? values : [values]) if (r?.id) net.storedEntries.add(r.id)
+  }
+  if (net.loseAcks > 0 && op !== 'select') {
+    net.loseAcks--
+    return { error: { message: 'TypeError: Network request failed' }, status: 0 }
+  }
   return { error: null, status: 201 }
 }
 
