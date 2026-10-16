@@ -62,6 +62,8 @@ const O = 'u-owner'     // the owner, who also cleans
 const NAMES: Record<string, string> = { [U]: 'Nichole', [V]: 'Ali', [O]: 'Catherine' }
 const CREW = { id: U, tenant_id: T, role: 'cleaner', full_name: 'Nichole', _timeMode: 'daily' }
 const OWNER = { id: O, tenant_id: T, role: 'owner', full_name: 'Catherine', _timeMode: 'per_job' }
+/** Nichole at a company that tracks time per clean (the timer and Clock in). */
+const PJ = { ...CREW, _timeMode: 'per_job' }
 
 const ADDR: Record<string, any> = {
   A1: { id: 'A1', street: '1 Uptown Rd', nickname: 'Uptown', lockbox_code: '1111', arrival_instructions: null },
@@ -113,7 +115,7 @@ function seedServer() {
   server.tables = {
     jobs,
     client_addresses: Object.values(ADDR).map(addressRow),
-    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true }],
+    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true }],
     job_assignments: jobs.flatMap(j => j.crew.map((c: any) => ({ job_id: j.id, user_id: c.user_id, is_lead: c.is_lead, users: { id: c.user_id, full_name: NAMES[c.user_id] } }))),
     address_checklist_templates: [
       { id: 'tp1', address_id: 'A2', room: 'Kitchen', title: 'Wipe counters', sort_order: 1, requires_photo: false },
@@ -179,6 +181,9 @@ const server = {
   other: [] as string[],
   /** Every REST request sent, answered or not, and when (performance.now()). */
   asked: [] as { table: string; params: URLSearchParams; at: number }[],
+  /** RPC answers by function name: rows, or { status, body } for a refusal.
+   *  A function not listed answers 404, as an older database would. */
+  rpc: {} as Record<string, (args: any) => any>,
 }
 
 function splitTop(s: string): string[] {
@@ -294,7 +299,13 @@ const noAnswer = (init: any) => new Promise<Response>((_, reject) => {
       server.mode = 'offline'
       throw new TypeError('Network request failed')
     }
-    if (method !== 'GET') return new Response('', { status: 201, headers: { date } })
+    if (table.startsWith('rpc/')) {
+      const fn = server.rpc[table.slice(4)]
+      if (!fn) return json(404, { code: 'PGRST202', message: `function ${table.slice(4)} not found` })
+      const out = fn(JSON.parse(init.body || '{}'))
+      return out && typeof out === 'object' && 'status' in out ? json(out.status, out.body) : json(200, out)
+    }
+    if (method !== 'GET') { write(method, table, url.searchParams, init); return new Response('', { status: 201, headers: { date } }) }
     let rows = (server.tables[table] ?? []).slice()
     for (const [k, v] of url.searchParams) {
       if (k === 'select' || k === 'order' || k === 'limit' || k === 'offset') continue
@@ -306,6 +317,29 @@ const noAnswer = (init: any) => new Promise<Response>((_, reject) => {
     if (lim) rows = rows.slice(0, Number(lim))
     return json(200, project(rows, url.searchParams.get('select') || '*'))
   } finally { server.inflight-- }
+}
+
+/** Writes land in the tables, as PostgREST would apply them: an upsert on its
+ *  conflict columns (merge, or leave the stored row with ignore-duplicates),
+ *  an update or delete on its filters. */
+function write(method: string, table: string, params: URLSearchParams, init: any) {
+  const rows = (server.tables[table] = server.tables[table] ?? [])
+  const filtered = () => rows.filter(r => [...params].every(([k, v]) => ['select', 'on_conflict', 'columns'].includes(k) || keep(r, k, v)))
+  const body = init.body ? JSON.parse(init.body) : null
+  if (method === 'POST') {
+    const keys = (params.get('on_conflict') || 'id').split(',')
+    const ignore = /ignore-duplicates/.test(String(init.headers?.Prefer ?? init.headers?.prefer ?? (typeof init.headers?.get === 'function' ? init.headers.get('prefer') : '')))
+    for (const v of Array.isArray(body) ? body : [body]) {
+      const i = rows.findIndex(r => keys.every(k => r[k] === v[k]))
+      if (i < 0) rows.push({ ...v })
+      else if (!ignore) rows[i] = { ...rows[i], ...v }
+    }
+  } else if (method === 'PATCH') {
+    for (const r of filtered()) Object.assign(r, body)
+  } else if (method === 'DELETE') {
+    const gone = new Set(filtered())
+    server.tables[table] = rows.filter(r => !gone.has(r))
+  }
 }
 
 // ── Test plumbing ───────────────────────────────────────────────────────────
@@ -904,21 +938,561 @@ const scenarios: Record<string, () => Promise<void>> = {
       u.log.length === 2 && u.log[0].v === null && u.log[0].at < CARD_WAIT + 200 && (u.log[1].v?.lines || []).map((l: any) => l.id).join() === 'cf9',
       u.log.map(x => `${fmt(x.at)} ${(x.v?.lines || []).map((l: any) => l.id).join() || 'none'}`).join(' → '))
   },
+  // ── The time tracker (lib/timeTracker) ──────────────────────────────────
+  // The timer and Clock in / Pause / Resume came from one read with a read
+  // deadline: on a link that swallows requests, Clock in showed for 15 s on a
+  // clean she was already clocked into. She clocked in at 7:05 with signal
+  // (the phone saved it); at the next stop's door, one bar.
+  async timerOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    ok('evening: the pack saves', (await c.prefetchDays(PJ)).status === 'saved')
+    setClock(MORNING); seedSession()
+    server.tables.job_time_entries.push(timeEntry('te-1', U, '2026-10-14T14:05:00Z'))
+    await c.cachedRead(c.reads.timeEntriesRead('J-red', U, false))  // the screen, opened with signal at 7:05
+    ok('the phone saved her running entry', runningIds(cachedVal(`time:J-red:${U}`)) === 'te-1')
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const s = tracking(c)
+    const doneAt = await s.tr.load(JOBS.red, PJ, false, { soon: true }).then(() => s.now())
+    const first = s.log[0]
+    ok('her running entry shows within the wait, not after a read deadline (Pause, not Clock in)',
+      !!first && first.at < CARD_WAIT + 400 && runningIds(first.rows) === 'te-1', `${fmt(first?.at)} ${runningIds(first?.rows)} (deadline ${READ_DEADLINE} ms)`)
+    ok('the load ends once the live read gives up, with nothing newer to show', doneAt < 2 * READ_DEADLINE && s.log.length === 1, `${fmt(doneAt)}, ${s.log.length} show(s)`)
+    const again = tracking(c)
+    await again.tr.load(JOBS.red, PJ, false, { soon: true })
+    ok('opened again: at once (the last request failed)', (again.log[0]?.at ?? Infinity) < 150 && runningIds(again.log[0]?.rows) === 'te-1', fmt(again.log[0]?.at))
+  },
+
+  // A trickle: the clock was started from somewhere else (the web, another
+  // phone) after the phone saved its copy. The saved copy shows within the
+  // wait; the live answer, when it comes, replaces it.
+  async timerLiveAnswerReplacesSaved() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(PJ)
+    setClock(MORNING); seedSession()
+    server.tables.job_time_entries.push(timeEntry('te-web', U, '2026-10-14T13:55:00Z', null, { source: 'manual' }))
+    server.slow.job_time_entries = 700
+    c = relaunch(); scaleDeadlines(c)
+    const s = tracking(c)
+    await s.tr.load(JOBS.red, PJ, false, { soon: true })
+    ok('the saved copy within the wait, then the live entry',
+      s.log.length === 2 && s.log[0].at < CARD_WAIT + 200 && s.log[0].rows.length === 0 && runningIds(s.log[1].rows) === 'te-web',
+      s.log.map(x => `${fmt(x.at)} [${runningIds(x.rows)}]`).join(' → '))
+  },
+
+  // Her own punch while the live answer is on its way: that answer may
+  // predate it, so it must not take the punch off the screen.
+  async timerLateAnswerNeverUndoesAPunch() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(PJ)
+    setClock(MORNING); seedSession()
+    server.slow.job_time_entries = 700
+    c = relaunch(); scaleDeadlines(c)
+    const s = tracking(c)
+    const p = s.tr.load(JOBS.red, PJ, false, { soon: true })
+    while (!s.log.length) await sleep(10)
+    ok('the saved copy within the wait: not started', s.log[0].at < CARD_WAIT + 200 && s.log[0].rows.length === 0, fmt(s.log[0].at))
+    await s.tr.punched(timeEntry('te-in', U, new Date().toISOString()), PJ)
+    ok('her clock-in shows at once', runningIds(s.last()) === 'te-in')
+    await p
+    ok('the live answer from before it never takes it off', s.log.slice(1).every(x => runningIds(x.rows) === 'te-in'),
+      s.log.map(x => `${fmt(x.at)} [${runningIds(x.rows)}]`).join(' → '))
+  },
+
+  // A clock-in that lands live is written into the phone's saved copy, so a
+  // screen opened later on a link too weak to answer shows it. And a reload
+  // after it, falling back to a copy from before it, leaves it on screen.
+  async timerPunchSurvivesTheSavedCopy() {
+    setClock(MORNING); seedServer(); seedSession()
+    let c = load(); scaleDeadlines(c)
+    const s = tracking(c)
+    await s.tr.load(JOBS.red, PJ, false, { soon: true })
+    ok('opened with signal: not started', s.log.length === 1 && s.log[0].rows.length === 0)
+    const e = timeEntry('te-in', U, new Date().toISOString())
+    const w = await c.writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: e })
+    ok('the clock-in lands live', !w.error && !w.queued && server.tables.job_time_entries.some((r: any) => r.id === 'te-in'))
+    await s.tr.punched(e, PJ)
+    ok('on screen at once', runningIds(s.last()) === 'te-in')
+    ok('and in the phone\'s saved copy', runningIds(cachedVal(`time:J-red:${U}`)) === 'te-in', JSON.stringify(cachedVal(`time:J-red:${U}`)))
+
+    // The reload after the punch: the live read hangs, and the copy it falls
+    // back to is from before the punch (an older answer stored late).
+    store.set(`dataCache:time:J-red:${U}`, '[]')
+    server.hang.add('job_time_entries')
+    const n = s.log.length
+    await s.tr.load(JOBS.red, PJ, false)
+    ok('a reload that falls back to an older saved copy never takes the running entry off',
+      s.log.slice(n).every(x => runningIds(x.rows) === 'te-in') && runningIds(s.last()) === 'te-in',
+      s.log.slice(n).map(x => `[${runningIds(x.rows)}]`).join(' → ') || 'no show')
+    server.hang.clear()
+
+    // The arrival auto clock-in (a background task, no screen) saves its
+    // entry the same way.
+    store.set(`dataCache:time:J-red:${U}`, '[]')
+    await c.savePunch(timeEntry('te-auto', U, '2026-10-14T13:58:00Z', null, { source: 'auto' }), U)
+    ok('the arrival auto clock-in is written into the saved copy', runningIds(cachedVal(`time:J-red:${U}`)) === 'te-auto')
+    ok('...and not into a whole-job copy the phone never saved', !cached('time:J-red:job'))
+    await c.savePunch(timeEntry('te-px', V, '2026-10-14T13:59:00Z'), O)
+    ok('a punch desk staff record for a cleaner starts the whole job\'s copy (Complete must close it)',
+      runningIds(cachedVal('time:J-red:job')) === 'te-px' && runningIds(cachedVal(`time:J-red:${O}`)) === '')
+
+    // Opened again later, every request hanging: the saved clock-in.
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const r = tracking(c)
+    await r.tr.load(JOBS.red, PJ, false, { soon: true })
+    ok('reopened on a dead link: the clock-in within the wait', (r.log[0]?.at ?? Infinity) < CARD_WAIT + 400 && runningIds(r.log[0]?.rows) === 'te-auto',
+      `${fmt(r.log[0]?.at)} [${runningIds(r.log[0]?.rows)}]`)
+  },
+
+  // A pause that lands live, then the link dies and the phone's copy is from
+  // before the pause: the clean never shows as running again.
+  async timerPauseNeverRunsAgain() {
+    setClock(MORNING); seedServer(); seedSession()
+    server.tables.job_time_entries.push(timeEntry('te-1', U, '2026-10-14T13:05:00Z'))
+    const c = load(); scaleDeadlines(c)
+    const s = tracking(c)
+    await s.tr.load(JOBS.red, PJ, false, { soon: true })
+    ok('running', runningIds(s.last()) === 'te-1')
+    const paused = { clocked_out_at: new Date().toISOString(), pause_reason: 'Supply run', duration_minutes: 55 }
+    const w = await c.writeThrough({ table: 'job_time_entries', op: 'update', match: { id: 'te-1' }, values: paused })
+    await s.tr.punched({ ...s.last()[0], ...paused }, PJ)
+    ok('paused on screen at once (Resume)', !w.queued && runningIds(s.last()) === '' && s.last()[0]?.pause_reason === 'Supply run')
+    ok('the saved copy says paused too', cachedVal(`time:J-red:${U}`)?.[0]?.clocked_out_at != null)
+    store.set(`dataCache:time:J-red:${U}`, JSON.stringify([timeEntry('te-1', U, '2026-10-14T13:05:00Z')]))
+    server.mode = 'hang'
+    const n = s.log.length
+    await s.tr.load(JOBS.red, PJ, false)
+    ok('a reload that falls back to a copy from before the pause: still paused, never running',
+      s.log.slice(n).every(x => runningIds(x.rows) === '') && s.last()[0]?.pause_reason === 'Supply run',
+      s.log.slice(n).map(x => `[${runningIds(x.rows)}]`).join(' → ') || 'no show')
+  },
+
+  // No signal at all (instant failures): punches queue in the outbox, the
+  // overlay shows them, and once the outbox delivers them the saved copy
+  // still has them (the outbox no longer does).
+  async timerQueuedPunchesOffline() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(PJ)
+    setClock(MORNING)
+    server.mode = 'offline'
+    c = relaunch(); scaleDeadlines(c)
+    const s = tracking(c)
+    await s.tr.load(JOBS.red, PJ, false, { soon: true })
+    ok('offline: the saved copy at once, not started', (s.log[0]?.at ?? Infinity) < 150 && s.log[0].rows.length === 0)
+    const e = timeEntry('te-q', U, new Date().toISOString())
+    const w1 = await c.writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: e })
+    await s.tr.punched(e, PJ)
+    await s.tr.load(JOBS.red, PJ, false)
+    ok('a queued clock-in: running, after the reload too', w1.queued && runningIds(s.last()) === 'te-q')
+    const paused = { clocked_out_at: new Date().toISOString(), pause_reason: 'Break', duration_minutes: 20 }
+    const w2 = await c.writeThrough({ table: 'job_time_entries', op: 'update', match: { id: 'te-q' }, values: paused })
+    await s.tr.punched({ ...e, ...paused }, PJ)
+    await s.tr.load(JOBS.red, PJ, false)
+    ok('a queued pause: paused, after the reload too', w2.queued && runningIds(s.last()) === '' && s.last()[0]?.pause_reason === 'Break')
+    // Signal for a moment: the outbox delivers both. Then nothing again.
+    seedSession(); server.mode = 'online'
+    await c.flushOutbox()
+    ok('delivered', server.tables.job_time_entries.some((r: any) => r.id === 'te-q' && r.pause_reason === 'Break'))
+    seedSession(); server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const r = tracking(c)
+    await r.tr.load(JOBS.red, PJ, false, { soon: true })
+    ok('reopened on a dead link after the outbox delivered: the paused session within the wait (no Clock in)',
+      (r.log[0]?.at ?? Infinity) < CARD_WAIT + 400 && r.log[0].rows.length === 1 && r.log[0].rows[0].pause_reason === 'Break',
+      `${fmt(r.log[0]?.at)} ${JSON.stringify(r.log[0]?.rows?.map((x: any) => x.id))}`)
+  },
+
+  // Desk staff on the whole job's clock. An answer from a load that began
+  // before her punch is merged, not dropped: it keeps her punch, and still
+  // brings what happened elsewhere. Closed beats running, whichever copy says it.
+  async timerOlderAnswerKeepsAClockOut() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.tables.job_time_entries.push(timeEntry('te-proxy', U, '2026-10-14T02:00:00Z'))
+    let c = load()
+    await c.cachedRead(c.reads.timeEntriesRead('J-red', O, true))
+    setClock(MORNING); seedSession()
+    // Nichole clocked out on her own phone this morning.
+    server.tables.job_time_entries.find((e: any) => e.id === 'te-proxy').clocked_out_at = at('2026-10-14T13:30:00Z')
+    server.slow.job_time_entries = 700
+    c = relaunch(); scaleDeadlines(c)
+    const s = tracking(c)
+    const p = s.tr.load(JOBS.red, OWNER, true, { soon: true })
+    while (!s.log.length) await sleep(10)
+    ok('the saved whole-job clock within the wait: Nichole running', s.log[0].at < CARD_WAIT + 200 && runningIds(s.log[0].rows) === 'te-proxy', fmt(s.log[0].at))
+    // She records Ali's start while the live answer is on its way.
+    await s.tr.punched(timeEntry('te-ali', V, new Date().toISOString()), OWNER)
+    await p
+    ok('the late answer keeps her punch and brings Nichole\'s clock-out',
+      runningIds(s.last()) === 'te-ali' && s.last().find((e: any) => e.id === 'te-proxy')?.clocked_out_at != null,
+      s.log.map(x => `${fmt(x.at)} [${runningIds(x.rows)}]`).join(' → '))
+    ok('her proxy punch is in the whole job\'s saved copy', runningIds(cachedVal(`time:J-red:job`)).includes('te-ali'))
+  },
+
+  // Desk staff on a clean they aren't crew on see the whole job's clock: the
+  // entry they recorded for a cleaner has to show, or Complete can't close it.
+  // The screen widens once the crew line says she's not on it; on a dead link
+  // the whole job's saved copy shows within the wait.
+  async timerWholeJobForTheOffice() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.tables.job_time_entries.push(timeEntry('te-proxy', U, '2026-10-14T02:00:00Z', null, { users: { full_name: 'Nichole' } }))
+    let c = load()
+    await c.cachedRead(c.reads.timeEntriesRead('J-red', O, true))
+    await c.cachedRead(c.reads.timeEntriesRead('J-red', O, false))
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const s = tracking(c)
+    void s.tr.load(JOBS.red, OWNER, false, { soon: true })
+    while (!s.log.length) await sleep(10)
+    ok('her own clock first: nothing of hers (within the wait)', s.log[0].rows.length === 0 && s.log[0].at < CARD_WAIT + 400, fmt(s.log[0].at))
+    const from = s.now()
+    void s.tr.load(JOBS.red, OWNER, true)
+    while (s.log.length < 2) await sleep(10)
+    const w = s.log[1]
+    ok('widened: the whole job\'s saved clock within the wait, with the entry she recorded for Nichole',
+      w.at - from < CARD_WAIT + 400 && runningIds(w.rows) === 'te-proxy', `${fmt(w.at - from)} [${runningIds(w.rows)}]`)
+    void s.tr.load(JOBS.red, OWNER, false)
+    while (s.log.length < 3) await sleep(10)
+    ok('narrowed back (she is on the crew after all): her own entries only', s.log[2].rows.every((e: any) => e.user_id === O), `[${s.log[2].rows.map((e: any) => e.id)}]`)
+    // A load overtaken by a newer one shows nothing: its answer may be the
+    // other clock. (Her own clock's read hangs and falls back late; the whole
+    // job's answers meanwhile.)
+    await sleep(READ_DEADLINE)
+    const ownP = s.tr.load(JOBS.red, OWNER, false)
+    await sleep(20)
+    server.mode = 'online'
+    await s.tr.load(JOBS.red, OWNER, true)
+    await ownP
+    ok('an overtaken load\'s late answer never replaces the newer one', runningIds(s.last()) === 'te-proxy', `[${runningIds(s.last())}]`)
+  },
+
+  // ── The office's note, the next arrival, Stop k of M, the video switch ──
+  // (lib/stopInfo) One read deadline each on a dead link; the note gates
+  // Clock in ("Got it").
+  async stopInfoOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.tables.jobs.find((j: any) => j.id === 'J-red').crew_note_at_clock_in = true
+    let c = load()
+    ok('evening: the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const o = openInfo(c, JOBS.red, CREW)
+    const doneAt = await o.done
+    const note = o.first('note'), arr = o.first('nextArrival'), route = o.first('routeStop'), video = o.first('video')
+    ok('the office\'s note (asked for at clock-in) within the wait, not after a read deadline',
+      !!note && note.at < CARD_WAIT + 400 && note.v.crew_note === 'Guest left early — check the patio.' && note.v.crew_note_at_clock_in === true,
+      `${fmt(note?.at)} (deadline ${READ_DEADLINE} ms)`)
+    ok('who arrives next, within the wait', !!arr && arr.at < CARD_WAIT + 400 && arr.v?.kind === 'guest' && arr.v?.name === 'Rivera', `${fmt(arr?.at)} ${JSON.stringify(arr?.v)}`)
+    ok('"Stop 1 of 2", within the wait', !!route && route.at < CARD_WAIT + 400 && route.v?.k === 1 && route.v?.m === 2, `${fmt(route?.at)} ${JSON.stringify(route?.v)}`)
+    ok('the video switch, within the wait', !!video && video.at < CARD_WAIT + 400 && video.v === false, fmt(video?.at))
+    ok('the load ends after one read deadline', doneAt < 2 * READ_DEADLINE, fmt(doneAt))
+    ok('nothing newer once the live reads give up: one show each', ['note', 'nextArrival', 'routeStop', 'video'].every(k => o.shows(k).length === 1),
+      ['note', 'nextArrival', 'routeStop', 'video'].map(k => `${k}:${o.shows(k).length}`).join(' '))
+    const again = openInfo(c, JOBS.red, CREW)
+    await again.done
+    ok('opened again: at once (the last request failed)', (again.first('note')?.at ?? Infinity) < 150, fmt(again.first('note')?.at))
+  },
+
+  // A trickle: the office reworded the note this morning, and the acks are
+  // slow. The saved note shows first, the live one replaces it. A "Got it"
+  // she gives while the answers are on their way is never lost to them (it
+  // would ask her again).
+  async stopInfoTrickleKeepsGotIt() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.tables.jobs.find((j: any) => j.id === 'J-red').crew_note_at_clock_in = true
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    server.tables.jobs.find((j: any) => j.id === 'J-red').crew_note = 'Guest left early — check the patio and the grill.'
+    server.slow.jobs = 700
+    server.slow.job_crew_note_acks = 700
+    c = relaunch(); scaleDeadlines(c)
+    const o = openInfo(c, JOBS.red, CREW)
+    while (!o.first('acks')) await sleep(10)
+    o.info.acknowledged('Guest left early — check the patio.')
+    await o.done
+    const notes = o.shows('note')
+    ok('the saved note within the wait, then the reworded one',
+      notes.length === 2 && notes[0].at < CARD_WAIT + 200 && /patio\.$/.test(notes[0].v.crew_note) && /grill/.test(notes[1].v.crew_note),
+      notes.map(x => `${fmt(x.at)} ${x.v.crew_note}`).join(' → '))
+    ok('the note never shows before the "Got it"s (it would ask again)', o.log.findIndex(e => e.kind === 'acks') < o.log.findIndex(e => e.kind === 'note'))
+    const acks = o.shows('acks')
+    ok('her "Got it" stays through the late answers',
+      acks.at(-1)?.v.includes('Guest left early — check the patio.') && acks.slice(acks.findIndex(a => a.v.includes('Guest left early — check the patio.'))).every(a => a.v.includes('Guest left early — check the patio.')),
+      acks.map(x => `${fmt(x.at)} [${x.v.join('|')}]`).join(' → '))
+  },
+
+  // ── The required-shot counter (lib/requiredPhotoCount) ──────────────────
+  // Its reads were uncached and in two rounds (the company's switch, then
+  // the requirements, the shots and the owed list): offline the counter was
+  // hidden, and on a dead link nothing showed for a read deadline and more.
+  async photoCountOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.rpc.job_required_photo_ids = () => [{ requirement_id: 'rq1' }]
+    let c = load()
+    ok('evening: the pack saves, the company\'s switch with it',
+      (await c.prefetchDays(CREW)).status === 'saved' && cachedVal(`tenphotoreq:${T}`)?.enforce_photo_requirements === true)
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    server.asked = []
+    const k = counting(c)
+    const doneAt = await k.load(JOBS.red, CREW, { soon: true })
+    const first = k.log[0]
+    ok('the counter within the wait: 1 shot, none taken (every required shot counts while the owed list can\'t be asked)',
+      !!first && first.at < CARD_WAIT + 400 && first.c.total === 1 && first.c.done === 0 && first.c.owed === null,
+      `${fmt(first?.at)} ${countStr(first?.c)} (deadline ${READ_DEADLINE} ms)`)
+    const sent = (t: string) => server.asked.find(a => a.table === t)?.at
+    ok('one round: the requirements, shots and owed list go out with the switch (the saved switch says on)',
+      sent('property_photo_requirements') != null && sent('job_photos') != null && sent('rpc/job_required_photo_ids') != null &&
+      Math.abs(sent('property_photo_requirements')! - sent('tenants')!) < 50,
+      server.asked.map(a => a.table).join())
+    ok('the load ends once the reads give up', doneAt < WRITE_DEADLINE + 500, fmt(doneAt))
+  },
+
+  // The owed list (job_required_photo_ids: frozen at clock-in, archived rooms
+  // out) is never taken from a saved copy: an old one could only leave out
+  // shots the clean owes. Until it answers, every required shot counts.
+  async photoCountOwedListNarrows() {
+    setClock(MORNING); seedServer(); seedSession()
+    // The owner archived the kitchen room: this clean owes nothing.
+    server.rpc.job_required_photo_ids = () => []
+    server.slow['rpc/job_required_photo_ids'] = 700
+    const c = load(); scaleDeadlines(c)
+    for (const r of [c.reads.photoEnforceRead(T), c.reads.photoRequirementsRead('A2'), c.reads.requirementShotsRead('J-red')]) await c.cachedRead(r)
+    // With signal: one count, the owed list in it (no flash of every required shot).
+    server.slow = {}
+    server.rpc.job_required_photo_ids = () => [{ requirement_id: 'rq1' }]
+    const k0 = counting(c)
+    await k0.load(JOBS.red, CREW, { soon: true })
+    ok('with signal: one count, with the owed list', k0.log.length === 1 && k0.log[0].c.owed?.size === 1, k0.log.map(x => countStr(x.c)).join(' → '))
+    server.rpc.job_required_photo_ids = () => []
+    server.slow['rpc/job_required_photo_ids'] = 700
+    const k = counting(c)
+    await k.load(JOBS.red, CREW, { soon: true })
+    ok('first every required shot, within the wait; then the owed list: none owed',
+      k.log.length === 2 && k.log[0].at < CARD_WAIT + 200 && k.log[0].c.total === 1 && k.log[0].c.owed === null && k.log[1].c.total === 0 && k.log[1].c.owed?.size === 0,
+      k.log.map(x => `${fmt(x.at)} ${countStr(x.c)}`).join(' → '))
+    ok('the owed list is not kept on the phone', ![...store.keys()].some(key => /job_required_photo_ids|owed/.test(key)))
+
+    // An older database without the function: 404. Every required shot, as before.
+    delete server.rpc.job_required_photo_ids; server.slow = {}
+    const k2 = counting(c)
+    await k2.load(JOBS.red, CREW, { soon: true })
+    ok('no owed list (an older database): every required shot counts', k2.log.at(-1)?.c.total === 1 && k2.log.at(-1)?.c.owed === null,
+      k2.log.map(x => countStr(x.c)).join(' → '))
+
+    // A shot lands: the reload (it waits for the live answer) counts it.
+    server.rpc.job_required_photo_ids = () => [{ requirement_id: 'rq1' }]
+    server.tables.job_photos.push(photoRow('ph1', 'J-red', { photo_requirement_id: 'rq1' }))
+    await k2.load(JOBS.red, CREW)
+    ok('a reload after a shot lands: 1 of 1, owed list from the server', k2.log.at(-1)?.c.total === 1 && k2.log.at(-1)?.c.done === 1 && k2.log.at(-1)?.c.owed?.size === 1,
+      countStr(k2.log.at(-1)?.c))
+
+    // The link dies, and the copy a reload falls back to is from before the
+    // shot: the counter keeps what it shows.
+    store.set('dataCache:pshot:J-red', '[]')
+    server.mode = 'hang'
+    const n = k2.log.length
+    await k2.load(JOBS.red, CREW)
+    ok('a reload on a dead link never steps back to an older copy, nor forgets the owed list', k2.log.slice(n).every(x => x.c.done === 1 && x.c.total === 1 && x.c.owed?.size === 1),
+      k2.log.slice(n).map(x => countStr(x.c)).join(' → ') || 'no show')
+  },
+
+  // A trickle: a shot landed from another phone after the copy was saved,
+  // and the shots are slow: the saved count first, then the live one. And a
+  // company that turned the switch on this morning: no counter at first, then
+  // the count, its requirements asked only once the switch says so.
+  async photoCountTrickle() {
+    setClock(MORNING); seedServer(); seedSession()
+    server.rpc.job_required_photo_ids = () => [{ requirement_id: 'rq1' }]
+    let c = load(); scaleDeadlines(c)
+    for (const r of [c.reads.photoEnforceRead(T), c.reads.photoRequirementsRead('A2'), c.reads.requirementShotsRead('J-red')]) await c.cachedRead(r)
+    server.tables.job_photos.push(photoRow('ph1', 'J-red', { photo_requirement_id: 'rq1' }))
+    server.slow.job_photos = 700
+    c = relaunch(); scaleDeadlines(c)
+    const k = counting(c)
+    await k.load(JOBS.red, CREW, { soon: true })
+    ok('the saved count within the wait, then the live shot', k.log.length === 2 && k.log[0].at < CARD_WAIT + 200 && k.log[0].c.done === 0 && k.log[1].c.done === 1,
+      k.log.map(x => `${fmt(x.at)} ${countStr(x.c)}`).join(' → '))
+    store.set(`dataCache:tenphotoreq:${T}`, JSON.stringify({ enforce_photo_requirements: false }))
+    server.slow = { tenants: 700 }
+    server.asked = []
+    const k2 = counting(c)
+    await k2.load(JOBS.red, CREW, { soon: true })
+    const sent = (t: string) => server.asked.find(a => a.table === t)?.at ?? Infinity
+    ok('switched on this morning: no counter within the wait, then the count',
+      k2.log.length >= 2 && k2.log[0].at < CARD_WAIT + 200 && k2.log[0].c.total === 0 && k2.log.at(-1)?.c.total === 1 && k2.log.at(-1)?.c.done === 1,
+      k2.log.map(x => `${fmt(x.at)} ${countStr(x.c)}`).join(' → '))
+    ok('...its requirements asked only once the switch said on', sent('property_photo_requirements') - sent('tenants') >= 650, `${Math.round(sent('property_photo_requirements') - sent('tenants'))} ms after`)
+  },
+
+  // A company that doesn't hold crews to the shots: no counter, and on a
+  // weak link nothing asked beyond its switch.
+  async photoCountNotEnforcedAsksNothingMore() {
+    setClock(MORNING); seedServer(); seedSession()
+    server.tables.tenants[0].enforce_photo_requirements = false
+    const c = load(); scaleDeadlines(c)
+    await c.cachedRead(c.reads.photoEnforceRead(T))
+    server.asked = []
+    const k = counting(c)
+    await k.load(JOBS.red, CREW, { soon: true })
+    ok('no counter', k.log.length >= 1 && k.log.at(-1)?.c.total === 0, k.log.map(x => countStr(x.c)).join(' → '))
+    ok('...and nothing asked beyond the switch', server.asked.every(a => a.table === 'tenants'), server.asked.map(a => a.table).join())
+  },
+
+  // ── Supplies (lib/suppliesCard) ─────────────────────────────────────────
+  async suppliesOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const o = openSupplies(c, JOBS.red, 'A2')
+    const doneAt = await o.done
+    ok('the spinner gives way within the wait, not after a read deadline', o.offAt() != null && o.offAt()! < CARD_WAIT + 400, `${fmt(o.offAt())} (deadline ${READ_DEADLINE} ms)`)
+    const v = o.log[0]?.v
+    ok('...showing the saved catalog, the office\'s extra linen, and the offline banner',
+      v?.items?.length === 2 && v?.extras?.['inv-towel'] === 2 && v?.offline === true, JSON.stringify({ items: v?.items?.length, extras: v?.extras, offline: v?.offline }))
+    ok('the load ends once the live reads give up, with nothing newer', doneAt < 2 * READ_DEADLINE && o.log.length === 1 && !o.spinnerOn(), `${fmt(doneAt)}, ${o.log.length} show(s)`)
+  },
+
+  // A trickle: a teammate logged towels on this clean this morning. The saved
+  // copy shows first; she flags toilet paper low; then the live rows come.
+  // Her line stays, the teammate's shows, and the save diffs against the live
+  // rows: it adds hers and leaves the teammate's alone.
+  async suppliesLiveAnswerKeepsHerLines() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    server.tables.job_inventory_log.push(logRow('lg-t', 'J-red', 'inv-towel', 'Bath towel', { qty_used: 2 }))
+    server.slow.job_inventory_log = 700
+    c = relaunch(); scaleDeadlines(c)
+    const o = openSupplies(c, JOBS.red, 'A2')
+    while (!o.log.length) await sleep(10)
+    ok('the saved list within the wait (no rows for this clean yet)', o.log[0].at < CARD_WAIT + 200 && Object.keys(o.screen.lines).length === 0, fmt(o.log[0].at))
+    o.edit('inv-tp', { qty_used: 0, qty_remaining: '', needs_restock: true, notes: '' })
+    await o.done
+    ok('the live rows come: the teammate\'s towels show, her toilet paper flag stays',
+      o.log.length === 2 && o.log[1].late === true && o.screen.lines['inv-towel']?.qty_used === 2 && o.screen.lines['inv-tp']?.needs_restock === true,
+      `${o.log.length} show(s) ${JSON.stringify(o.screen.lines)}`)
+    const plan = c.planInventorySave({ tenantId: T, jobId: 'J-red', lines: o.screen.lines, saved: o.screen.saved, catalog: server.tables.address_inventory, minted: {}, newId: () => 'new-1' })
+    const written = plan.upserts.flat()
+    ok('her save adds her line and leaves the teammate\'s row alone (no delete, no rewrite)',
+      plan.deleteIds.length === 0 && written.length === 1 && written[0].inventory_id === 'inv-tp' && written[0].id === 'new-1',
+      JSON.stringify({ del: plan.deleteIds, up: written.map((r: any) => `${r.id}:${r.inventory_id}`) }))
+
+    // She saves before the live answer comes: it may predate the save, so
+    // it isn't shown (the list stays as she saved it).
+    const o2 = openSupplies(c, JOBS.red, 'A2')
+    while (!o2.log.length) await sleep(10)
+    o2.card.saving()
+    await o2.done
+    ok('a save before the live answer: that answer is not shown', o2.log.length === 1, `${o2.log.length} show(s)`)
+  },
+
+  // Whatever goes wrong inside a load, Supplies' and the walkthrough's
+  // spinners go.
+  async spinnersAlwaysClear() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    server.mode = 'offline'
+    // Queued writes with no values (no code path queues one; they stand for
+    // any bug in a load).
+    store.set('writeOutbox', JSON.stringify([
+      { id: 'bad1', table: 'job_inventory_log', op: 'upsert', values: null, created_at: 0 },
+      { id: 'bad2', table: 'job_checklist_items', op: 'upsert', values: null, created_at: 0 },
+    ]))
+    c = relaunch(); scaleDeadlines(c)
+    const settle = (done: Promise<number>) => Promise.race([
+      done.then(() => 'done', (e: any) => `threw: ${e?.message || e}`), sleep(3 * READ_DEADLINE).then(() => 'still loading')])
+    const sp = openSupplies(c, JOBS.red, 'A2')
+    const e1 = await settle(sp.done)
+    ok('Supplies: a load that throws ends, its spinner down', e1 === 'done' && sp.spinner.length > 0 && !sp.spinnerOn(), `${e1} ${JSON.stringify(sp.spinner.map(x => x.on))}`)
+    const w = openWalk(c, JOBS.chapel, { soon: true })
+    const e2 = await settle(w.done)
+    ok('the walkthrough: a load that throws ends, its spinner down', e2 === 'done' && !w.spinnerOn(), `${e2} ${JSON.stringify(w.spinner.map(x => x.on))}`)
+    store.delete('writeOutbox')
+  },
+
+  // ── The walkthrough (lib/walkthroughCard) ───────────────────────────────
+  async walkthroughOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const o = openWalk(c, JOBS.chapel, { soon: true })
+    const doneAt = await o.done
+    ok('the spinner gives way within the wait, not after a read deadline', o.offAt() != null && o.offAt()! < CARD_WAIT + 400, `${fmt(o.offAt())} (deadline ${READ_DEADLINE} ms)`)
+    ok('...showing the saved lines and the trash day', o.log[0]?.v?.lines?.length === 2 && JSON.stringify(o.log[0]?.v?.pickupDays) === '[2]')
+    ok('the load ends after one read deadline, spinner down', doneAt < 2 * READ_DEADLINE && !o.spinnerOn(), fmt(doneAt))
+  },
+
+  // A trickle: Ali answered the windows this morning. Saved lines first, then
+  // his answer. An answer she gives while a live answer is on its way keeps
+  // that answer off the card; a reload on a dead link keeps what's shown.
+  async walkthroughTrickle() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    server.tables.job_checklist_items.find((r: any) => r.id === 'wt1').result = 'ok'
+    server.slow.job_checklist_items = 700
+    c = relaunch(); scaleDeadlines(c)
+    const res = (v: any, id: string) => v?.lines?.find((l: any) => l.id === id)?.result ?? null
+    const o = openWalk(c, JOBS.chapel, { soon: true })
+    await o.done
+    ok('the saved lines within the wait, then Ali\'s answer',
+      o.log.length === 2 && o.log[0].at < CARD_WAIT + 200 && res(o.log[0].v, 'wt1') === null && res(o.log[1].v, 'wt1') === 'ok',
+      o.log.map(x => `${fmt(x.at)} wt1=${res(x.v, 'wt1')}`).join(' → '))
+    const o2 = openWalk(c, JOBS.chapel, { soon: true })
+    while (!o2.log.length) await sleep(10)
+    o2.card.edited()
+    await o2.done
+    ok('a late answer never overwrites an answer she gave since the load began', o2.log.length === 1, `${o2.log.length} show(s)`)
+    // Back from the photo screen as the link dies; the phone's copy is older.
+    server.mode = 'hang'
+    store.set('dataCache:wtlines:J-chapel', JSON.stringify(cachedVal('wtlines:J-chapel').map((l: any) => ({ ...l, result: null }))))
+    const n = o2.log.length
+    await o2.card.load(JOBS.chapel)
+    ok('a reload on a dead link never steps back to the saved copy', o2.log.length === n && !o2.spinnerOn(), `${o2.log.length - n} show(s)`)
+  },
+
 }
 
 // ── The checklist card (lib/checklistCard), as JobDetailScreen mounts it ─────
 // Deadlines scaled 10:1 so a scenario takes seconds: a read gives up after
 // 1.5 s (the app: 15 s) and the card waits 0.3 s for a live answer (3 s).
 const READ_DEADLINE = 1500
+/** Writes, RPCs (the app: 30 s). */
+const WRITE_DEADLINE = 3000
 const CARD_WAIT = 300
 const DEFAULTS = [{ id: '1', room: 'Kitchen', title: 'General clean' }, { id: '2', room: 'Bathroom', title: 'General clean' }]
 const fmt = (ms: number | null | undefined) => (ms == null ? 'never' : `${Math.round(ms)} ms`)
 
 function scaleDeadlines(c: any) {
   c.NET_TIMEOUTS.read = READ_DEADLINE
+  c.NET_TIMEOUTS.write = WRITE_DEADLINE
   c.CHECKLIST_WAIT.ms = CARD_WAIT
   c.STOP_DETAILS_WAIT.ms = CARD_WAIT
   c.CHECK_FIRST_WAIT.ms = CARD_WAIT
+  c.TIME_TRACKER_WAIT.ms = CARD_WAIT
+  c.STOP_INFO_WAIT.ms = CARD_WAIT
+  c.PHOTO_COUNT_WAIT.ms = CARD_WAIT
+  c.SUPPLIES_WAIT.ms = CARD_WAIT
+  c.WALKTHROUGH_WAIT.ms = CARD_WAIT
 }
 
 /** Open the stop's screen: a new card, its first load, every show and every
@@ -969,6 +1543,97 @@ function openCheckFirst(c: any, job: any, opts: { soon?: boolean } = {}) {
   const card = c.checkFirstCard({ show: (v: any) => { log.push({ at: performance.now() - t0, v }) } })
   const first: Promise<any> = card.load(job, CREW, opts)
   return { card, log, first }
+}
+
+// ── The time tracker, the stop's info, the counter, Supplies, the walkthrough ──
+const runningIds = (rows: any) => (Array.isArray(rows) ? rows : []).filter((e: any) => !e.clocked_out_at).map((e: any) => e.id).join()
+const countStr = (x: any) => (x ? `${x.done}/${x.total} owed=${x.owed ? [...x.owed].join('|') || '∅' : 'null'}` : 'none')
+
+function timeEntry(id: string, user: string, inAt: string, outAt: string | null = null, extra: any = {}) {
+  return {
+    id, tenant_id: T, job_id: 'J-red', user_id: user, clocked_in_at: at(inAt), clocked_out_at: outAt,
+    pause_reason: null, duration_minutes: null, entry_type: 'work', source: 'manual',
+    users: { full_name: NAMES[user] }, ...extra,
+  }
+}
+function photoRow(id: string, job: string, extra: any = {}) {
+  return { id, job_id: job, caption: null, checklist_item_id: null, photo_requirement_id: null, check_first_line_id: null,
+    photo_url: `https://example.com/${id}.jpg`, created_at: new Date().toISOString(), ...extra }
+}
+function logRow(id: string, job: string, inv: string, name: string, extra: any = {}) {
+  return { id, job_id: job, inventory_id: inv, item_name: name, qty_used: 0, qty_remaining: null, needs_restock: false,
+    notes: null, incident_id: null, restocked_at: null, client_notified_at: null, created_at: new Date().toISOString(),
+    jobs: { address_id: 'A2' }, ...extra }
+}
+
+/** The screen's tracker: every show, timed from when it was made. */
+function tracking(c: any) {
+  const t0 = performance.now()
+  const log: { at: number; rows: any[] }[] = []
+  const tr = c.timeTracker({ show: (rows: any[]) => { log.push({ at: performance.now() - t0, rows }) } })
+  return { tr, log, now: () => performance.now() - t0, last: () => log[log.length - 1]?.rows ?? [] }
+}
+
+function openInfo(c: any, job: any, user: any) {
+  const t0 = performance.now()
+  const log: { kind: string; at: number; v: any }[] = []
+  const at = () => performance.now() - t0
+  const ui: any = {}
+  for (const k of ['note', 'acks', 'nextArrival', 'routeStop', 'video']) ui[k] = (v: any) => { log.push({ kind: k, at: at(), v }) }
+  const info = c.stopInfo(ui)
+  const done: Promise<number> = info.load(job, user).then(() => at())
+  return { info, log, done, first: (k: string) => log.find(e => e.kind === k), shows: (k: string) => log.filter(e => e.kind === k) }
+}
+
+function counting(c: any) {
+  const t0 = performance.now()
+  const log: { at: number; c: any }[] = []
+  const counter = c.requiredPhotoCount({ show: (x: any) => { log.push({ at: performance.now() - t0, c: x }) } })
+  return {
+    counter, log,
+    load: (job: any, user: any, opts: any = {}) => { const from = performance.now(); return counter.load(job, user, opts).then(() => performance.now() - from) },
+  }
+}
+
+/** The Supplies screen: its lines and baseline as JobInventoryScreen keeps them. */
+function openSupplies(c: any, job: any, addrId: string) {
+  const t0 = performance.now()
+  const at = () => performance.now() - t0
+  const log: { at: number; v: any; late: boolean }[] = []
+  const spinner: { at: number; on: boolean }[] = []
+  const screen = { lines: {} as Record<string, any>, saved: {} as Record<string, any>, edited: new Set<string>() }
+  const card = c.suppliesCard({
+    show: (v: any, late: boolean) => {
+      log.push({ at: at(), v, late })
+      screen.saved = v.saved
+      if (late) { screen.lines = c.rebaseLines(v.lines, screen.lines, screen.edited); return }
+      screen.edited = new Set()
+      screen.lines = v.lines
+    },
+    setLoading: (on: boolean) => { spinner.push({ at: at(), on }) },
+  })
+  const done: Promise<number> = card.load(job, addrId).then(() => at())
+  return {
+    card, log, spinner, screen, done,
+    edit: (inv: string, line: any) => { screen.edited.add(inv); screen.lines = { ...screen.lines, [inv]: line } },
+    offAt: () => spinner.find(s => !s.on)?.at ?? null,
+    spinnerOn: () => spinner.at(-1)?.on ?? true,
+  }
+}
+
+/** The walkthrough card (its spinner starts on, as WalkthroughChecklist's does). */
+function openWalk(c: any, job: any, opts: { soon?: boolean } = {}) {
+  const t0 = performance.now()
+  const at = () => performance.now() - t0
+  const log: { at: number; v: any }[] = []
+  const spinner: { at: number; on: boolean }[] = []
+  const card = c.walkthroughCard({ show: (v: any) => { log.push({ at: at(), v }) }, setLoading: (on: boolean) => { spinner.push({ at: at(), on }) } })
+  const done: Promise<number> = card.load(job, opts).then(() => at())
+  return {
+    card, log, spinner, done,
+    offAt: () => spinner.find(s => !s.on)?.at ?? null,
+    spinnerOn: () => spinner.at(-1)?.on ?? true,
+  }
 }
 
 let finished = false

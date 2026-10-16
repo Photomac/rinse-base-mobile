@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { cachedRead } from '../lib/dataCache'
-// Shared with the offline day pack, which saves exactly these reads ahead of time.
-import { inventoryItemsRead, inventoryLogRead, inventoryRoomsRead, linenExtrasRead } from '../lib/jobReads'
-import { writeThrough, overlayPending, uuid4 } from '../lib/outbox'
-import { planInventorySave, readLogRows, type InventoryLine, type LogRowRead, type SavedLogRow } from '../lib/inventoryLogSave'
+import { writeThrough, uuid4 } from '../lib/outbox'
+import { planInventorySave, type InventoryLine, type SavedLogRow } from '../lib/inventoryLogSave'
+// The screen's reads (the shared builders the offline day pack saves), and
+// how soon the saved copy shows on a weak signal.
+import { suppliesCard, rebaseLines, type SuppliesView } from '../lib/suppliesCard'
 import { inventorySaveWrites } from '../lib/inventoryLogOutbox'
 import { useLang } from '../contexts/LangContext'
 import { tv } from '../lib/vocab'
@@ -68,36 +68,29 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   const [saved, setSaved] = useState(false)
   // inventory_id → delta against par for this turnover (turnover_linen_extras).
   const [extras, setExtras] = useState<Record<string, number>>({})
+  // Lines the crew changed since the list loaded: a live answer that comes in
+  // after the saved copy keeps them (lib/suppliesCard rebaseLines).
+  const editedRef = useRef<Set<string>>(new Set())
+  const [card] = useState(() => suppliesCard({ show, setLoading }))
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { card.load(job, addrId).catch(() => {}) }, [])
 
-  async function load() {
-    setLoading(true)
-    // Reads go through cachedRead like the rest of the job: with no signal the
-    // screen shows the last copy this phone saw instead of "no supplies".
-    const [invRes, logRes, roomsRes, extraRes] = await Promise.all([
-      cachedRead(inventoryItemsRead(addrId)),
-      cachedRead(inventoryLogRead(job.id)),
-      cachedRead(inventoryRoomsRead(addrId)),
-      // Extra linen the office added for THIS booking on the Linen Pull Sheet —
-      // e.g. a 14-guest group in a house whose par is 10 bath towels. Without
-      // this the phone would say "6/6 packed" on a turnover the office says
-      // needs four more, and the crew would leave short.
-      cachedRead(linenExtrasRead(job.id)),
-    ])
-    setOffline(invRes.fromCache || logRes.fromCache)
-    setItems((invRes.data ?? []) as Item[])
-    setRooms((roomsRes.data ?? []) as any[])
-    setExtras(Object.fromEntries(
-      ((extraRes.data ?? []) as any[]).map(x => [x.inventory_id, x.extra_qty])
-    ))
-    // A save still waiting in the outbox shows as saved, not as the old rows.
-    const logRows = await overlayPending('job_inventory_log', (logRes.data ?? []) as any[], v => v.job_id === job.id)
-    const { lines, saved } = readLogRows(logRows as LogRowRead[])
-    savedRef.current = saved
+  // `late`: the live answer, after the saved copy showed. Everything but the
+  // lines is replaced; the lines the crew changed since are kept, the rest
+  // and the baseline the save diffs against are the live ones.
+  function show(v: SuppliesView, late: boolean) {
+    setOffline(v.offline)
+    setItems(v.items as Item[])
+    setRooms(v.rooms)
+    setExtras(v.extras)
+    savedRef.current = v.saved
+    if (late) {
+      setLog(prev => rebaseLines(v.lines, prev, editedRef.current))
+      return
+    }
     mintedRef.current = {}
-    setLog(lines)
-    setLoading(false)
+    editedRef.current = new Set()
+    setLog(v.lines)
   }
 
   function ensureRow(id: string) {
@@ -108,6 +101,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   function setQty(id: string, delta: number) {
     const row = ensureRow(id)
     const nextQty = Math.max(0, row.qty_used + delta)
+    editedRef.current.add(id)
     setLog(prev => ({ ...prev, [id]: { ...row, qty_used: nextQty } }))
   }
 
@@ -115,16 +109,19 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
     // Numeric only, allow empty (= unrecorded). The DB trigger handles
     // auto-flagging restock when this value drops below par_level.
     const cleaned = raw.replace(/[^0-9]/g, '')
+    editedRef.current.add(id)
     setLog(prev => ({ ...prev, [id]: { ...ensureRow(id), qty_remaining: cleaned } }))
   }
 
   function toggleLow(id: string) {
     const row = ensureRow(id)
+    editedRef.current.add(id)
     setLog(prev => ({ ...prev, [id]: { ...row, needs_restock: !row.needs_restock } }))
   }
 
   function setNotes(id: string, notes: string) {
     const row = ensureRow(id)
+    editedRef.current.add(id)
     setLog(prev => ({ ...prev, [id]: { ...row, notes } }))
   }
 
@@ -141,6 +138,8 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
 
   async function save() {
     setSaving(true)
+    // From here the list's own answer may predate what this save writes.
+    card.saving()
     // Save the list without replacing it, as the web Inventory tab does (the
     // plan and why are in lib/inventoryLogSave). Rows keep their ids: changed
     // lines are updated in place, new ones inserted under ids minted here,
