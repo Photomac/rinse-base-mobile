@@ -61,12 +61,13 @@ export type SoonRead<T = any> = ReadResult<T> & { late: Promise<ReadResult<T>> |
  * On a link that swallows requests, cachedRead() only falls back to the saved
  * copy when the read deadline runs out (15 s, netFetch.ts). This waits at most
  * `waitMs` for the live answer, then answers with the saved copy and hands
- * the live answer over in `late`. With nothing saved it waits for the live
- * answer, as cachedRead() does.
+ * the live answer over in `late`. With nothing saved, or `waitMs` Infinity,
+ * it waits for the live answer, as cachedRead() does.
  */
 export async function readSoon<T = any>(r: CacheRead, waitMs: number): Promise<SoonRead<T>> {
   const live: Promise<ReadResult<T>> = cachedRead<T>(r)
     .catch(error => ({ data: null, error, fromCache: false }))
+  if (waitMs === Infinity) return { ...(await live), late: null }
   let timer: any
   const inTime = await Promise.race([
     live,

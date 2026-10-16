@@ -106,11 +106,20 @@ ok('the card is the first thing on the screen: above the office\'s note and the 
   card > 0 && card < detail.indexOf('<CrewNoteBanner note={crewNoteShown}') && card < detail.indexOf('{/* Property photo'))
 ok('…shown before and after Start (not behind isStarted), cleans only',
   /\{!!checkFirst && !isTask && \(\s*<View onLayout=\{e => \{ cfY\.current = e\.nativeEvent\.layout\.y \}\}>\s*<CheckFirstCard/.test(detail))
+// The card's reads live in lib/checkFirstCard (the screen loads through it).
+const cfCard = src('lib/checkFirstCard.ts')
 ok('its reads are the shared builders (the offline day pack saves them)',
   ['checkFirstLinesRead(addrId)', 'checkFirstTenantRead(user.tenant_id)', 'checkFirstTicksRead(job.id)', 'checkFirstPhotosRead(job.id)', 'checkFirstStartRead(job.id)']
-    .every(r => detail.includes(`cachedRead(${r})`)))
-ok('ticks queued offline show as ticked', detail.includes("overlayPending('job_check_first_ticks'"))
-ok('a line photo still on the phone counts as taken', /queuedJobPhotos\(job\.id\)/.test(between(detail, 'async function loadCheckFirst(', '\n  }\n')) && detail.includes('q.check_first_line_id'))
+    .every(r => cfCard.includes(`readSoon(${r}`)) &&
+  /return cfCard\.load\(job, user, opts\)/.test(between(detail, 'function loadCheckFirst(', '\n  }\n')))
+ok('only the screen opening shows the saved copy first; every other load waits for the live answer',
+  (detail.match(/loadCheckFirst\(\{ soon: true \}\)/g) || []).length === 1 &&
+  /loadCheckFirst\(\{ soon: true \}\)/.test(between(detail, 'flushOutbox().catch(() => {})', '}, [])')))
+ok('a tick or a line photo keeps an earlier load\'s late answer off the card',
+  [between(detail, 'async function writeCheckFirstTick(', '\n  }\n'), between(detail, 'async function shootCheckFirst(', '\n  }\n')]
+    .every(f => f.indexOf('cfCard.edited()') > 0 && f.indexOf('cfCard.edited()') < f.indexOf('setCheckFirst(')))
+ok('ticks queued offline show as ticked', cfCard.includes("overlayPending('job_check_first_ticks'"))
+ok('a line photo still on the phone counts as taken', /queuedJobPhotos\(job\.id\)/.test(between(cfCard, 'async function viewOf(', '\n}\n')) && cfCard.includes('q.check_first_line_id'))
 ok('a tick goes through the outbox (FIFO, ahead of a queued Complete), insert-only and idempotent',
   detail.includes("table: 'job_check_first_ticks', op: 'upsert', onConflict: TICK_CONFLICT, ignoreDuplicates: true"))
 ok('so does "seen"', detail.includes("table: 'job_check_first_seen', op: 'upsert', onConflict: SEEN_CONFLICT, ignoreDuplicates: true"))

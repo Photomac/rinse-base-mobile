@@ -177,6 +177,8 @@ const server = {
   /** Go offline after this many REST answers (signal lost mid-run). */
   failAfter: null as number | null,
   other: [] as string[],
+  /** Every REST request sent, answered or not, and when (performance.now()). */
+  asked: [] as { table: string; params: URLSearchParams; at: number }[],
 }
 
 function splitTop(s: string): string[] {
@@ -271,6 +273,7 @@ const noAnswer = (init: any) => new Promise<Response>((_, reject) => {
 ;(globalThis as any).fetch = async (input: any, init: any = {}) => {
   const url = new URL(typeof input === 'string' ? input : input.url)
   if (server.mode === 'offline') throw new TypeError('Network request failed')
+  if (url.pathname.startsWith('/rest/v1/')) server.asked.push({ table: url.pathname.slice('/rest/v1/'.length), params: url.searchParams, at: performance.now() })
   if (server.mode === 'hang') return noAnswer(init)
   if (server.hang.has(url.pathname.slice('/rest/v1/'.length))) return noAnswer(init)
   const date = new Date().toUTCString()
@@ -676,6 +679,231 @@ const scenarios: Record<string, () => Promise<void>> = {
       `${o2.log.shows.length} show(s)`)
     store.delete('writeOutbox')
   },
+
+  // A reload of the checklist (the realtime echo of her own tick, back from
+  // Photos) on a slow link: the saved copy predates the tick she just made,
+  // which went through live. It must not take the tick off the card while the
+  // live answer is on its way, nor for good if that never comes.
+  async checklistReloadKeepsLiveTick() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    c = relaunch(); scaleDeadlines(c)
+    const o = open(c, JOBS.red, 'A2')
+    await o.done
+    ok('opened with signal: Make beds not ticked yet', o.log.shows.length === 1 && o.log.shows[0].v.checked.ci3 !== true)
+    o.card.edited()
+    server.tables.job_checklist_items.find((r: any) => r.id === 'ci3').completed = true
+    server.slow.job_checklist_items = 700
+    o.log.shows.length = 0; o.log.spinner.length = 0
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('the echo of her tick: never shown undone, and the live rows come', o.log.shows.length === 1 && o.log.shows[0].v.checked.ci3 === true,
+      o.log.shows.map(x => `${fmt(x.at)} ci3=${!!x.v.checked.ci3}`).join(' → '))
+
+    // Back from Photos as the link dies: nothing live comes. The card keeps
+    // the tick (it holds what went through), and the spinner still goes.
+    server.mode = 'hang'
+    store.set('dataCache:chkrows:J-red', JSON.stringify(cachedVal('chkrows:J-red').map((r: any) => ({ ...r, completed: false }))))
+    o.log.shows.length = 0; o.log.spinner.length = 0
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS)
+    ok('back from Photos on a dead link: the card is left as it was (no older copy shown)', o.log.shows.length === 0, `${o.log.shows.length} show(s)`)
+    const up = o.log.spinner.find(x => x.on)?.at ?? NaN, down = o.offAt() ?? Infinity
+    ok('...and the spinner is down within the wait', !o.spinnerOn() && down - up < CARD_WAIT + 200, fmt(down - up))
+  },
+
+  // The rest of the stop's screen on the same dead link: the job's extras,
+  // who is on it, and the property's notes (lib/stopDetails). These were read
+  // one after another, a read deadline each: the arrival instructions came
+  // three deadlines after the screen opened.
+  async stopDetailsOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    ok('evening: the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const d = openDetails(c, JOBS.red)
+    const doneAt = await d.done
+    const prop = d.first('property'), job = d.first('job'), crew = d.first('crew'), roster = d.first('roster')
+    ok('the property (arrival instructions, crew notes, bag colour) shows within the wait, not after three read deadlines',
+      !!prop && prop.at < CARD_WAIT + 400 && prop.v.arrival_instructions === ADDR.A2.arrival_instructions && prop.v.laundry_bag_color === 'Blue bags',
+      `${fmt(prop?.at)} (deadline ${READ_DEADLINE} ms)`)
+    ok('the job\'s extras (guests on the booking) show within the wait', !!job && job.at < CARD_WAIT + 400 && job.v.property_reservations?.guest_count === 4, fmt(job?.at))
+    ok('the crew line shows within the wait', !!crew && crew.at < CARD_WAIT + 400 && names(crew.v) === 'Nichole', `${fmt(crew?.at)} ${names(crew?.v)}`)
+    ok('Clock in: the saved roster is handed over once the live read has given up (as before), marked saved',
+      d.shows('roster').length === 1 && !!roster && roster.at >= READ_DEADLINE - 50 && roster.v.live === false && roster.v.ids.join() === U,
+      `${fmt(roster?.at)} ${JSON.stringify(roster?.v)}`)
+    ok('...and it leaves her Clock in', !!roster && !c.notAssignedHere(JOBS.red, U, { office: false, roster: roster.v }))
+    ok('the load ends after one read deadline, not three', doneAt < 2 * READ_DEADLINE, fmt(doneAt))
+
+    // Opened again: the last request failed, so nothing waits for a live answer.
+    const again = openDetails(c, JOBS.red)
+    await again.done
+    ok('opened again: the property at once', (again.first('property')?.at ?? Infinity) < 150, fmt(again.first('property')?.at))
+  },
+
+  // A trickle: all three reads are slow, past the wait but inside the read
+  // deadline. The saved copies show within the wait; the live answers
+  // replace them.
+  async stopDetailsOnATrickle() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    // This morning the office put Ali on the clean too and changed the gate
+    // code in the arrival instructions, and somebody marked the laundry done
+    // on site.
+    server.tables.job_assignments.push({ job_id: 'J-red', user_id: V, is_lead: false, users: { id: V, full_name: 'Ali' } })
+    server.tables.client_addresses.find((a: any) => a.id === 'A2').arrival_instructions = 'Side gate, gate code 3344.'
+    server.tables.jobs.find((j: any) => j.id === 'J-red').laundry_done_onsite = true
+    server.slow.job_assignments = 700  // past the wait, inside the deadline
+    server.slow.jobs = 700
+    server.slow.client_addresses = 700
+    c = relaunch(); scaleDeadlines(c)
+    const d = openDetails(c, JOBS.red)
+    await d.done
+    const crews = d.shows('crew'), rosters = d.shows('roster'), jobs = d.shows('job'), props = d.shows('property')
+    ok('the crew line: the saved copy within the wait, then the live one with Ali',
+      crews.length === 2 && crews[0].at < CARD_WAIT + 200 && names(crews[0].v) === 'Nichole' && names(crews[1].v) === 'Nichole,Ali',
+      crews.map(x => `${fmt(x.at)} ${names(x.v)}`).join(' → '))
+    ok('Clock in: one roster, the live one (never the saved copy first)',
+      rosters.length === 1 && rosters[0].v.live === true && rosters[0].v.ids.join() === `${U},${V}` && rosters[0].at >= 700,
+      rosters.map(x => `${fmt(x.at)} ${JSON.stringify(x.v)}`).join(' → '))
+    ok('the job\'s extras: saved, then live (laundry now done on site)',
+      jobs.length === 2 && jobs[0].at < CARD_WAIT + 200 && jobs[0].v.laundry_done_onsite === false && jobs[1].v.laundry_done_onsite === true && jobs[1].flags === true,
+      jobs.map(x => `${fmt(x.at)} laundry=${x.v.laundry_done_onsite} flags=${x.flags}`).join(' → '))
+    ok('the property: the saved notes within the wait, then the new gate code',
+      props.length === 2 && props[0].at < CARD_WAIT + 200 && props[0].v.arrival_instructions === ADDR.A2.arrival_instructions && props[1].v.arrival_instructions === 'Side gate, gate code 3344.',
+      props.map(x => `${fmt(x.at)} ${x.v.arrival_instructions}`).join(' → '))
+
+    // She taps "laundry done on site" while the job's live answer is still on
+    // its way: that answer may predate her tap, so it must leave the flags alone.
+    const d2 = openDetails(c, JOBS.red)
+    while (!d2.first('job')) await sleep(10)
+    d2.details.flagEdited()
+    await d2.done
+    const j2 = d2.shows('job')
+    ok('a late answer never overwrites a flag she changed since the load began',
+      j2.length === 2 && j2[0].flags === true && j2[1].flags === false,
+      j2.map(x => `flags=${x.flags}`).join(' → '))
+  },
+
+  // jobScope.notAssignedHere: a SAVED roster says "not on it" only when the
+  // job's own assignments agree, and a live one decides. Here both the saved
+  // roster and the job row she opened are from before she was added (she saw
+  // the clean on the open job board last night, then took it). A saved roster
+  // handed over ahead of the live one would take her Clock in away until the
+  // live answer came, or for good if it never did.
+  async stopDetailsSavedRosterKeepsClockIn() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.tables.job_assignments = server.tables.job_assignments.filter((a: any) => a.job_id !== 'J-red')
+      .concat({ job_id: 'J-red', user_id: V, is_lead: true, users: { id: V, full_name: 'Ali' } })
+    let c = load()
+    await c.cachedRead(c.reads.jobCrewRead('J-red'))
+    ok('evening: the phone saved J-red\'s crew without her', cachedVal('crew:J-red').map((a: any) => a.user_id).join() === V)
+
+    setClock(MORNING); seedSession()
+    server.tables.job_assignments.push({ job_id: 'J-red', user_id: U, is_lead: false, users: { id: U, full_name: 'Nichole' } })
+    server.slow.job_assignments = 700
+    c = relaunch(); scaleDeadlines(c)
+    const stale = { ...JOBS.red, job_assignments: [{ user_id: V }] }
+    const d = openDetails(c, stale)
+    await d.done
+    const hidden = d.shows('roster').filter(r => c.notAssignedHere(stale, U, { office: false, roster: r.v }))
+    ok('no roster ever takes her Clock in away', hidden.length === 0, d.shows('roster').map(r => `${fmt(r.at)} ${JSON.stringify(r.v)}`).join(' → '))
+    ok('...the live roster, with her, is the one handed over', d.shows('roster').length === 1 && d.shows('roster')[0].v.live === true && d.shows('roster')[0].v.ids.includes(U))
+    ok('...while the crew line showed the saved names at once', names(d.first('crew')?.v) === 'Ali' && (d.first('crew')?.at ?? Infinity) < CARD_WAIT + 200)
+
+    // The live read never answers: the saved roster becomes final once the
+    // read gives up, as it always did, and only then can it count (and here
+    // it does: her job row lacks her too). The live answer above replaced the
+    // saved copy, so put last night's back.
+    store.set('dataCache:crew:J-red', JSON.stringify([{ user_id: V, is_lead: true, users: { id: V, full_name: 'Ali' } }]))
+    server.slow = {}
+    server.hang.add('job_assignments')
+    const d2 = openDetails(c, stale)
+    await d2.done
+    const r2 = d2.shows('roster')
+    ok('no answer at all: the saved roster only once the read gives up', r2.length === 1 && r2[0].at >= READ_DEADLINE - 50 && r2[0].v.live === false && r2[0].v.ids.join() === V,
+      r2.map(r => `${fmt(r.at)} ${JSON.stringify(r.v)}`).join(' → '))
+    server.hang.clear()
+  },
+
+  // The Check first card on the same dead link (lib/checkFirstCard): the
+  // property's lines and the company's switch, then the clean's ticks, line
+  // photos and start, used to be two rounds of a read deadline each.
+  async checkFirstOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    ok('evening: the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    server.asked = []
+    const o = openCheckFirst(c, JOBS.red, { soon: true })
+    await o.first
+    const v = o.log[0]?.v
+    ok('the card shows within the wait, not after two read deadlines', (o.log[0]?.at ?? Infinity) < CARD_WAIT + 400, `${fmt(o.log[0]?.at)} (deadline ${READ_DEADLINE} ms)`)
+    ok('...the saved lines, the plants ticked, the company\'s switch on',
+      (v?.lines || []).map((l: any) => l.id).join() === 'cf1,cf2' && (v?.ticks || []).map((k: any) => k.line_id).join() === 'cf1' && v?.required === true,
+      JSON.stringify({ lines: (v?.lines || []).map((l: any) => l.id), ticks: (v?.ticks || []).map((k: any) => k.line_id), required: v?.required }))
+    const sent = (t: string) => server.asked.find(a => a.table === t)?.at
+    ok('the clean\'s reads went out with the lines (the saved copy says the property has some)',
+      sent('job_check_first_ticks') != null && sent('property_check_first_lines') != null && sent('job_check_first_ticks')! - sent('property_check_first_lines')! < 50)
+    await sleep(READ_DEADLINE + 300)
+    ok('the live reads give up: nothing newer, one show', o.log.length === 1, `${o.log.length} show(s)`)
+
+    // A property with no lines (most of them): no card, and the clean's own
+    // reads never go out.
+    server.asked = []
+    const n = openCheckFirst(c, JOBS.late, { soon: true })
+    await n.first
+    ok('no lines: no card, at once (the last request failed)', o.log.length > 0 && n.log[0]?.v === null && (n.log[0]?.at ?? Infinity) < 150, fmt(n.log[0]?.at))
+    ok('...and nothing asked for the clean\'s ticks, photos or start',
+      !server.asked.some(a => ['job_check_first_ticks', 'job_photos', 'jobs'].includes(a.table)), server.asked.map(a => a.table).join())
+  },
+
+  // A trickle: a teammate ticked the spa photo line this morning and the
+  // ticks are slow. The saved card shows within the wait and the live ticks
+  // refresh it; her own tick in between keeps the late answer off the card.
+  // A load after a tick (or at Complete) waits for the live answer.
+  async checkFirstOnATrickle() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    server.tables.job_check_first_ticks.push({ id: 'tk2', tenant_id: T, job_id: 'J-red', line_id: 'cf2', user_id: V, line_text: 'Spa photo', ticked_at: at('2026-10-14T13:30:00Z'), created_at: at('2026-10-14T13:30:00Z'), users: { full_name: 'Ali' } })
+    server.slow.job_check_first_ticks = 700
+    c = relaunch(); scaleDeadlines(c)
+    const o = openCheckFirst(c, JOBS.red, { soon: true })
+    await sleep(700 + 400)
+    const ticks = (x: any) => (x?.v?.ticks || []).map((k: any) => k.line_id).join()
+    ok('saved card within the wait, then the live ticks with the teammate\'s',
+      o.log.length === 2 && o.log[0].at < CARD_WAIT + 200 && ticks(o.log[0]) === 'cf1' && ticks(o.log[1]) === 'cf1,cf2',
+      o.log.map(x => `${fmt(x.at)} ${ticks(x)}`).join(' → '))
+
+    const o2 = openCheckFirst(c, JOBS.red, { soon: true })
+    await o2.first
+    o2.card.edited()
+    await sleep(700 + 400)
+    ok('a late answer never overwrites a tick made since the load began', o2.log.length === 1, `${o2.log.length} show(s)`)
+
+    const o3 = openCheckFirst(c, JOBS.red)
+    const v3 = await o3.first
+    ok('a load after a tick waits for the live answer', ticks({ v: v3 }) === 'cf1,cf2' && o3.log.length === 1 && o3.log[0].at >= 700, fmt(o3.log[0]?.at))
+
+    // Uptown had no lines when the pack saved; the office adds one this
+    // morning and the lines are slow: no card at first, then the line.
+    server.tables.property_check_first_lines.push({ id: 'cf9', tenant_id: T, address_id: 'A1', body: 'Lock the side gate', photo_required: false, sort_order: 1, created_at: at('2026-10-14T13:00:00Z'), updated_at: at('2026-10-14T13:00:00Z'), archived_at: null })
+    server.slow = { property_check_first_lines: 700 }
+    const u = openCheckFirst(c, JOBS.late, { soon: true })
+    await sleep(700 + 400)
+    ok('a property with no saved lines: no card within the wait, then the new line',
+      u.log.length === 2 && u.log[0].v === null && u.log[0].at < CARD_WAIT + 200 && (u.log[1].v?.lines || []).map((l: any) => l.id).join() === 'cf9',
+      u.log.map(x => `${fmt(x.at)} ${(x.v?.lines || []).map((l: any) => l.id).join() || 'none'}`).join(' → '))
+  },
 }
 
 // ── The checklist card (lib/checklistCard), as JobDetailScreen mounts it ─────
@@ -689,6 +917,8 @@ const fmt = (ms: number | null | undefined) => (ms == null ? 'never' : `${Math.r
 function scaleDeadlines(c: any) {
   c.NET_TIMEOUTS.read = READ_DEADLINE
   c.CHECKLIST_WAIT.ms = CARD_WAIT
+  c.STOP_DETAILS_WAIT.ms = CARD_WAIT
+  c.CHECK_FIRST_WAIT.ms = CARD_WAIT
 }
 
 /** Open the stop's screen: a new card, its first load, every show and every
@@ -707,6 +937,38 @@ function open(c: any, job: any, addressId: string | null) {
     offAt: () => log.spinner.find(s => !s.on)?.at ?? null,
     spinnerOn: () => log.spinner.length > 0 && log.spinner[log.spinner.length - 1].on,
   }
+}
+
+// ── The stop's details (lib/stopDetails) and Check first card (lib/checkFirstCard) ──
+const names = (rows: any) => (Array.isArray(rows) ? rows.map((a: any) => a.users?.full_name).join() : '')
+
+/** The details' first load, as JobDetailScreen starts it on opening: every
+ *  hand-over timed from the open. */
+function openDetails(c: any, job: any) {
+  const t0 = performance.now()
+  const log: { kind: string; at: number; v: any; flags?: boolean }[] = []
+  const at = () => performance.now() - t0
+  const details = c.stopDetails({
+    job: (v: any, flags: boolean) => { log.push({ kind: 'job', at: at(), v, flags }) },
+    crew: (v: any) => { log.push({ kind: 'crew', at: at(), v }) },
+    roster: (v: any) => { log.push({ kind: 'roster', at: at(), v }) },
+    property: (v: any) => { log.push({ kind: 'property', at: at(), v }) },
+  })
+  const done: Promise<number> = details.load(job).then(() => at())
+  return {
+    details, log, done,
+    shows: (kind: string) => log.filter(e => e.kind === kind),
+    first: (kind: string) => log.find(e => e.kind === kind),
+  }
+}
+
+/** A Check first load: each view the card shows, timed from the call. */
+function openCheckFirst(c: any, job: any, opts: { soon?: boolean } = {}) {
+  const t0 = performance.now()
+  const log: { at: number; v: any }[] = []
+  const card = c.checkFirstCard({ show: (v: any) => { log.push({ at: performance.now() - t0, v }) } })
+  const first: Promise<any> = card.load(job, CREW, opts)
+  return { card, log, first }
 }
 
 let finished = false
