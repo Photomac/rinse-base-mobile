@@ -16,13 +16,12 @@
 // spot in a basement never loses one. A real server refusal reverts the line
 // and says so.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator } from 'react-native'
-import { cachedRead } from '../lib/dataCache'
-// Shared with the offline day pack, which saves exactly these reads ahead of time.
-import { walkthroughLinesRead, walkthroughPhotosRead, trashDaysRead } from '../lib/jobReads'
-import { writeThrough, overlayPending } from '../lib/outbox'
-import { queuedJobPhotos } from '../lib/photoQueue'
+import { writeThrough } from '../lib/outbox'
+// The reads (the shared builders the offline day pack saves), and how soon the
+// saved copy shows on a weak signal.
+import { walkthroughCard, type WalkthroughView } from '../lib/walkthroughCard'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
 import { useMachineTranslation } from '../lib/machineTranslate'
@@ -56,36 +55,22 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
   const [lineOpen, setLineOpen] = useState<string | null>(null)
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
-  const addrId = job.client_addresses?.id || job.address_id
+  // One per card: the newest load wins, and an answer from a load that began
+  // before the inspector's last answer doesn't overwrite it (lib/walkthroughCard).
+  const [card] = useState(() => walkthroughCard({ show, setLoading }))
+  function show(v: WalkthroughView) {
+    setLines(v.lines)
+    setPhotoCount(v.photoCount)
+    setPickupDays(v.pickupDays)
+  }
 
-  const load = useCallback(async () => {
-    const [{ data }, { data: photos }, addr] = await Promise.all([
-      cachedRead(walkthroughLinesRead(job.id)),
-      cachedRead(walkthroughPhotosRead(job.id)),
-      addrId
-        ? cachedRead(trashDaysRead(addrId))
-        : Promise.resolve({ data: null }),
-    ])
-    // Answers queued offline overlay the cached rows (already scoped to this job).
-    const rows = (await overlayPending('job_checklist_items', (data as any[]) || [], v => v.job_id === job.id)) as WalkthroughLine[]
-    const counts: Record<string, number> = {}
-    for (const p of (photos as any[]) || []) counts[p.checklist_item_id] = (counts[p.checklist_item_id] || 0) + 1
-    // Photos still on the device count too: the photo screen captions a line's
-    // photo with the line's text.
-    try {
-      const queued = await queuedJobPhotos(job.id)
-      for (const q of queued) {
-        const l = rows.find(r => r.task === q.caption)
-        if (l) counts[l.id] = (counts[l.id] || 0) + 1
-      }
-    } catch {}
-    setLines(rows)
-    setPhotoCount(counts)
-    setPickupDays(((addr as any)?.data?.trash_pickup_days ?? null) as number[] | null)
-    setLoading(false)
-  }, [job.id, addrId])
-
-  useEffect(() => { load() }, [load, refreshKey])
+  // The first load (mount) may show the saved copy first; a reload (back from
+  // the photo screen) keeps what's on screen until the live answer comes.
+  const loaded = useRef(false)
+  useEffect(() => {
+    card.load(job, { soon: !loaded.current }).catch(() => {})
+    loaded.current = true
+  }, [job.id, refreshKey])
 
   const sections = useMemo(() => groupWalkthrough(lines), [lines])
   const tx = useMachineTranslation(lang, [...sections.map(s => s.name), ...lines.map(l => l.task)])
@@ -107,6 +92,7 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
     const ids = sectionState(s).open
     if (!ids.length) return
     setBusy(name)
+    card.edited()
     patch(ids, { result: 'ok' })
     const { error } = await writeThrough({
       table: 'job_checklist_items', op: 'update',
@@ -131,6 +117,7 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
     const before = { result: line.result, issue_note: line.issue_note }
     const note = result === 'issue' ? ((notes[line.id] ?? line.issue_note ?? '').trim() || null) : null
     setBusy(line.id)
+    card.edited()
     patch([line.id], { result, issue_note: note })
     const { error } = await writeThrough({
       table: 'job_checklist_items', op: 'update', match: { id: line.id },
@@ -155,6 +142,7 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
     if (readOnly || line.result !== 'issue') return
     const note = (notes[line.id] ?? '').trim() || null
     if (note === (line.issue_note ?? null)) return
+    card.edited()
     patch([line.id], { issue_note: note })
     const { error } = await writeThrough({
       table: 'job_checklist_items', op: 'update', match: { id: line.id }, values: { issue_note: note },

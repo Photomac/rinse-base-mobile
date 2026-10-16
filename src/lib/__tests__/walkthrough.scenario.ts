@@ -51,10 +51,12 @@ ok('pickup: localised days joined with the language\'s "and"', / y /.test(es) &&
 
 // ── wiring ──
 const comp = src('components/WalkthroughChecklist.tsx')
-// The read lives in lib/jobReads.ts, shared with the offline day pack.
-ok('reads only the band, in order', comp.includes('cachedRead(walkthroughLinesRead(job.id))') &&
+// The card's reads live in lib/walkthroughCard.ts (how soon the saved copy
+// shows), built in lib/jobReads.ts, shared with the offline day pack.
+const wtCard = src('lib/walkthroughCard.ts')
+ok('reads only the band, in order', comp.includes('walkthroughCard({ show, setLoading })') && wtCard.includes('readSoon(walkthroughLinesRead(job.id), wait)') &&
   src('lib/jobReads.ts').includes(".eq('job_id', jobId).gte('sort_order', WALKTHROUGH_BAND).order('sort_order')"))
-ok('queued offline answers overlay the cache', comp.includes("overlayPending('job_checklist_items'"))
+ok('queued offline answers overlay the cache', wtCard.includes("overlayPending('job_checklist_items'"))
 ok('Looks good: one outbox write for the section\'s open lines',
   comp.includes("match: { job_id: job.id }, matchIn: { id: ids }") && comp.includes("values: { result: 'ok', completed_at: new Date().toISOString(), completed_by: user.id }"))
 ok('an answer goes through the outbox, by line id', comp.includes("table: 'job_checklist_items', op: 'update', match: { id: line.id }"))

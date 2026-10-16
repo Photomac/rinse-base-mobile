@@ -231,6 +231,14 @@ export const photoRequirementsRead = (addressId: string): CacheRead => ({
     .eq('address_id', addressId).order('sort_order'),
 })
 
+/** Does the company hold crews to the property's required shots
+ *  (tenants.enforce_photo_requirements)? The shot counter shows only when on. */
+export const photoEnforceRead = (tenantId: string): CacheRead => ({
+  key: `tenphotoreq:${tenantId}`,
+  q: () => supabase.from('tenants')
+    .select('enforce_photo_requirements').eq('id', tenantId).maybeSingle(),
+})
+
 /** The latest shot per required photo (URLs only — no image is downloaded). */
 export const requirementShotsRead = (jobId: string): CacheRead => ({
   key: `pshot:${jobId}`,
@@ -466,6 +474,9 @@ export function jobPackReads(job: any, user: any): PackRead[] {
       roomsRead(addrId), roomSignoffsRead(job.id), addressModeRead(addrId),
       tenantModeRead(user.tenant_id), photoRequirementsRead(addrId), requirementShotsRead(job.id),
     ] : []),
+    // loadPhotoRequirements (cleans at a property): the company's switch; the
+    // shots and requirements are the checklist card's reads above.
+    ...(addrId && !isTask ? [photoEnforceRead(user.tenant_id)] : []),
     itemPhotosRead(job.id),
     // loadTimeEntries / loadCrewClock
     timeEntriesRead(job.id, user.id, false),

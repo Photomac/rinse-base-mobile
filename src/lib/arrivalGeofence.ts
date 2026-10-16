@@ -17,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase, readStoredSession } from './supabase'
 import { fmtTime, setCurrentTz } from './timezone'
 import { uuid4 } from './outbox'
+import { savePunch } from './timeTracker'
 import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
@@ -266,13 +267,15 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
           // the row its id up front makes the replay land on the same row.
           // This is the rule the manual punch and the whole outbox already
           // follow — a time entry IS the crew member's pay.
-          const { data: entry, error: insErr } = await supabase.from('job_time_entries').upsert({
+          const auto = {
             id: uuid4(),
             tenant_id: user.tenant_id, job_id: jobId, user_id: user.id,
             clocked_in_at: arrival.at, entry_type: 'work',
             source: 'auto', arrived_at: arrival.at,
             clock_in_lat: fix.coords.latitude, clock_in_lng: fix.coords.longitude,
-          }, { onConflict: 'id' }).select('id').single()
+          }
+          const { data: entry, error: insErr } = await supabase.from('job_time_entries')
+            .upsert(auto, { onConflict: 'id' }).select('id').single()
           if ((insErr as any)?.code === '23505') {
             // Already on the clock here: their own Clock in tap, or the web,
             // got there first (one open entry per person per clean). That
@@ -282,6 +285,10 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
           }
           if (!insErr && entry) {
             await clearPendingArrival(jobId) // consumed — a manual punch must not double-enter
+            // Into the phone's saved copy of the clean's clock too: opened at
+            // the door on a link too weak to answer, the stop's screen shows
+            // the clean as clocked into, not Clock in (lib/timeTracker).
+            await savePunch(auto, user.id)
             // Mirror manual clock-in: the job is being worked now. Status guard
             // keeps a teammate's already-started job untouched.
             // started_at = the fence crossing, like the entry (server keeps it

@@ -164,6 +164,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       tenantModeRead: () => R.tenantModeRead(T),
       photoRequirementsRead: () => R.photoRequirementsRead(A),
       requirementShotsRead: () => R.requirementShotsRead(J),
+      photoEnforceRead: () => R.photoEnforceRead(T),
       itemPhotosRead: () => R.itemPhotosRead(J),
       checkFirstLinesRead: () => R.checkFirstLinesRead(A),
       checkFirstTicksRead: () => R.checkFirstTicksRead(J),
