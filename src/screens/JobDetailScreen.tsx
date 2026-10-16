@@ -13,7 +13,6 @@ import { JobInventoryScreen } from './JobInventoryScreen'
 import { LaundryRunScreen } from './LaundryRunScreen'
 import { JobInspectionScreen } from './JobInspectionScreen'
 import { WalkthroughChecklist } from '../components/WalkthroughChecklist'
-import { isWalkthroughJob } from '../lib/walkthrough'
 import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
 import { PhotoViewer } from '../components/PhotoViewer'
@@ -40,10 +39,9 @@ import { noteCachedJobs } from '../lib/cachePrune'
 import {
   tenantVideoRead, routeStopRead, nextArrivalReads, crewNoteRead, crewNoteAckRead,
   jobMetaRead, jobCrewRead, propMetaRead, crewClockRead, timeEntriesRead,
-  checklistTemplateRead, checklistRowsRead, tenantSeedRead, roomsRead, roomSignoffsRead,
-  addressModeRead, tenantModeRead, photoRequirementsRead, requirementShotsRead, itemPhotosRead,
   checkFirstLinesRead, checkFirstTicksRead, checkFirstPhotosRead, checkFirstStartRead, checkFirstTenantRead,
 } from '../lib/jobReads'
+import { checklistCard, type ChecklistView } from '../lib/checklistCard'
 import { ackRow, clockInNote, crewNoteText, flushAcks, localAcks, recordAck, type CrewNoteJob } from '../lib/crewNote'
 import { crewClockFor, type CrewClock, type CrewClockEntry } from '../lib/crewClock'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
@@ -221,6 +219,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(0, incidentY.current - 12), animated: true }), 80)
   }
   const [defaultMode, setDefaultMode] = useState<'detailed' | 'room_complete'>('detailed')
+  // One per screen: the newest load wins, and a crew member's own tick is
+  // never overwritten by an answer that left before it (see loadChecklist).
+  const [checklistLoads] = useState(() => checklistCard({ show: showChecklist, setLoading: setLoadingChecklist }))
   const [issueForId, setIssueForId] = useState<string | null>(null)
   const [issueText, setIssueText] = useState('')
   const [viewPropertyPhoto, setViewPropertyPhoto] = useState(false)
@@ -849,123 +850,41 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setReqDone(done)
   }
 
-  // quiet = refresh in place (realtime teammate updates) — no spinner flash.
-  async function loadChecklist(quiet = false) {
-    const addrId = job.client_addresses?.id || job.address_id
-    if (!addrId) {
-      // Fallback: lookup by street
-      const street = job.client_addresses?.street
-      if (!street) return loadChecklistForAddress(null, quiet)
-      if (!quiet) setLoadingChecklist(true)
-      const { data: addrData } = await supabase
-        .from('client_addresses').select('id')
-        .eq('street', street).eq('tenant_id', user.tenant_id).maybeSingle()
-      return loadChecklistForAddress(addrData?.id || null, quiet)
+  // The checklist card's loads (lib/checklistCard): every read at once, the
+  // saved copy within a few seconds on a weak signal, a live answer that comes
+  // later refreshing it, and the spinner always cleared.
+  function showChecklist(v: ChecklistView) {
+    setChecklist(v.items)
+    setChecked(v.checked)
+    setWalkthroughJob(v.walkthrough)
+    if (v.rooms) {
+      setRoomsMeta(v.rooms.meta)
+      setSignoffs(v.rooms.signoffs)
+      setDefaultMode(v.rooms.mode as any)
+      setEvidence(v.rooms.evidence)
     }
-    if (!quiet) setLoadingChecklist(true)
-    return loadChecklistForAddress(addrId, quiet)
+    if (v.itemPhotos) setItemPhotos(v.itemPhotos)
   }
 
-  // The job's own checklist rows (seeded at job creation) are the shared
-  // source of truth with the owner dashboard — both sides must read the same
-  // rows and the same `completed` flags, or the crew and the owner see
-  // different checklists. A row EXISTING does not mean it's done; only
-  // `completed = true` does. Templates are a fallback for jobs that were
-  // never seeded. The built-in default list covers properties with no
-  // template — EXCEPT when the company runs with checklists off
-  // (tenants.default_checklist_seed = 'none'): an owner who deliberately
-  // cleared every checklist must not have crews working an invented list
-  // they can't see or edit.
-  async function loadChecklistForAddress(addressId: string | null, quiet = false) {
-    if (!quiet) setLoadingChecklist(true)
-    const [tmplRes, rowsRes] = await Promise.all([
-      addressId
-        ? cachedRead(checklistTemplateRead(addressId))
-        : Promise.resolve({ data: [] as any[] }),
-      cachedRead(checklistRowsRead(job.id)),
-    ])
-    const tmpl = tmplRes.data || []
-    // Queued offline ticks overlay the cached/live rows (rows are already
-    // scoped to this job, matching the ops' job_id filter).
-    const rows = await overlayPending('job_checklist_items', rowsRes.data || [],
-      v => v.job_id === job.id)
-    let items: any[]
-    const checkedMap: Record<string, boolean> = {}
-    if (rows.length > 0) {
-      // The job has its own rows — render them as-is. Previously this branch
-      // also required a live template, so a job seeded from a template the
-      // owner later cleared fell through to the invented default list with
-      // the real rows appended after it.
-      items = rows.map(r => ({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false, room_uid: r.room_id, item_kind: r.item_kind || 'task', level: r.level || 'guidance', result: r.result ?? null, issue_note: r.issue_note ?? null }))
-      rows.forEach(r => { if (r.completed) checkedMap[r.id] = true })
-    } else if (tmpl.length > 0) {
-      // Template exists but this job was never seeded — ticks upsert rows.
-      items = tmpl.map((item: any) => ({ id: item.id, label: `${item.room} — ${item.title}`, room: item.room, title: item.title, requires_photo: item.requires_photo || false }))
-    } else {
-      // No rows, no template. Companies that deliberately run without
-      // checklists get an empty list; everyone else keeps the default.
-      // Fail-open to the default: offline or a fetch error must not strip a
-      // crew of the list they had yesterday.
-      let seedMode = 'generated'
-      try {
-        const { data: t } = await cachedRead(tenantSeedRead(user.tenant_id))
-        if ((t as any)?.default_checklist_seed) seedMode = (t as any).default_checklist_seed
-      } catch {}
-      items = seedMode === 'none' ? [] : DEFAULT_CHECKLIST.map(d => ({ ...d }))
+  // quiet = refresh in place (realtime teammate updates) — no spinner flash.
+  async function loadChecklist(quiet = false) {
+    let addrId: string | null = job.client_addresses?.id || job.address_id || null
+    if (!addrId && job.client_addresses?.street) {
+      // Fallback: lookup by street
+      if (!quiet) setLoadingChecklist(true)
+      addrId = await supabase
+        .from('client_addresses').select('id')
+        .eq('street', job.client_addresses.street).eq('tenant_id', user.tenant_id).maybeSingle()
+        .then(({ data }) => data?.id || null, () => null)
     }
-    setChecklist(items)
-    setChecked(checkedMap)
-    setWalkthroughJob(isWalkthroughJob(rows))
-    // Rooms, sign-offs, mode and per-room photo counts — best-effort; an error
-    // just leaves the flat 'Other' grouping.
-    if (addressId) {
-      try {
-        const [roomsRes, signRes, addrRes, tenRes, reqRes, shotRes] = await Promise.all([
-          cachedRead(roomsRead(addressId)),
-          cachedRead(roomSignoffsRead(job.id)),
-          cachedRead(addressModeRead(addressId)),
-          cachedRead(tenantModeRead(user.tenant_id)),
-          cachedRead(photoRequirementsRead(addressId)),
-          cachedRead(requirementShotsRead(job.id)),
-        ])
-        setRoomsMeta(roomsRes.data || [])
-        const signRows = await overlayPending('job_room_signoffs', signRes.data || [], v => v.job_id === job.id)
-        const sMap: Record<string, string> = {}
-        for (const r of signRows) if (r.room_id) sMap[r.room_id] = r.completed_at
-        setSignoffs(sMap)
-        const addrMode = (addrRes.data as any[])?.[0]?.checklist_execution_mode
-        const tenMode = (tenRes.data as any[])?.[0]?.checklist_execution_mode
-        setDefaultMode((addrMode || tenMode || 'detailed') as any)
-        // Newest-first, so the first hit per requirement is the latest shot —
-        // a retake replaces the thumbnail.
-        const latestShot: Record<string, string> = {}
-        for (const pp of ((shotRes.data as any[]) || [])) {
-          if (!latestShot[pp.photo_requirement_id]) latestShot[pp.photo_requirement_id] = pp.photo_url
-        }
-        setEvidence((((reqRes.data as any[]) || [])).map(rq => ({ ...rq, photo_url: latestShot[rq.id] || null })))
-      } catch { /* accordion still renders from item.room text */ }
-    }
-    // A photo counts for an item via the canonical checklist_item_id link, or
-    // by the legacy caption == task-title match (photos from older bundles /
-    // web uploads before the link existed).
-    const { data: photos } = await cachedRead(itemPhotosRead(job.id))
-    if (photos) {
-      const counts: Record<string, number> = {}
-      items.forEach(item => {
-        counts[item.id] = photos.filter((p: any) =>
-          (item.jobItemId && p.checklist_item_id === item.jobItemId) ||
-          (!p.checklist_item_id && p.caption === item.title)
-        ).length
-      })
-      setItemPhotos(counts)
-    }
-    setLoadingChecklist(false)
+    return checklistLoads.load(job, user, addrId, DEFAULT_CHECKLIST, quiet)
   }
 
   // VERIFY answer (phase 2). result: 'ok' | 'issue' | 'na' | null. The DB
   // trigger syncs `completed` from result, so we don't write it here.
   async function saveVerify(item: any, result: 'ok' | 'issue' | 'na' | null, note?: string) {
     if (!item.jobItemId) return
+    checklistLoads.edited()
     const { error } = await writeThrough({
       table: 'job_checklist_items', op: 'update', match: { id: item.jobItemId },
       values: {
@@ -984,6 +903,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // "Complete room" — one honest sign-off row, never bulk ticks. Photos for the
   // room must exist first; the button says how many are left.
   async function signOffRoom(roomId: string) {
+    checklistLoads.edited()
     const { error } = await writeThrough({
       table: 'job_room_signoffs', op: 'upsert', onConflict: 'job_id,room_id',
       values: { tenant_id: user.tenant_id, job_id: job.id, room_id: roomId, completed_at: new Date().toISOString(), completed_by: user.id },
@@ -1052,6 +972,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Ticks save optimistically. Offline they queue in the outbox (the box
     // stays ticked); only a real server rejection reverts the box and tells
     // the crew, or they walk away believing the checklist is done when it isn't.
+    checklistLoads.edited()
     let error
     if (item.jobItemId) {
       // Seeded row — flip the same flag the owner dashboard reads. Never

@@ -77,6 +77,26 @@ Then **force-quit the app** (swipe it away) and open it.
       the pack; it shows only if the phone still holds it from an earlier view,
       otherwise the "add a photo" placeholder shows).
 
+## 4b. One bar, no data (iPhone; the CKS #1612 case)
+
+Airplane Mode makes every request fail at once, so the app falls back to the
+saved copy at once. A weak cell link is different: requests go out and nothing
+comes back, and each one waits out the 15 s read deadline. On 2026-10-15 that
+left a stop's checklist card at "0/20" over a spinner for 45 s and more on
+every open (CKS, Brittany at 70 C MAIN).
+
+1. Airplane Mode **OFF** and the clock back on **Set Automatically**, with
+   signal: open the app on Home once, so the sign-in renews and the pack saves.
+2. Settings → Developer → **Network Link Conditioner** → profile
+   **100% Loss** → switch **ON**. (The Developer menu appears once the phone
+   has been connected to Xcode with Developer Mode on.)
+3. Open a stop you did not open online:
+   - [ ] The checklist shows within **about 3 seconds**, the property's rooms
+         and tasks (not the generic 8-item list), with no spinner after that.
+   - [ ] Back out and open it again: the checklist shows **at once**.
+   - [ ] Tick an item: it stays ticked, including ~15 s later.
+4. Network Link Conditioner **OFF**. Within ~30 seconds the tick reaches the web.
+
 ## 5. Work the day offline
 
 - [ ] Daily company: **Start my day** → "Saved on your phone" message; the

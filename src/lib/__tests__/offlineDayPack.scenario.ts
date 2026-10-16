@@ -161,7 +161,13 @@ function seedServer() {
 
 // ── Mock Supabase server ────────────────────────────────────────────────────
 const server = {
-  mode: 'online' as 'online' | 'offline',
+  /** hang: requests go out and nothing ever comes back (one bar, no data),
+   *  until the app gives up on them. */
+  mode: 'online' as 'online' | 'offline' | 'hang',
+  /** Tables whose reads hang while the rest answer (a trickle). */
+  hang: new Set<string>(),
+  /** Extra ms before a table's reads answer. */
+  slow: {} as Record<string, number>,
   tables: {} as Record<string, any[]>,
   rest: [] as { method: string; table: string; params: URLSearchParams }[],
   /** ms each answer takes, so concurrency is observable. */
@@ -255,9 +261,18 @@ function order(rows: any[], spec: string): any[] {
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+/** No answer, ever: only the app's own deadline (netFetch) ends it. */
+const noAnswer = (init: any) => new Promise<Response>((_, reject) => {
+  const signal: AbortSignal | undefined = init?.signal
+  const abort = () => reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }))
+  if (signal?.aborted) abort()
+  else signal?.addEventListener('abort', abort)
+})
 ;(globalThis as any).fetch = async (input: any, init: any = {}) => {
   const url = new URL(typeof input === 'string' ? input : input.url)
   if (server.mode === 'offline') throw new TypeError('Network request failed')
+  if (server.mode === 'hang') return noAnswer(init)
+  if (server.hang.has(url.pathname.slice('/rest/v1/'.length))) return noAnswer(init)
   const date = new Date().toUTCString()
   const json = (status: number, body: any) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', date } })
@@ -271,7 +286,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
   server.inflight++
   server.maxInflight = Math.max(server.maxInflight, server.inflight)
   try {
-    await sleep(server.delayMs)
+    await sleep(server.delayMs + (server.slow[table] ?? 0))
     if (server.failAfter != null && server.rest.length > server.failAfter) {
       server.mode = 'offline'
       throw new TypeError('Network request failed')
@@ -548,6 +563,150 @@ const scenarios: Record<string, () => Promise<void>> = {
     ok('tonight\'s and tomorrow\'s stops stay', cached('chkrows:J-red') && cached('propmeta:A2') && cached('chkrows:J-chapel') && cached('jobmeta:J-late'))
     ok('Home\'s day and the pack line stay', cached(`dash:today:${U}`) && cached(`daypack:${U}`))
   },
+
+  // CKS #1612, 2026-10-15: one bar, no data, a sign-in renewed minutes before.
+  // Requests go out and nothing comes back. The card used to read in three
+  // rounds, each waiting out the read deadline: "0/20" over a spinner for 45 s
+  // and more, on every open, with the whole list saved on the phone.
+  async checklistOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    ok('evening: the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+
+    setClock(MORNING)
+    seedSession()  // renewed on the road a few minutes ago: requests really go out
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const o = open(c, JOBS.red, 'A2')
+    const doneAt = await o.done
+    ok('the spinner gives way within the card\'s wait, not after a read deadline (let alone three)',
+      o.offAt() != null && o.offAt()! < CARD_WAIT + 400, `${fmt(o.offAt())} (deadline ${READ_DEADLINE} ms)`)
+    const v = o.log.shows[0]?.v
+    ok('...showing the saved list: the job\'s own rows, in room order',
+      (v?.items || []).map((i: any) => i.label).join('|') === 'Bath — Scrub tub|Bedroom — Make beds|Kitchen — Wipe counters',
+      (v?.items || []).map((i: any) => i.label).join('|'))
+    ok('...with its room and its photo shot', v?.rooms?.meta?.length === 1 && v?.rooms?.evidence?.[0]?.id === 'rq1')
+    ok('...and photo counts per item', v?.itemPhotos?.ci2 === 0)
+    ok('the load ends once the live reads give up (one deadline, not three), with nothing newer to show',
+      doneAt < 2 * READ_DEADLINE && o.log.shows.length === 1, `${fmt(doneAt)}, ${o.log.shows.length} show(s)`)
+    ok('the spinner is down at the end', !o.spinnerOn())
+
+    // She backs out and opens it again: the last request failed, so the card
+    // doesn't wait for a live answer at all.
+    const again = open(c, JOBS.red, 'A2')
+    await again.done
+    ok('opened again: the saved list at once', again.offAt() != null && again.offAt()! < 150 && again.log.shows[0]?.v?.items?.length === 3,
+      fmt(again.offAt()))
+  },
+
+  // A stop the pack never saved, same dead link: the card waits for the live
+  // answer (nothing else to show), but once, not round after round.
+  async checklistNothingSavedWaitsOnce() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    ok('J-after (the day after tomorrow) is not in the pack', !cached('chkrows:J-after'))
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const o = open(c, JOBS.after, 'A5')
+    await o.done
+    ok('the spinner gives way after ONE read deadline', o.offAt() != null && o.offAt()! < 2 * READ_DEADLINE, `${fmt(o.offAt())} (deadline ${READ_DEADLINE} ms)`)
+    ok('...with the company default list (no rows, no template, seed from the saved copy)',
+      (o.log.shows[0]?.v?.items || []).map((i: any) => i.id).join(',') === '1,2')
+  },
+
+  // A trickle: the checklist rows are slow, the rest answer. The saved list
+  // shows within the card's wait, and the live rows refresh it when they come.
+  async checklistOnATrickle() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    // A teammate ticked "Make beds" after the pack saved.
+    server.tables.job_checklist_items.find((r: any) => r.id === 'ci3').completed = true
+    server.slow.job_checklist_items = 700  // past the card's wait, inside the deadline
+    c = relaunch(); scaleDeadlines(c)
+    const o = open(c, JOBS.red, 'A2')
+    await o.done
+    ok('the list shows within the card\'s wait', o.offAt() != null && o.offAt()! < CARD_WAIT + 200, fmt(o.offAt()))
+    ok('...from the saved copy at first (no teammate tick yet)', o.log.shows[0]?.v?.items?.length === 3 && !o.log.shows[0]?.v?.checked?.ci3)
+    ok('the live rows refresh it: the teammate\'s tick shows', o.log.shows.length === 2 && o.log.shows[1].v.checked.ci3 === true,
+      `${o.log.shows.length} show(s)`)
+
+    // Her own tick while the live rows are still on their way: their answer
+    // may predate it, so it must not overwrite the card.
+    const o2 = open(c, JOBS.red, 'A2')
+    while (!o2.log.shows.length) await sleep(10)
+    o2.card.edited()
+    await o2.done
+    ok('a late answer never overwrites a tick made since the load began', o2.log.shows.length === 1, `${o2.log.shows.length} show(s)`)
+  },
+
+  // Whatever goes wrong inside a load, the spinner goes.
+  async checklistSpinnerAlwaysClears() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    server.mode = 'offline'
+    const settle = (o: ReturnType<typeof open>) => Promise.race([
+      o.done.then(() => 'done', (e: any) => `threw: ${e?.message || e}`),
+      sleep(3 * READ_DEADLINE).then(() => 'still loading'),
+    ])
+
+    // A saved copy that isn't a list of rows: read as no rows.
+    store.set('dataCache:chkrows:J-red', JSON.stringify({ not: 'rows' }))
+    c = relaunch(); scaleDeadlines(c)
+    const o = open(c, JOBS.red, 'A2')
+    const end = await settle(o)
+    ok('an unreadable saved copy: the load ends', end === 'done', end)
+    ok('...the spinner is down', o.log.spinner.length > 0 && !o.spinnerOn(), JSON.stringify(o.log.spinner.map(s => s.on)))
+    ok('...and the card shows the template behind the clean', (o.log.shows.at(-1)?.v?.items || []).length === 2)
+
+    // Something that throws: a queued write with no values (no code path
+    // queues one; it stands for any bug in the load).
+    store.set('writeOutbox', JSON.stringify([{ id: 'bad', table: 'job_checklist_items', op: 'upsert', values: null, created_at: 0 }]))
+    c = relaunch(); scaleDeadlines(c)
+    const o2 = open(c, JOBS.red, 'A2')
+    const end2 = await settle(o2)
+    ok('a load that throws still ends', end2 === 'done', end2)
+    ok('...the spinner is down', o2.log.spinner.length > 0 && !o2.spinnerOn(), JSON.stringify(o2.log.spinner.map(s => s.on)))
+    ok('...and the card offers no invented list to tick', o2.log.shows.length === 1 && o2.log.shows[0].v.items.length === 0,
+      `${o2.log.shows.length} show(s)`)
+    store.delete('writeOutbox')
+  },
+}
+
+// ── The checklist card (lib/checklistCard), as JobDetailScreen mounts it ─────
+// Deadlines scaled 10:1 so a scenario takes seconds: a read gives up after
+// 1.5 s (the app: 15 s) and the card waits 0.3 s for a live answer (3 s).
+const READ_DEADLINE = 1500
+const CARD_WAIT = 300
+const DEFAULTS = [{ id: '1', room: 'Kitchen', title: 'General clean' }, { id: '2', room: 'Bathroom', title: 'General clean' }]
+const fmt = (ms: number | null | undefined) => (ms == null ? 'never' : `${Math.round(ms)} ms`)
+
+function scaleDeadlines(c: any) {
+  c.NET_TIMEOUTS.read = READ_DEADLINE
+  c.CHECKLIST_WAIT.ms = CARD_WAIT
+}
+
+/** Open the stop's screen: a new card, its first load, every show and every
+ *  spinner change timed from the open. */
+function open(c: any, job: any, addressId: string | null) {
+  const t0 = performance.now()
+  const log = { shows: [] as { at: number; v: any }[], spinner: [] as { at: number; on: boolean }[] }
+  const card = c.checklistCard({
+    show: (v: any) => { log.shows.push({ at: performance.now() - t0, v }) },
+    setLoading: (on: boolean) => { log.spinner.push({ at: performance.now() - t0, on }) },
+  })
+  const done: Promise<number> = card.load(job, CREW, addressId, DEFAULTS).then(() => performance.now() - t0)
+  return {
+    card, log, done,
+    /** When the spinner first went down. */
+    offAt: () => log.spinner.find(s => !s.on)?.at ?? null,
+    spinnerOn: () => log.spinner.length > 0 && log.spinner[log.spinner.length - 1].on,
+  }
 }
 
 let finished = false
