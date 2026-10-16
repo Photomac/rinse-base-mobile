@@ -30,6 +30,7 @@ import { captureRequiredPhoto, captureCheckFirstPhoto } from '../lib/requiredPho
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
+import { linkAnswering } from '../lib/netFetch'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
 import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive } from '../lib/photoQueue'
 import { cachedRead } from '../lib/dataCache'
@@ -1228,9 +1229,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // always can; solo crew or a roster with no lead flagged falls back to any
   // assignee (a job must never be stuck waiting on a lead that was never set).
   // Fails OPEN on lookup errors — flaky signal must not strand a crew, and the
-  // DB gate remains the source of truth for the photo requirements.
-  async function canSignOffAsViewer(): Promise<boolean> {
+  // DB gate remains the source of truth for the photo requirements. With the
+  // link not answering it isn't asked at all (the same answer, 15 s sooner).
+  async function canSignOffAsViewer(answering: boolean): Promise<boolean> {
     if (user?.role === 'owner' || user?.role === 'manager') return true
+    if (!answering) return true
     const { data: roster, error } = await supabase
       .from('job_assignments')
       .select('user_id, is_lead')
@@ -1264,7 +1267,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // photograph (their proof is the reconciliation form).
     if (isTask) { await completeJobNoPhotoCheck(); return }
 
-    if (!(await canSignOffAsViewer())) {
+    // On a link that has stopped answering (one bar, no data), each live step
+    // below waited out its deadline before failing open: the lead check 15 s,
+    // Check first 8 s, the uploads 10 s, the gate 30 s, then the clock-out's
+    // write 30 s, about a minute and a half, much of it with no spinner.
+    // Asked once here (netFetch linkAnswering(): a probe only after an old
+    // failure); without an answer each step fails open at once, as it did at
+    // its deadline, and the Complete queues in the outbox.
+    setSaving(true)
+    const answering = await linkAnswering()
+    setSaving(false)
+
+    if (!(await canSignOffAsViewer(answering))) {
       Alert.alert(`🔒 ${t('lead_signoff_title')}`, t('lead_signoff_msg'))
       return
     }
@@ -1274,17 +1288,20 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // gate below can't be asked and the Complete is queued; a refusal by the
     // server's gate would then park it. Only where the company turned it on;
     // a read that fails blocks nothing. On a bar too weak to answer soon, the
-    // copy already on screen stands in. Only at a property that had lines when
-    // the screen loaded: every other Complete (most companies have no list)
-    // must not wait on a read for one.
+    // copy already on screen stands in (at once, with the link not answering).
+    // Only at a property that had lines when the screen loaded: every other
+    // Complete (most companies have no list) must not wait on a read for one.
     let cf: CheckFirstView | null = null
     if (cfHasLines.current) {
-      setSaving(true)
-      cf = await Promise.race([
-        loadCheckFirst().catch(() => null),
-        new Promise<CheckFirstView | null>(resolve => setTimeout(() => resolve(checkFirst), 8_000)),
-      ])
-      setSaving(false)
+      if (!answering) cf = checkFirst
+      else {
+        setSaving(true)
+        cf = await Promise.race([
+          loadCheckFirst().catch(() => null),
+          new Promise<CheckFirstView | null>(resolve => setTimeout(() => resolve(checkFirst), 8_000)),
+        ])
+        setSaving(false)
+      }
     }
     if (cf) {
       const left = localBlockers(cf.required, cf.lines, new Set(cf.ticks.map(k => k.line_id)), new Set(Object.keys(cf.photos)),
@@ -1300,18 +1317,24 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // weak bar a full queue can take many minutes, and a Complete tap that
     // silently hangs reads as broken — the gate below says what's going on.
     // Writes queued offline (Check first ticks among them) go too, or the gate
-    // would answer from before them.
+    // would answer from before them. With the link not answering they are
+    // started, not waited for.
     setSaving(true)
     try {
-      await Promise.race([Promise.all([flushQueue(), flushOutbox()]), new Promise(resolve => setTimeout(resolve, 10_000))])
+      const sending = Promise.all([flushQueue(), flushOutbox()])
+      if (answering) await Promise.race([sending, new Promise(resolve => setTimeout(resolve, 10_000))])
+      else sending.catch(() => {})
     } catch { /* offline — handled below */ }
-    setSaving(false)
 
     // Canonical completion gate — the same job_completion_blockers() the web
     // panel calls, so web and mobile can never disagree on what completion
     // requires. RPC error → fail open: the status update below needs signal
-    // anyway, and the DB-side backstop enforces once it ships.
-    const { data: blockers, error: gateErr } = await supabase.rpc('job_completion_blockers', { p_job_id: job.id })
+    // anyway, and the DB-side backstop enforces once it ships. Not asked with
+    // the link not answering: it would fail open after its 30 s deadline.
+    const { data: blockers, error: gateErr } = answering
+      ? await supabase.rpc('job_completion_blockers', { p_job_id: job.id })
+      : { data: null, error: { message: 'link not answering' } }
+    setSaving(false)
     if (!gateErr && blockers && blockers.length > 0) {
       // Queued-but-unuploaded photos would clear these blockers the moment
       // they land — keep the offline-aware messaging instead of a dead-end

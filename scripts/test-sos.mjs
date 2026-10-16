@@ -56,6 +56,10 @@ try {
     [`from './i18n'`, `from './sosTracker.mocks'`],
     ['const REQUEST_TIMEOUT_MS = 15_000', 'const REQUEST_TIMEOUT_MS = 150'],
   ], 'sosTracker.ts'))
+  // outbox.ts asks netFetch whether the link is answering; the real module
+  // (no imports of its own). The SOS client doesn't fetch through it, so it
+  // has seen no traffic and says yes, as before.
+  writeFileSync(join(work, 'netFetch.ts'), read('src/lib/netFetch.ts'))
   for (const f of ['sos.mocks.ts', 'sos.supabase.ts', 'sosTracker.mocks.ts']) {
     writeFileSync(join(work, f), read(`src/lib/__tests__/${f}`))
   }

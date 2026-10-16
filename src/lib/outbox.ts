@@ -13,6 +13,12 @@
 // - writeThrough() tries the LIVE write first and queues only on a network
 //   failure (postgrest status 0 — a real server answer like an RLS denial is
 //   returned to the caller as an error, same as before this file existed).
+//   Except on a link that has stopped answering (netFetch linkAnswering():
+//   one bar, no data). There a live write waited out the 30 s write deadline
+//   before queuing, with the button's spinner up (Clock in, Pause, Complete),
+//   so it queues at once and the flush sends it the moment anything gets
+//   through. What lands is the same: every queued write is idempotent and
+//   carries its own times (a punch is stamped at the tap).
 //   If ops are already queued, new writes queue BEHIND them instead of writing
 //   live: a pause must never land before the clock-in it pauses.
 // - Replay is strict FIFO for the same reason. A server-rejected op is retried
@@ -41,6 +47,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { reportClientError } from './errorReporter'
+import { linkAnswering } from './netFetch'
 
 const QUEUE_KEY = 'writeOutbox'
 const REJECTED_KEY = 'writeOutboxRejected'
@@ -206,8 +213,9 @@ export async function writeThrough(w: OutboxWrite): Promise<{ error: any; queued
     return { error: { message: 'outbox: refusing a delete with no filter' }, queued: false }
   }
   const pending = await readQueue()
-  if (pending.length) {
-    // Ordering: never let a live write overtake queued ops it depends on.
+  // Ordering: never let a live write overtake queued ops it depends on. And
+  // on a link that has stopped answering, don't wait out the deadline first.
+  if (pending.length || !(await linkAnswering())) {
     await enqueue(w)
     flushOutbox().catch(() => {})
     return { error: null, queued: true }
