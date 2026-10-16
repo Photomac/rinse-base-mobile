@@ -38,9 +38,21 @@
 //   ids back; if every row is there the op was delivered and is dropped
 //   quietly. A false "dropped" on the Profile screen invites the office to
 //   "+ Add" the hours again, which pays them twice.
+// - A queued Complete waits for its clean's photos (2026-10-16). The completion
+//   gate (enforce_job_completion_gate) refuses a Complete whose photos have no
+//   row yet, and photos upload on their own queue, so a Complete queued offline
+//   could reach the server first: refused five times, it was parked, and the
+//   clock-out queued before it had landed, leaving the clean open with its
+//   crew clocked out. While photosAheadOfComplete() says photos are waiting, the
+//   Complete is not sent and not counted as a rejection; ops for that clean
+//   queued behind it wait with it, and everything else goes past in order. It
+//   goes the moment the last photo lands. A photo the server keeps refusing
+//   stops holding it (photoQueue.ts says when): the Complete goes and the server
+//   decides, and the crew and the office are told the photos are failing.
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { reportClientError } from './errorReporter'
+import { photosAheadOfComplete, onPhotoQueueChange } from './photoQueue'
 
 const QUEUE_KEY = 'writeOutbox'
 const REJECTED_KEY = 'writeOutboxRejected'
@@ -75,6 +87,8 @@ export interface OutboxOp {
   created_at: number
   rejects?: number
   lastError?: string
+  /** A Complete that went past photos the server keeps refusing (said once). */
+  pastRefusedPhotos?: boolean
 }
 
 export type OutboxWrite = Pick<OutboxOp, 'table' | 'op' | 'match' | 'matchIn' | 'keep' | 'values' | 'onConflict' | 'ignoreDuplicates' | 'group'>
@@ -196,6 +210,64 @@ async function alreadyStored(op: OutboxOp): Promise<'stored' | 'offline' | 'miss
   return ids.every((id: string) => found.has(id)) ? 'stored' : 'missing'
 }
 
+// ── A Complete waits for its clean's photos ──────────────────────────────
+/** The clean a write completes, or null when it isn't a Complete. */
+function completesClean(w: OutboxWrite): string | null {
+  const v: any = w.values
+  if (w.table !== 'jobs' || w.op !== 'update' || Array.isArray(v) || v?.status !== 'completed') return null
+  return typeof w.match?.id === 'string' ? w.match.id : null
+}
+
+/** The clean a write is for, where it says: a jobs row by id, or rows that
+ *  carry job_id (time entries, ticks, supplies, reports). */
+function cleanOf(w: OutboxWrite): string | null {
+  if (w.table === 'jobs') return typeof w.match?.id === 'string' ? w.match.id : null
+  const v: any = Array.isArray(w.values) ? w.values[0] : w.values
+  if (typeof v?.job_id === 'string') return v.job_id
+  return typeof w.match?.job_id === 'string' ? w.match.job_id : null
+}
+
+// The gate's photo blockers (job_completion_blockers): ones a photo still on
+// the phone answers once it lands.
+const PHOTO_BLOCKERS = ['no_after_photo', 'missing_required_photo', 'missing_required_area_photo', 'check_first_photo_missing']
+
+/** The completion gate refused it for photos only ("RB_BLOCKED: [{code…}]"). */
+function blockedForPhotosOnly(err: any): boolean {
+  const msg = String(err?.message ?? '')
+  if (!msg.startsWith('RB_BLOCKED: ')) return false
+  try {
+    const list = JSON.parse(msg.slice('RB_BLOCKED: '.length))
+    return Array.isArray(list) && list.length > 0 && list.every((b: any) => PHOTO_BLOCKERS.includes(b?.code))
+  } catch { return false }
+}
+
+/** Refused for photos that are still on this phone: it waits for them instead. */
+async function refusedForPhotosOnPhone(w: OutboxWrite, err: any): Promise<boolean> {
+  const job = completesClean(w)
+  if (!job || !blockedForPhotosOnly(err)) return false
+  return (await photosAheadOfComplete(job).catch(() => ({ waiting: 0 }))).waiting > 0
+}
+
+// Told when a queued Complete goes past photos the server keeps refusing
+// (App.tsx shows the crew the "upload failed" alert). Once per Complete.
+export interface CompletePastRefusedPhotos { jobId: string; refused: number; error: string | null }
+const pastRefusedListeners = new Set<(e: CompletePastRefusedPhotos) => void>()
+export function onCompletePastRefusedPhotos(fn: (e: CompletePastRefusedPhotos) => void): () => void {
+  pastRefusedListeners.add(fn)
+  return () => { pastRefusedListeners.delete(fn) }
+}
+
+let flushing = false
+// Cleans whose Complete the latest flush held for photos. When one of their
+// photos lands, the Complete goes now, not at the next trigger.
+const waitingOnPhotos = new Set<string>()
+let photoLandedMidFlush = false
+onPhotoQueueChange(e => {
+  if (!e.uploadedJobId || !waitingOnPhotos.has(e.uploadedJobId)) return
+  if (flushing) photoLandedMidFlush = true
+  else flushOutbox().catch(() => {})
+})
+
 /**
  * Perform a write now if possible, queue it if the network is down.
  * Returns { queued: true } when the op is safely on-device (treat as success —
@@ -218,6 +290,14 @@ export async function writeThrough(w: OutboxWrite): Promise<{ error: any; queued
     await enqueue(w)
     return { error: null, queued: true }
   }
+  // A live Complete the gate refused for photos this phone is still sending
+  // (its blocker check had no answer, so it was sent anyway): queued, it goes
+  // after them. Any other refusal is the caller's to show, as before.
+  if (await refusedForPhotosOnPhone(w, res.error)) {
+    await enqueue(w)
+    flushOutbox().catch(() => {})
+    return { error: null, queued: true }
+  }
   return { error: res.error, queued: false }
 }
 
@@ -230,70 +310,101 @@ export function onOutboxDrained(fn: () => void): () => void {
   return () => { drainedListeners.delete(fn) }
 }
 
-let flushing = false
 export async function flushOutbox(): Promise<void> {
   if (flushing) return
   flushing = true
   let sent = 0
   try {
-    while (true) {
-      const q = await readQueue()
-      if (!q.length) break
-      const op = q[0]
-      const res = await applyOp(op)
-      if (!res.error) {
-        await writeQueue((await readQueue()).filter(x => x.id !== op.id))
-        sent++
-        continue
-      }
-      if (res.status === 0) break // still offline — keep everything, retry later
-      if (isWorkStartConflict(op, res.error)) {
-        const settled = await resolveWorkStart(op)
-        if (settled === 'resolved') continue
-        if (settled === 'offline') break
-        // 'unresolved' is counted like any rejection below, so a start that
-        // somehow keeps losing still surfaces instead of looping forever.
-      }
-      if (isRefusedTimeEntry(op, res.error)) {
-        const seen = await alreadyStored(op)
-        if (seen === 'stored') {
-          await writeQueue((await readQueue()).filter(x => x.id !== op.id))
-          sent++
-          continue
-        }
-        if (seen === 'offline') break
-      }
-      const rejects = (op.rejects || 0) + 1
-      const msg = String(res.error?.message || res.error)
-      const cur = await readQueue()
-      if (rejects >= MAX_REJECTS) {
-        console.warn('outbox: dropping op after repeated server rejections', op.table, msg)
-        // Ops grouped with it assume it landed (a delete of the rows it was
-        // replacing): applying them alone would lose data, so they park too.
-        const groupMates = op.group ? cur.filter(x => x.group === op.group && x.id !== op.id) : []
-        // A parked op may be somebody's pay, and the crew was told "queued" —
-        // it must not vanish into a list nothing reads. Report it to
-        // admin_error_log (admin System Health) and leave it visible on the
-        // crew's Profile screen via rejectedOps() until dismissed.
-        reportClientError(
-          `outbox: dropped ${op.op} on ${op.table} after ${rejects} rejections — ${msg}` +
-            (groupMates.length ? ` (+${groupMates.length} grouped op${groupMates.length > 1 ? 's' : ''} parked with it)` : ''),
-          JSON.stringify({ id: op.id, values: op.values, match: op.match }).slice(0, 2000),
-          'outbox',
-        )
-        await appendRejected({ ...op, rejects, lastError: msg })
-        for (const mate of groupMates) await appendRejected({ ...mate, lastError: `parked with ${op.op} on ${op.table}: ${msg}` })
-        const parked = new Set([op.id, ...groupMates.map(x => x.id)])
-        await writeQueue(cur.filter(x => !parked.has(x.id)))
-        continue
-      }
-      await writeQueue(cur.map(x => x.id === op.id ? { ...x, rejects, lastError: msg } : x))
-      break // strict FIFO: don't let later ops overtake; retry next flush
-    }
+    // Round again when a held Complete's photo landed during the pass.
+    do {
+      photoLandedMidFlush = false
+      sent += await flushPass()
+    } while (photoLandedMidFlush)
     if (sent && !(await readQueue()).length) {
       drainedListeners.forEach(fn => { try { fn() } catch { /* a listener's problem */ } })
     }
   } finally { flushing = false }
+}
+
+// One pass over the queue, oldest first. Returns how many ops it delivered.
+async function flushPass(): Promise<number> {
+  let sent = 0
+  waitingOnPhotos.clear()
+  while (true) {
+    const q = await readQueue()
+    // The oldest op not waiting on a clean's photos: the held Complete
+    // itself, or an op for that clean queued behind it.
+    const op = q.find(x => !waitingOnPhotos.has(cleanOf(x) ?? ''))
+    if (!op) break
+    const completes = completesClean(op)
+    if (completes) {
+      // A photo queue that can't be read holds nothing: the server decides.
+      const photos = await photosAheadOfComplete(completes).catch(() => ({ waiting: 0, refused: 0, lastServerError: null }))
+      if (photos.waiting > 0) { waitingOnPhotos.add(completes); continue }
+      if (photos.refused > 0 && !op.pastRefusedPhotos) {
+        await writeQueue((await readQueue()).map(x => x.id === op.id ? { ...x, pastRefusedPhotos: true } : x))
+        reportClientError(
+          `outbox: sent a queued Complete past ${photos.refused} photo${photos.refused > 1 ? 's' : ''} the server keeps refusing — ${photos.lastServerError ?? '?'}`,
+          JSON.stringify({ id: op.id, job_id: completes }),
+          'outbox',
+        )
+        const e: CompletePastRefusedPhotos = { jobId: completes, refused: photos.refused, error: photos.lastServerError }
+        pastRefusedListeners.forEach(fn => { try { fn(e) } catch { /* a listener's problem */ } })
+      }
+    }
+    const res = await applyOp(op)
+    if (!res.error) {
+      await writeQueue((await readQueue()).filter(x => x.id !== op.id))
+      sent++
+      continue
+    }
+    if (res.status === 0) break // still offline — keep everything, retry later
+    // A photo was queued between the check and the send: wait for it, uncounted.
+    if (await refusedForPhotosOnPhone(op, res.error)) { waitingOnPhotos.add(completes!); continue }
+    if (isWorkStartConflict(op, res.error)) {
+      const settled = await resolveWorkStart(op)
+      if (settled === 'resolved') continue
+      if (settled === 'offline') break
+      // 'unresolved' is counted like any rejection below, so a start that
+      // somehow keeps losing still surfaces instead of looping forever.
+    }
+    if (isRefusedTimeEntry(op, res.error)) {
+      const seen = await alreadyStored(op)
+      if (seen === 'stored') {
+        await writeQueue((await readQueue()).filter(x => x.id !== op.id))
+        sent++
+        continue
+      }
+      if (seen === 'offline') break
+    }
+    const rejects = (op.rejects || 0) + 1
+    const msg = String(res.error?.message || res.error)
+    const cur = await readQueue()
+    if (rejects >= MAX_REJECTS) {
+      console.warn('outbox: dropping op after repeated server rejections', op.table, msg)
+      // Ops grouped with it assume it landed (a delete of the rows it was
+      // replacing): applying them alone would lose data, so they park too.
+      const groupMates = op.group ? cur.filter(x => x.group === op.group && x.id !== op.id) : []
+      // A parked op may be somebody's pay, and the crew was told "queued" —
+      // it must not vanish into a list nothing reads. Report it to
+      // admin_error_log (admin System Health) and leave it visible on the
+      // crew's Profile screen via rejectedOps() until dismissed.
+      reportClientError(
+        `outbox: dropped ${op.op} on ${op.table} after ${rejects} rejections — ${msg}` +
+          (groupMates.length ? ` (+${groupMates.length} grouped op${groupMates.length > 1 ? 's' : ''} parked with it)` : ''),
+        JSON.stringify({ id: op.id, values: op.values, match: op.match }).slice(0, 2000),
+        'outbox',
+      )
+      await appendRejected({ ...op, rejects, lastError: msg })
+      for (const mate of groupMates) await appendRejected({ ...mate, lastError: `parked with ${op.op} on ${op.table}: ${msg}` })
+      const parked = new Set([op.id, ...groupMates.map(x => x.id)])
+      await writeQueue(cur.filter(x => !parked.has(x.id)))
+      continue
+    }
+    await writeQueue(cur.map(x => x.id === op.id ? { ...x, rejects, lastError: msg } : x))
+    break // strict FIFO: don't let later ops overtake; retry next flush
+  }
+  return sent
 }
 
 export async function pendingOpCount(): Promise<number> {

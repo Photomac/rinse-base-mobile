@@ -10,8 +10,8 @@
 // flushOutbox is guarded against re-entry — so tests SETTLE (macrotask tick)
 // before counting flushes, or the fire-and-forget flush eats one iteration.
 // That guard is by design; the settle is the test accommodating it.
-import { writeThrough, flushOutbox, pendingOpCount, rejectedOps, overlayPending, uuid4 } from '../outbox'
-import { net, reported } from './outbox.mocks'
+import { writeThrough, flushOutbox, pendingOpCount, rejectedOps, overlayPending, uuid4, onCompletePastRefusedPhotos } from '../outbox'
+import { net, reported, photos, photoLanded } from './outbox.mocks'
 
 let failures = 0
 const ok = (name: string, cond: boolean) => {
@@ -138,6 +138,126 @@ const settle = () => new Promise(r => setTimeout(r, 10))
   ok('replayed start carries its status IN filter to the server',
     !!startWrite && startWrite.filters.includes('id=eq.J5') &&
     startWrite.filters.includes(`status=in.(${STARTABLE.join(',')})`))
+
+  // A queued Complete waits for its clean's photos (2026-10-16). Offline, the
+  // clock-out and the Complete queue while the photos are still on the phone;
+  // the gate refuses the Complete until they land. Sent first, it was refused
+  // five times and parked, leaving the clean open with its crew clocked out.
+  // Held, it is not sent, not counted, and goes once they land. Ops for that
+  // clean behind it wait with it; the next clean's go past.
+  const completedP = (id: string) => net.applied.filter(a => a.table === 'jobs' && a.filters.includes(`id=eq.${id}`) && a.values?.status === 'completed')
+  net.online = false
+  net.applied.length = 0
+  const rejectedBeforeP = (await rejectedOps()).length
+  const reportedBeforeP = reported.length
+  let completeTries = 0
+  net.beforeWrite = (table, _op, values) => { if (table === 'jobs' && values?.status === 'completed') completeTries++ }
+  photos.set('P1', { waiting: 2, refused: 0, lastServerError: null })
+  net.blocked.set('P1', ['no_after_photo'])
+  await writeThrough({ table: 'job_time_entries', op: 'update', match: { id: 'TE-P1' }, values: { clocked_out_at: '2026-10-16T15:00:00.000Z', duration_minutes: 60 } })
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P1' }, values: { status: 'completed', completed_at: '2026-10-16T15:00:00.000Z' } })
+  await writeThrough({ table: 'job_inventory_log', op: 'upsert', onConflict: 'id', values: [{ id: uuid4(), job_id: 'P1', inventory_id: 'TP', qty_used: 1 }] })
+  await writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: {
+    id: 'TE-P2', job_id: 'P2', user_id: 'U1', clocked_in_at: '2026-10-16T15:20:00.000Z', entry_type: 'work', source: 'manual',
+  } })
+  await settle()
+  net.online = true
+  for (let i = 0; i < 6; i++) { await settle(); await flushOutbox() }
+  ok('Complete waiting on photos: the clock-out queued before it lands', net.applied[0]?.filters.includes('id=eq.TE-P1'))
+  ok('…the Complete is never sent (the gate is never asked)', completeTries === 0 && completedP('P1').length === 0)
+  ok('…the next clean\'s clock-in goes past it', net.applied[1]?.values?.id === 'TE-P2')
+  ok('…the supplies save for the same clean waits behind it',
+    !net.applied.some(a => a.table === 'job_inventory_log') && (await pendingOpCount()) === 2)
+  const nothingParked = (await rejectedOps()).length === rejectedBeforeP
+  ok('…six flushes later nothing is counted, parked or reported', nothingParked && reported.length === reportedBeforeP)
+  photos.delete('P1')
+  net.blocked.delete('P1')
+  photoLanded('P1')
+  await settle(); await settle()
+  ok('photos landed: the Complete goes at once, with no other trigger', completedP('P1').length === 1 && completeTries === 1)
+  ok('…then the supplies save queued behind it', net.applied[net.applied.length - 1]?.table === 'job_inventory_log' && (await pendingOpCount()) === 0)
+  ok('…nothing parked, nothing reported', (await rejectedOps()).length === rejectedBeforeP && reported.length === reportedBeforeP)
+
+  // A photo the server keeps refusing gives way (photoQueue says when): the
+  // Complete goes and the server decides, and the crew and the office are told.
+  const pastRefused: any[] = []
+  const offPast = onCompletePastRefusedPhotos(e => pastRefused.push(e))
+  net.online = false
+  photos.set('P3', { waiting: 0, refused: 1, lastServerError: 'HTTP 400: new row violates row-level security policy' })
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P3' }, values: { status: 'completed' } })
+  await settle()
+  net.online = true
+  await flushOutbox()
+  ok('refused photo, gate satisfied: the Complete lands', completedP('P3').length === 1 && (await pendingOpCount()) === 0)
+  ok('…the crew is told once, with the server\'s reason',
+    pastRefused.length === 1 && pastRefused[0].jobId === 'P3' && pastRefused[0].error.includes('row-level security'))
+  ok('…and the office (System Health)', reported.length === reportedBeforeP + 1 && reported[reported.length - 1].includes('past 1 photo'))
+
+  // Same, and the gate needs that photo: the server's refusal counts as any
+  // other, so the Complete parks after five and is reported. Told once.
+  net.online = false
+  photos.set('P4', { waiting: 0, refused: 2, lastServerError: 'HTTP 400: refused' })
+  net.blocked.set('P4', ['no_after_photo'])
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P4' }, values: { status: 'completed' } })
+  await settle()
+  net.online = true
+  for (let i = 0; i < 4; i++) { await settle(); await flushOutbox() }
+  ok('refused photo the gate needs: the refusals are counted (4 flushes, still queued)',
+    (await pendingOpCount()) === 1 && pastRefused.length === 2)
+  await settle()
+  await flushOutbox()
+  ok('…parked on the 5th and reported', (await pendingOpCount()) === 0 &&
+    (await rejectedOps()).length === rejectedBeforeP + 1 && reported[reported.length - 1].includes('dropped update on jobs'))
+  ok('…the crew was told once, not once a flush', pastRefused.length === 2)
+  offPast()
+  net.blocked.delete('P4')
+  photos.delete('P3'); photos.delete('P4')
+
+  // Live: queue empty, the blocker check had no answer so the Complete was
+  // sent, and the gate refused it for photos this phone is still sending. It
+  // is queued behind them instead of returned as an error.
+  photos.set('P5', { waiting: 1, refused: 0, lastServerError: null })
+  net.blocked.set('P5', ['no_after_photo', 'missing_required_area_photo'])
+  r = await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P5' }, values: { status: 'completed' } })
+  ok('live Complete refused for photos still on the phone: queued, no error', r.queued === true && !r.error && (await pendingOpCount()) === 1)
+  await settle()
+  await flushOutbox()
+  ok('…and held, uncounted', (await pendingOpCount()) === 1 && !(await rejectedOps()).some(x => x.match?.id === 'P5'))
+  photos.delete('P5'); net.blocked.delete('P5')
+  photoLanded('P5')
+  await settle(); await settle()
+  ok('…sent once they land', completedP('P5').length === 1 && (await pendingOpCount()) === 0)
+
+  // Any other refusal is the caller's to show, as before: a blocker no photo
+  // answers, or photo blockers with no photo on the phone.
+  photos.set('P6', { waiting: 1, refused: 0, lastServerError: null })
+  net.blocked.set('P6', ['no_after_photo', 'unchecked_required_item'])
+  r = await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P6' }, values: { status: 'completed' } })
+  ok('live Complete refused for a ticked-item blocker too: the error is returned', !r.queued && String(r.error?.message).startsWith('RB_BLOCKED'))
+  photos.delete('P6')
+  net.blocked.set('P6', ['no_after_photo'])
+  r = await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P6' }, values: { status: 'completed' } })
+  ok('…and for photos the phone doesn\'t have', !r.queued && String(r.error?.message).startsWith('RB_BLOCKED') && (await pendingOpCount()) === 0)
+  net.blocked.delete('P6')
+
+  // A photo queued between the check and the send: the refusal is not counted,
+  // the Complete waits for it.
+  net.online = false
+  net.blocked.set('P7', ['no_after_photo'])
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P7' }, values: { status: 'completed' } })
+  net.beforeWrite = (table, _op, values) => {
+    if (table === 'jobs' && values?.status === 'completed') photos.set('P7', { waiting: 1, refused: 0, lastServerError: null })
+  }
+  await settle()
+  net.online = true
+  for (let i = 0; i < 6; i++) { await settle(); await flushOutbox() }
+  ok('photo queued mid-send: the refusal is not counted, the Complete waits',
+    (await pendingOpCount()) === 1 && !(await rejectedOps()).some(x => x.match?.id === 'P7'))
+  net.beforeWrite = null
+  photos.delete('P7'); net.blocked.delete('P7')
+  photoLanded('P7')
+  await settle(); await settle()
+  ok('…and goes once it lands', completedP('P7').length === 1 && (await pendingOpCount()) === 0)
 
   // A clean's clock started twice (job_time_entries_one_open_per_job, 23505).
   // The tap queued in a dead zone; meanwhile the arrival auto clock-in (or

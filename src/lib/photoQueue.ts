@@ -100,6 +100,11 @@ export interface PendingPhoto {
   lastErrorKind?: UploadErrorKind
   lastError?: string
   nextAttemptAt?: number
+  // Tries the server answered with a refusal (a 'server' failure). A queued
+  // Complete for this clean stops waiting on the photo once it reaches
+  // REFUSALS_BEFORE_COMPLETE_GOES (photosAheadOfComplete). Absent on entries
+  // queued before 2026-10-16.
+  refusals?: number
 }
 
 export interface QueueStatus {
@@ -564,6 +569,7 @@ async function runPass(force: boolean): Promise<{ uploaded: number; noSignal: bo
       stored: e.stored || result.stored || undefined,
       row_saved: e.row_saved || result.rowSaved || undefined,
       timeouts: result.timedOut ? (e.timeouts ?? 0) + 1 : e.timeouts,
+      refusals: result.kind === 'server' ? refusalsOf(e) + 1 : e.refusals,
       attempts,
       lastErrorKind: result.kind,
       lastError: result.message,
@@ -666,6 +672,44 @@ export async function queuedJobPhotos(jobId: string): Promise<QueuedJobPhoto[]> 
       failing: p.lastErrorKind === 'server',
       uploading: p.id === uploadingId,
     }))
+}
+
+// A queued Complete waits for its clean's photos (outbox.ts), because the
+// completion gate refuses it while a photo it needs has no row yet. A photo the
+// server keeps refusing would hold it forever, so after this many refusals the
+// Complete goes and the server decides. Backing off 2, then 4 minutes, the
+// third refusal comes at least 6 minutes after the first: long enough for a
+// passing hiccup (a statement timeout reads as a refusal too) to clear.
+const REFUSALS_BEFORE_COMPLETE_GOES = 3
+
+// An entry from before `refusals` was kept: its tries count as refusals if the
+// last one was.
+function refusalsOf(p: PendingPhoto): number {
+  return p.refusals ?? (p.lastErrorKind === 'server' ? p.attempts ?? 1 : 0)
+}
+
+export interface PhotosAheadOfComplete {
+  /** Photos still to become this clean's job_photos rows: a queued Complete waits for them. */
+  waiting: number
+  /** Ones the server has refused REFUSALS_BEFORE_COMPLETE_GOES times or more: the Complete no longer waits. */
+  refused: number
+  /** The latest refusal's reason, for the crew and the office. */
+  lastServerError: string | null
+}
+
+/** What this clean's photos still on the phone mean for its queued Complete.
+ *  Counts only the entries that become job_photos rows, as the gate does: a
+ *  photo taken inside the incident form only joins its report, and a flagged
+ *  damage photo whose row is saved is waiting on nothing but that report. */
+export async function photosAheadOfComplete(jobId: string): Promise<PhotosAheadOfComplete> {
+  const mine = (await readQueue())
+    .filter(p => p.job_id === jobId && (!p.incident_report_id || p.also_job_photo) && !p.row_saved)
+  const refused = mine.filter(p => p.lastErrorKind === 'server' && refusalsOf(p) >= REFUSALS_BEFORE_COMPLETE_GOES)
+  return {
+    waiting: mine.length - refused.length,
+    refused: refused.length,
+    lastServerError: refused.length ? refused[refused.length - 1].lastError ?? null : null,
+  }
 }
 
 /** Jobs with anything still in the queue (lib/cachePrune keeps their offline copy). */
