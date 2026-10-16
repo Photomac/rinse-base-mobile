@@ -24,6 +24,10 @@ export const db = {
   heldWrites: [] as (() => void)[],
 }
 
+// netFetch linkAnswering() (rinse-base-mobile #181): the link always answers
+// here; offline is a failed request (db.online), so writes try live first.
+export async function linkAnswering(): Promise<boolean> { return true }
+
 export function releaseWrites() {
   db.holdWrite = null
   db.heldWrites.splice(0).forEach(r => r())

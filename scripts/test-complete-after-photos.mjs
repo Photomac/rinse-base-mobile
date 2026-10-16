@@ -21,10 +21,14 @@ const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = p => readFileSync(join(repo, p), 'utf8')
 
 // Every rewrite must match, or the test would run against something other
-// than the shipped code.
+// than the shipped code. An `optional` one is for an import outbox.ts may not
+// have yet (netFetch, rinse-base-mobile #181).
 function rewrite(text, pairs, file) {
-  for (const [from, to] of pairs) {
-    if (!text.includes(from)) throw new Error(`test-complete-after-photos: ${file} no longer contains: ${from}`)
+  for (const [from, to, opts] of pairs) {
+    if (!text.includes(from)) {
+      if (opts?.optional) continue
+      throw new Error(`test-complete-after-photos: ${file} no longer contains: ${from}`)
+    }
     text = text.split(from).join(to)
   }
   return text
@@ -36,6 +40,7 @@ const sources = {
     [`import AsyncStorage from '@react-native-async-storage/async-storage'`, `import { AsyncStorage } from '${MOCKS}'`],
     [`from './supabase'`, `from '${MOCKS}'`],
     [`from './errorReporter'`, `from '${MOCKS}'`],
+    [`from './netFetch'`, `from '${MOCKS}'`, { optional: true }],
   ], 'outbox.ts'),
   'photoQueue.ts': rewrite(read('src/lib/photoQueue.ts'), [
     [`import AsyncStorage from '@react-native-async-storage/async-storage'`, `import { AsyncStorage } from '${MOCKS}'`],
