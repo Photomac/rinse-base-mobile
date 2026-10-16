@@ -21,6 +21,7 @@ try {
     .replace(`import AsyncStorage`, `import { AsyncStorage }`)
     .replace(`from './supabase'`, `from './outbox.mocks'`)
     .replace(`from './errorReporter'`, `from './outbox.mocks'`)
+    .replace(`from './photoQueue'`, `from './outbox.mocks'`)
   writeFileSync(join(work, 'outbox.ts'), outbox)
   cpSync(join(repo, 'src/lib/__tests__/outbox.mocks.ts'), join(work, 'outbox.mocks.ts'))
   cpSync(join(repo, 'src/lib/inventoryLogSave.ts'), join(work, 'inventoryLogSave.ts'))

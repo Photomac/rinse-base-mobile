@@ -33,6 +33,11 @@ export const net = {
   loseAcks: 0,
   /** Reads fail like a dead network while writes still get through. */
   readsOffline: false,
+  /** The completion gate (enforce_job_completion_gate): a Complete for one of
+   *  these cleans is refused with RB_BLOCKED and these blocker codes. */
+  blocked: new Map<string, string[]>(),
+  /** Called as a write reaches the server, before it is answered. */
+  beforeWrite: null as null | ((table: string, op: string, values: any) => void),
 }
 
 const filterVal = (filters: string[], k: string) =>
@@ -77,6 +82,11 @@ function result(table: string, op: string, values: any, filters: string[], opts?
       }
     }
   }
+  if (op !== 'select') net.beforeWrite?.(table, op, values)
+  const gated = table === 'jobs' && op === 'update' && values?.status === 'completed' && net.blocked.get(filterVal(filters, 'id') ?? '')
+  if (gated) {
+    return { error: { code: 'P0001', message: `RB_BLOCKED: ${JSON.stringify(gated.map(code => ({ code })))}` }, status: 400 }
+  }
   net.applied.push({ table, op, values, filters, ...(opts ? { opts } : {}) })
   if (table === 'job_time_entries' && op === 'upsert') {
     for (const r of Array.isArray(values) ? values : [values]) if (r?.id) net.storedEntries.add(r.id)
@@ -116,3 +126,17 @@ export const supabase = {
 
 export const reported: string[] = []
 export function reportClientError(msg: string) { reported.push(msg) }
+
+// The photo queue (photoQueue.ts) as the outbox sees it: what each clean's
+// photos still on the phone say about its queued Complete. Unset = none.
+export const photos = new Map<string, { waiting: number; refused: number; lastServerError: string | null }>()
+export async function photosAheadOfComplete(jobId: string) {
+  return photos.get(jobId) ?? { waiting: 0, refused: 0, lastServerError: null }
+}
+const photoListeners = new Set<(e: { uploadedJobId?: string }) => void>()
+export function onPhotoQueueChange(fn: (e: { uploadedJobId?: string }) => void) {
+  photoListeners.add(fn)
+  return () => { photoListeners.delete(fn) }
+}
+/** A photo for this clean became its job_photos row (photoQueue's event). */
+export function photoLanded(jobId: string) { photoListeners.forEach(fn => fn({ uploadedJobId: jobId })) }

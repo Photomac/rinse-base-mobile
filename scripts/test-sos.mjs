@@ -47,6 +47,7 @@ try {
   writeFileSync(join(work, 'outbox.ts'), rewrite(read('src/lib/outbox.ts'), [
     ...libMocks,
     [`from './errorReporter'`, `from './sos.mocks'`],
+    [`from './photoQueue'`, `from './sos.mocks'`],
   ], 'outbox.ts'))
   writeFileSync(join(work, 'sosTracker.ts'), rewrite(read('src/lib/sosTracker.ts'), [
     ...libMocks,
