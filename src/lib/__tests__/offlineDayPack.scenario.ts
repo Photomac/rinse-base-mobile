@@ -680,6 +680,38 @@ const scenarios: Record<string, () => Promise<void>> = {
     store.delete('writeOutbox')
   },
 
+  // A reload of the checklist (the realtime echo of her own tick, back from
+  // Photos) on a slow link: the saved copy predates the tick she just made,
+  // which went through live. It must not take the tick off the card while the
+  // live answer is on its way, nor for good if that never comes.
+  async checklistReloadKeepsLiveTick() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    c = relaunch(); scaleDeadlines(c)
+    const o = open(c, JOBS.red, 'A2')
+    await o.done
+    ok('opened with signal: Make beds not ticked yet', o.log.shows.length === 1 && o.log.shows[0].v.checked.ci3 !== true)
+    o.card.edited()
+    server.tables.job_checklist_items.find((r: any) => r.id === 'ci3').completed = true
+    server.slow.job_checklist_items = 700
+    o.log.shows.length = 0; o.log.spinner.length = 0
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('the echo of her tick: never shown undone, and the live rows come', o.log.shows.length === 1 && o.log.shows[0].v.checked.ci3 === true,
+      o.log.shows.map(x => `${fmt(x.at)} ci3=${!!x.v.checked.ci3}`).join(' → '))
+
+    // Back from Photos as the link dies: nothing live comes. The card keeps
+    // the tick (it holds what went through), and the spinner still goes.
+    server.mode = 'hang'
+    store.set('dataCache:chkrows:J-red', JSON.stringify(cachedVal('chkrows:J-red').map((r: any) => ({ ...r, completed: false }))))
+    o.log.shows.length = 0; o.log.spinner.length = 0
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS)
+    ok('back from Photos on a dead link: the card is left as it was (no older copy shown)', o.log.shows.length === 0, `${o.log.shows.length} show(s)`)
+    const up = o.log.spinner.find(x => x.on)?.at ?? NaN, down = o.offAt() ?? Infinity
+    ok('...and the spinner is down within the wait', !o.spinnerOn() && down - up < CARD_WAIT + 200, fmt(down - up))
+  },
+
   // The rest of the stop's screen on the same dead link: the job's extras,
   // who is on it, and the property's notes (lib/stopDetails). These were read
   // one after another, a read deadline each: the arrival instructions came

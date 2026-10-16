@@ -102,6 +102,7 @@ const SCENARIOS = [
   'checklistNothingSavedWaitsOnce',
   'checklistOnATrickle',
   'checklistSpinnerAlwaysClears',
+  'checklistReloadKeepsLiveTick',
   'stopDetailsOnAHangingLink',
   'stopDetailsOnATrickle',
   'stopDetailsSavedRosterKeepsClockIn',

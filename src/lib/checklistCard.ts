@@ -19,6 +19,10 @@
 //   overlay it, as before.
 // - The live answer, when it comes, refreshes the card, unless the crew has
 //   ticked something since the load began: the answer may predate the tick.
+// - A reload (a teammate's tick, back from Photos) never steps back to the
+//   saved copy once the card shows something: what's on screen is at least as
+//   new, and holds ticks that went through live since the copy was saved. It
+//   stays until the live answer comes.
 // - The spinner is cleared in a finally, so nothing that throws can leave it
 //   up. A throw is reported (admin System Health); a card that never loaded
 //   then shows no list rather than an invented one.
@@ -134,13 +138,14 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
 
 /**
  * Read the card for `job` at `addressId` (null: a job with no property).
- * `first` comes within CHECKLIST_WAIT.ms whenever the phone has saved copies.
+ * `first` comes within CHECKLIST_WAIT.ms whenever the phone has saved copies;
+ * `saved` says it holds at least one.
  * `fresh` resolves to a newer view once the live answers that were too slow
  * for `first` come in, or to null when there is nothing newer (none were
  * late, or the late ones failed too and fell back to the same saved copy).
  */
 export async function readChecklist(job: any, user: any, addressId: string | null, defaults: any[]):
-  Promise<{ first: ChecklistView; fresh: Promise<ChecklistView | null> }> {
+  Promise<{ first: ChecklistView; saved: boolean; fresh: Promise<ChecklistView | null> }> {
   // Asked again before the seed read: by then the round may have failed.
   const waitNow = () => (lastTripFailed() ? 0 : CHECKLIST_WAIT.ms)
   const wait = waitNow()
@@ -171,7 +176,7 @@ export async function readChecklist(job: any, user: any, addressId: string | nul
         } catch { return null }
       })()
     : Promise.resolve(null)
-  return { first, fresh }
+  return { first, saved: reads.some(r => r.fromCache), fresh }
 }
 
 /**
@@ -194,9 +199,9 @@ export function checklistCard(ui: { show: (v: ChecklistView) => void; setLoading
       const current = () => seq === loads && edits === editsAtStart
       if (!quiet) ui.setLoading(true)
       try {
-        const { first, fresh } = await readChecklist(job, user, addressId, defaults)
+        const { first, saved, fresh } = await readChecklist(job, user, addressId, defaults)
         if (!current()) return
-        show(first)
+        if (!(shown && saved)) show(first)
         ui.setLoading(false)
         const later = await fresh
         if (later && current()) show(later)
