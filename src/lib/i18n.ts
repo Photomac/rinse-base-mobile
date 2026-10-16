@@ -301,6 +301,9 @@ export const translations = {
     log_manually: '📝 Log manually',
     gps_subtitle: 'GPS automatically measures distance. Start when you leave, stop when you arrive.',
     auto_tracked_gps: 'Auto-tracked via GPS',
+    mileage_rate_unavailable: "Couldn't load your company's mileage rate, so the trip wasn't saved. Check your connection and try again.",
+    gps_trip_kept_in_form: 'Your miles are in the form below: tap Save trip to try again.',
+    trip_over_max_miles: 'A trip can be at most 500 miles. Ask your office to log a longer one.',
     stop_and_save: '⏹ Stop & save',
     start_tracking: '▶ Start tracking',
     // Chat
@@ -987,6 +990,9 @@ export const translations = {
     log_manually: '📝 Registrar manualmente',
     gps_subtitle: 'El GPS mide la distancia automáticamente. Inicia al salir, detén al llegar.',
     auto_tracked_gps: 'Registrado automáticamente por GPS',
+    mileage_rate_unavailable: 'No se pudo cargar la tarifa de millaje de tu empresa, así que el viaje no se guardó. Revisa tu conexión e inténtalo de nuevo.',
+    gps_trip_kept_in_form: 'Tus millas están en el formulario de abajo: toca Guardar viaje para intentarlo de nuevo.',
+    trip_over_max_miles: 'Un viaje puede ser de máximo 500 millas. Pide a tu oficina que registre uno más largo.',
     stop_and_save: '⏹ Detener y guardar',
     start_tracking: '▶ Iniciar seguimiento',
     // Chat
@@ -1668,6 +1674,9 @@ export const translations = {
     log_manually: '📝 Registrar manualmente',
     gps_subtitle: 'O GPS mede a distância automaticamente. Inicie ao sair, pare ao chegar.',
     auto_tracked_gps: 'Registrado automaticamente por GPS',
+    mileage_rate_unavailable: 'Não foi possível carregar a taxa de milhagem da sua empresa, então a viagem não foi salva. Verifique sua conexão e tente novamente.',
+    gps_trip_kept_in_form: 'Suas milhas estão no formulário abaixo: toque em Salvar viagem para tentar de novo.',
+    trip_over_max_miles: 'Uma viagem pode ter no máximo 500 milhas. Peça ao escritório para registrar uma mais longa.',
     stop_and_save: '⏹ Parar e salvar',
     start_tracking: '▶ Iniciar rastreamento',
     // Chat
