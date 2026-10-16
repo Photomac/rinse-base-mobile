@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Runs the outbox scenario test (src/lib/__tests__/outbox.scenario.ts)
-// against the REAL src/lib/outbox.ts with its three imports (AsyncStorage,
-// supabase, errorReporter) rewritten to the test mocks.
+// against the REAL src/lib/outbox.ts with its four imports (AsyncStorage,
+// supabase, errorReporter, netFetch) rewritten to the test mocks.
 //
 // Zero project dependencies: the repo has no test runner, and adding one for
 // a single pure-logic module wasn't worth the install weight. esbuild is
@@ -25,6 +25,7 @@ try {
     .replace(`import AsyncStorage`, `import { AsyncStorage }`)
     .replace(`from './supabase'`, `from './outbox.mocks'`)
     .replace(`from './errorReporter'`, `from './outbox.mocks'`)
+    .replace(`from './netFetch'`, `from './outbox.mocks'`)
   writeFileSync(join(work, 'outbox.ts'), outbox)
   cpSync(join(repo, 'src/lib/__tests__/outbox.mocks.ts'), join(work, 'outbox.mocks.ts'))
   const scenario = readFileSync(join(repo, 'src/lib/__tests__/outbox.scenario.ts'), 'utf8')

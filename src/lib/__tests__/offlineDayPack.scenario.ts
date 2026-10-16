@@ -184,6 +184,8 @@ const server = {
   /** RPC answers by function name: rows, or { status, body } for a refusal.
    *  A function not listed answers 404, as an older database would. */
   rpc: {} as Record<string, (args: any) => any>,
+  /** Reachability probes answered (netFetch's /auth/v1/health). */
+  probes: 0,
 }
 
 function splitTop(s: string): string[] {
@@ -285,7 +287,7 @@ const noAnswer = (init: any) => new Promise<Response>((_, reject) => {
   const json = (status: number, body: any) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', date } })
   const path = url.pathname
-  if (path === '/auth/v1/health') return json(200, { name: 'GoTrue' })
+  if (path === '/auth/v1/health') { server.probes++; return json(200, { name: 'GoTrue' }) }
   if (path === '/auth/v1/token') return json(200, makeSession(nowSec() + 3600))
   if (!path.startsWith('/rest/v1/')) { server.other.push(path); return json(404, { message: 'not found' }) }
   const method = String(init.method || 'GET').toUpperCase()
@@ -295,6 +297,9 @@ const noAnswer = (init: any) => new Promise<Response>((_, reject) => {
   server.maxInflight = Math.max(server.maxInflight, server.inflight)
   try {
     await sleep(server.delayMs + (server.slow[table] ?? 0))
+    // An aborted request gets no answer, as with a real fetch (the app's own
+    // deadline, or a caller cancelling it).
+    if (init?.signal?.aborted) throw Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })
     if (server.failAfter != null && server.rest.length > server.failAfter) {
       server.mode = 'offline'
       throw new TypeError('Network request failed')
@@ -938,6 +943,102 @@ const scenarios: Record<string, () => Promise<void>> = {
       u.log.length === 2 && u.log[0].v === null && u.log[0].at < CARD_WAIT + 200 && (u.log[1].v?.lines || []).map((l: any) => l.id).join() === 'cf9',
       u.log.map(x => `${fmt(x.at)} ${(x.v?.lines || []).map((l: any) => l.id).join() || 'none'}`).join(' → '))
   },
+  // ── Punches and other writes on a link that has stopped answering ───────
+  // writeThrough sent every write live first and queued it only once the
+  // write deadline ran out (30 s), with the button's spinner up the whole
+  // time: Clock in, Pause, Resume, Complete on one bar.
+  async punchOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(PJ)
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    // She opens the stop: its reads go out and nothing comes back.
+    void tracking(c).tr.load(JOBS.red, PJ, false, { soon: true })
+    await sleep(STALL + 100)
+    // ...and taps Clock in.
+    const e = timeEntry('te-q', U, new Date().toISOString())
+    let t0 = performance.now()
+    const w1 = await c.writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: e })
+    ok('Clock in while the stop\'s reads hang: queued at once, not after the write deadline',
+      w1.queued && performance.now() - t0 < 150, `${fmt(performance.now() - t0)} queued=${w1.queued} (write deadline ${WRITE_DEADLINE} ms)`)
+
+    // Reopened after the reads gave up: the last request failed (the queue is
+    // empty again, as after a delivery).
+    store.delete('writeOutbox')
+    c = relaunch(); scaleDeadlines(c)
+    await c.cachedRead(c.reads.jobMetaRead('J-red'))
+    t0 = performance.now()
+    const w2 = await c.writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: e })
+    ok('Clock in just after a request failed: queued at once', w2.queued && performance.now() - t0 < 150, `${fmt(performance.now() - t0)} queued=${w2.queued}`)
+    const paused = { clocked_out_at: new Date().toISOString(), pause_reason: 'Break', duration_minutes: 1 }
+    await c.writeThrough({ table: 'job_time_entries', op: 'update', match: { id: 'te-q' }, values: paused })
+
+    // Signal back: the outbox delivers them, in order.
+    server.mode = 'online'; seedSession()
+    ok('delivered', await drain(c), store.get('writeOutbox') ?? '')
+    const row = server.tables.job_time_entries.find((r: any) => r.id === 'te-q')
+    ok('signal back: the clock-in and its pause land, in order', row?.pause_reason === 'Break' && !store.get('writeOutbox')?.includes('te-q'), JSON.stringify(row))
+  },
+
+  // An OLD failure is not evidence the link is down now: the link is asked
+  // first (a probe), and a write goes live, so the server can still answer at
+  // once ("already clocked in", "not on this clean"). A fresh failure is.
+  async punchAfterAnOldFailureAsksFirst() {
+    setClock(MORNING); seedServer(); seedSession()
+    const c = load(); scaleDeadlines(c)
+    server.mode = 'offline'
+    await c.cachedRead(c.reads.jobMetaRead('J-red'))  // a dead zone on the way in
+    server.mode = 'online'
+    await sleep(FAIL_FRESH + 100)                     // back on signal, nothing sent since
+    const probes = server.probes
+    const w = await c.writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: timeEntry('te-live', U, new Date().toISOString()) })
+    ok('an old failure: asked first (one probe), and the clock-in goes live',
+      server.probes === probes + 1 && !w.queued && !w.error && server.tables.job_time_entries.some((r: any) => r.id === 'te-live'), `probes +${server.probes - probes}, queued=${w.queued}`)
+    server.mode = 'offline'
+    await c.cachedRead(c.reads.jobMetaRead('J-red'))  // fails now
+    server.mode = 'online'
+    await sleep(1600)  // past netFetch's 1.5 s reachability window, within FAIL_FRESH
+    const probes2 = server.probes
+    const w2 = await c.writeThrough({ table: 'job_time_entries', op: 'update', match: { id: 'te-live' }, values: { pause_reason: 'Break', clocked_out_at: new Date().toISOString(), duration_minutes: 1 } })
+    ok('a failure seconds ago: queued at once, nothing asked', w2.queued && server.probes === probes2, `queued=${w2.queued}, probes +${server.probes - probes2}`)
+    await sleep(100)
+    ok('...and the flush it starts delivers it as soon as the link answers', server.tables.job_time_entries.find((r: any) => r.id === 'te-live')?.pause_reason === 'Break')
+  },
+
+  // A slow answer on a link that is answering is not a dead link: one read
+  // takes long while others come back, and a write still goes live.
+  async slowAnswerOnAGoodLinkStaysLive() {
+    setClock(MORNING); seedServer(); seedSession()
+    const c = load(); scaleDeadlines(c)
+    server.slow.job_checklist_items = 2 * STALL  // inside the read deadline
+    void c.cachedRead(c.reads.checklistRowsRead('J-red'))
+    await sleep(30)
+    await c.cachedRead(c.reads.jobMetaRead('J-red'))
+    await sleep(STALL + 100)
+    const w = await c.writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: timeEntry('te-ok', U, new Date().toISOString()) })
+    ok('one slow read, others answering: the clock-in goes live, nothing asked', !w.queued && server.probes === 0 && server.tables.job_time_entries.some((r: any) => r.id === 'te-ok'), `queued=${w.queued}, probes ${server.probes}`)
+
+    // A read sent a moment ago, nothing back yet: not a stall.
+    server.slow.job_photos = 2 * STALL
+    await sleep(5)  // sent after the last answer, not in its millisecond
+    void c.cachedRead(c.reads.itemPhotosRead('J-red'))
+    await sleep(20)
+    const w2 = await c.writeThrough({ table: 'job_time_entries', op: 'update', match: { id: 'te-ok' }, values: { duration_minutes: 1 } })
+    ok('a read just sent and not yet answered: the write still goes live', !w2.queued, `queued=${w2.queued}`)
+
+    // A request the app cancels itself says nothing about the link, now or later.
+    await sleep(3 * STALL)  // the slow read has answered: nothing comes back after the cancel
+    const ac = new AbortController()
+    const p = c.supabase.from('jobs').select('id').eq('id', 'J-red').abortSignal(ac.signal)
+    ac.abort()
+    await Promise.resolve(p).catch(() => {})
+    await sleep(STALL + 100)
+    const w3 = await c.writeThrough({ table: 'job_time_entries', op: 'update', match: { id: 'te-ok' }, values: { duration_minutes: 2 } })
+    ok('a request the app cancelled is no stall, later either', !w3.queued, `queued=${w3.queued}`)
+  },
+
   // ── The time tracker (lib/timeTracker) ──────────────────────────────────
   // The timer and Clock in / Pause / Resume came from one read with a read
   // deadline: on a link that swallows requests, Clock in showed for 15 s on a
@@ -1478,6 +1579,11 @@ const scenarios: Record<string, () => Promise<void>> = {
 const READ_DEADLINE = 1500
 /** Writes, RPCs (the app: 30 s). */
 const WRITE_DEADLINE = 3000
+/** A request this long with nothing back since it went out: the link has
+ *  stopped answering (the app: 5 s). */
+const STALL = 500
+/** A failed request this recent is taken as the link's state now (the app: 30 s). */
+const FAIL_FRESH = 3000
 const CARD_WAIT = 300
 const DEFAULTS = [{ id: '1', room: 'Kitchen', title: 'General clean' }, { id: '2', room: 'Bathroom', title: 'General clean' }]
 const fmt = (ms: number | null | undefined) => (ms == null ? 'never' : `${Math.round(ms)} ms`)
@@ -1485,6 +1591,9 @@ const fmt = (ms: number | null | undefined) => (ms == null ? 'never' : `${Math.r
 function scaleDeadlines(c: any) {
   c.NET_TIMEOUTS.read = READ_DEADLINE
   c.NET_TIMEOUTS.write = WRITE_DEADLINE
+  c.NET_TIMEOUTS.stall = STALL
+  c.NET_TIMEOUTS.failFresh = FAIL_FRESH
+  c.NET_TIMEOUTS.probe = 400
   c.CHECKLIST_WAIT.ms = CARD_WAIT
   c.STOP_DETAILS_WAIT.ms = CARD_WAIT
   c.CHECK_FIRST_WAIT.ms = CARD_WAIT
@@ -1543,6 +1652,18 @@ function openCheckFirst(c: any, job: any, opts: { soon?: boolean } = {}) {
   const card = c.checkFirstCard({ show: (v: any) => { log.push({ at: performance.now() - t0, v }) } })
   const first: Promise<any> = card.load(job, CREW, opts)
   return { card, log, first }
+}
+
+/** Flush until the outbox is empty (a flush started on the dead link may
+ *  still be waiting out its deadline). */
+async function drain(c: any, ms = WRITE_DEADLINE + 1500): Promise<boolean> {
+  const until = performance.now() + ms
+  while (performance.now() < until) {
+    await c.flushOutbox()
+    if (!JSON.parse(store.get('writeOutbox') ?? '[]').length) return true
+    await sleep(50)
+  }
+  return false
 }
 
 // ── The time tracker, the stop's info, the counter, Supplies, the walkthrough ──

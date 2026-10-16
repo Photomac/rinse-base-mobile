@@ -246,6 +246,25 @@ const settle = () => new Promise(r => setTimeout(r, 10))
   ok('…it never landed', !net.storedEntries.has(newId))
   net.notOnClean.clear()
 
+  // A link that has stopped answering (netFetch linkAnswering(): one bar, no
+  // data): the write is queued without a live try, which would wait out the
+  // 30 s deadline with the button's spinner up. Once the link answers, the
+  // flush delivers it.
+  while ((await pendingOpCount()) > 0) { await settle(); await flushOutbox() }
+  net.online = false
+  net.answering = false
+  const triesBefore9 = net.tries
+  const stallId = uuid4()
+  const w9 = await writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: {
+    id: stallId, job_id: 'J10', user_id: 'U1', clocked_in_at: '2026-10-16T15:00:00.000Z', entry_type: 'work', source: 'manual',
+  } })
+  ok('link not answering: queued, with no live try', w9.queued && !w9.error && net.tries === triesBefore9 && (await pendingOpCount()) === 1)
+  await settle()
+  net.online = true
+  net.answering = true
+  await flushOutbox()
+  ok('…and delivered once the link answers', (await pendingOpCount()) === 0 && net.storedEntries.has(stallId))
+
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }
   console.log('\nAll outbox invariants hold.')
 })()
