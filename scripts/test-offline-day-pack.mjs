@@ -47,6 +47,8 @@ const SCREENS = {
   'src/components/WalkthroughChecklist.tsx': 'the walkthrough',
   'src/components/PrepCard.tsx': 'the prep card',
   'src/lib/checklistCard.ts': 'the stop\'s checklist card',
+  'src/lib/stopDetails.ts': 'the stop\'s details (job, crew, property)',
+  'src/lib/checkFirstCard.ts': 'the stop\'s Check first card',
 }
 for (const [file, what] of Object.entries(SCREENS)) {
   const src = read(file)
@@ -58,6 +60,17 @@ for (const [file, what] of Object.entries(SCREENS)) {
   check(`${what}: every read is one the pack saves`, all.length > 0 && unpacked.length === 0,
     unpacked.length ? `not saved: ${unpacked.join(', ')}` : `${all.length} builders`)
 }
+// The stop's details (lib/stopDetails): a flag the crew changes on the
+// screen is handed back before it shows, so an earlier load's answer can't
+// undo it (the loads themselves are timed in the stopDetails scenarios).
+const detail = read('src/screens/JobDetailScreen.tsx')
+const fnBody = (src, sig) => { const i = src.indexOf(sig); return i < 0 ? '' : src.slice(i, src.indexOf('\n  }\n', i)) }
+const flagged = f => f.indexOf('details.flagEdited()') > 0 && f.indexOf('details.flagEdited()') < Math.max(f.indexOf('setLaundryDoneOnsite(next)'), f.indexOf('setPetFeeApplied(next)'))
+check('the stop\'s screen: laundry-on-site and pet-fee taps mark the flags changed first',
+  flagged(fnBody(detail, 'async function toggleLaundryDoneOnsite(')) && flagged(fnBody(detail, 'async function togglePetFee(')) &&
+  /details\.flagEdited\(\)\s*setPetFeeApplied\(true\)/.test(detail))
+check('the stop\'s screen: flags go on screen only when the load says so', /if \(flags\) \{\s*setLaundryDoneOnsite\(/.test(fnBody(detail, 'function showJobMeta(')))
+
 const dash = read('src/screens/DashboardScreen.tsx')
 check('Home: the day read comes from dashTodayRead()', /cachedRead\(dashTodayRead\(/.test(dash) && !/dash:today/.test(dash))
 check('Home: rows go through homeDayRows() (today only)', /homeDayRows\(todayRes\.data/.test(dash))
@@ -89,6 +102,11 @@ const SCENARIOS = [
   'checklistNothingSavedWaitsOnce',
   'checklistOnATrickle',
   'checklistSpinnerAlwaysClears',
+  'stopDetailsOnAHangingLink',
+  'stopDetailsOnATrickle',
+  'stopDetailsSavedRosterKeepsClockIn',
+  'checkFirstOnAHangingLink',
+  'checkFirstOnATrickle',
 ]
 
 try {

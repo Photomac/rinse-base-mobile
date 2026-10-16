@@ -31,22 +31,23 @@ import { captureRequiredPhoto, captureCheckFirstPhoto } from '../lib/requiredPho
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
-import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, queuedJobPhotos, type QueuedJobPhoto } from '../lib/photoQueue'
+import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive } from '../lib/photoQueue'
 import { cachedRead } from '../lib/dataCache'
 import { noteCachedJobs } from '../lib/cachePrune'
 // Every cached read here is built in lib/jobReads, shared with the offline day
 // pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
 import {
   tenantVideoRead, routeStopRead, nextArrivalReads, crewNoteRead, crewNoteAckRead,
-  jobMetaRead, jobCrewRead, propMetaRead, crewClockRead, timeEntriesRead,
-  checkFirstLinesRead, checkFirstTicksRead, checkFirstPhotosRead, checkFirstStartRead, checkFirstTenantRead,
+  crewClockRead, timeEntriesRead,
 } from '../lib/jobReads'
 import { checklistCard, type ChecklistView } from '../lib/checklistCard'
+import { stopDetails } from '../lib/stopDetails'
+import { checkFirstCard } from '../lib/checkFirstCard'
 import { ackRow, clockInNote, crewNoteText, flushAcks, localAcks, recordAck, type CrewNoteJob } from '../lib/crewNote'
 import { crewClockFor, type CrewClock, type CrewClockEntry } from '../lib/crewClock'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 import {
-  activeLines, firstClockIn, startedAt, localBlockers, tickRow, seenRow, TICK_CONFLICT, SEEN_CONFLICT,
+  firstClockIn, startedAt, localBlockers, tickRow, seenRow, TICK_CONFLICT, SEEN_CONFLICT,
   type CheckFirstLine, type CheckFirstTick,
 } from '../lib/checkFirst'
 import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
@@ -318,6 +319,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // because the button on screen kept saying otherwise).
   const [recordForOpen, setRecordForOpen] = useState(false)
   const [bagColor, setBagColor] = useState<string | null>(null)
+  // The job's extras, its crew and the property's notes (lib/stopDetails):
+  // read at once, each saved copy within a few seconds on a weak signal, the
+  // live answer replacing it when it comes.
+  const [details] = useState(() => stopDetails({ job: showJobMeta, crew: showCrew, roster: setRoster, property: showPropMeta }))
   // Crew see the property, not the homeowner — client names are for admins.
   const isAdminRole = ['owner', 'manager', 'dispatcher'].includes(user.role)
   const propLabel = addr?.nickname || (isAdminRole ? client?.full_name : addr?.street)
@@ -347,9 +352,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // The Check first window at Start; `then` is the start it holds.
   const [cfPrompt, setCfPrompt] = useState<{ then: () => void | Promise<void> } | null>(null)
   const [cfBusy, setCfBusy] = useState<string | null>(null)
-  const cfLoadSeq = useRef(0)
   // The property has lines: photo events reload the card (none: no extra reads).
   const cfHasLines = useRef(false)
+  // The card's loads (lib/checkFirstCard): the newest wins, and one that began
+  // before the crew's last tick or line photo doesn't overwrite it.
+  const [cfCard] = useState(() => checkFirstCard({ show: v => { cfHasLines.current = !!v; setCheckFirst(v) } }))
   const cfY = useRef(0)
   // Laundry-run task: internal shell property, no checklist/photos/supplies —
   // the cash + bags reconciliation form replaces them.
@@ -439,7 +446,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     loadNextArrival().catch(() => {})
     loadRouteStop()
     loadCrewNote().catch(() => {})
-    loadCheckFirst().catch(() => {})
+    loadCheckFirst({ soon: true }).catch(() => {})
     loadPhotoRequirements()
   }, [])
 
@@ -523,47 +530,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (jn) setCrewNote({ crew_note: (jn as any).crew_note ?? null, crew_note_at_clock_in: !!(jn as any).crew_note_at_clock_in })
   }
 
-  // Check first: the property's lines, then (only where it has some) this
-  // clean's ticks, line photos and start. Every read fails soft: no answer
-  // shows no card and blocks nothing. Ticks queued offline overlay the copy,
-  // and a line photo still on the phone counts as taken (the gate asks for its
-  // row separately once it lands). The newest load wins.
-  async function loadCheckFirst(): Promise<CheckFirstView | null> {
-    const seq = ++cfLoadSeq.current
+  // Check first: the property's lines and (only where it has some) this
+  // clean's ticks, line photos and start, read by lib/checkFirstCard. Every
+  // read fails soft: no answer shows no card and blocks nothing. `soon` (the
+  // screen opening) shows the saved copy within a few seconds on a weak
+  // signal; every other load waits for the live answer, so a tick that just
+  // went through stays on the card and in Complete's check.
+  function loadCheckFirst(opts: { soon?: boolean } = {}): Promise<CheckFirstView | null> {
     const addrId = job.client_addresses?.id || job.address_id
-    if (isTask || !addrId) return null
-    const [{ data: rows }, { data: ten }] = await Promise.all([
-      cachedRead(checkFirstLinesRead(addrId)), cachedRead(checkFirstTenantRead(user.tenant_id)),
-    ])
-    const lines = activeLines(((rows as CheckFirstLine[] | null) ?? []))
-    if (seq === cfLoadSeq.current) cfHasLines.current = lines.length > 0
-    if (!lines.length) {
-      if (seq === cfLoadSeq.current) setCheckFirst(null)
-      return null
-    }
-    const [{ data: tickRows }, { data: photoRows }, { data: jr }, queued] = await Promise.all([
-      cachedRead(checkFirstTicksRead(job.id)),
-      cachedRead(checkFirstPhotosRead(job.id)),
-      cachedRead(checkFirstStartRead(job.id)),
-      queuedJobPhotos(job.id).catch((): QueuedJobPhoto[] => []),
-    ])
-    const ticks = (await overlayPending('job_check_first_ticks', (tickRows as any[]) ?? [],
-      v => v.job_id === job.id)) as CheckFirstTick[]
-    const photos: Record<string, string> = {}
-    for (const p of (photoRows as any[]) ?? []) if (p.check_first_line_id && !photos[p.check_first_line_id]) photos[p.check_first_line_id] = p.photo_url
-    const saving: string[] = []
-    for (const q of queued) {
-      if (!q.check_first_line_id) continue
-      saving.push(q.check_first_line_id)
-      if (!photos[q.check_first_line_id]) photos[q.check_first_line_id] = q.localUri
-    }
-    const view: CheckFirstView = {
-      lines, ticks, photos, saving,
-      required: (ten as any)?.check_first_required === true,
-      jobStartedAt: (jr as any)?.started_at ?? null,
-    }
-    if (seq === cfLoadSeq.current) setCheckFirst(view)
-    return view
+    if (isTask || !addrId) return Promise.resolve(null)
+    return cfCard.load(job, user, opts)
   }
 
   // Who ticked a line: the name the server sent, else this person (a tick
@@ -580,6 +556,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Only a real server refusal takes it back.
   async function writeCheckFirstTick(line: CheckFirstLine): Promise<boolean> {
     const row = tickRow({ tenantId: user.tenant_id, jobId: job.id, userId: user.id, line })
+    cfCard.edited()
     setCheckFirst(v => (v && !v.ticks.some(k => k.line_id === line.id)
       ? { ...v, ticks: [...v.ticks, { ...row, users: { full_name: user.full_name ?? null } }] } : v))
     const { error } = await writeThrough({
@@ -610,6 +587,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       { tenantId: user.tenant_id, jobId: job.id, userId: user.id }, t)
     if (res.status === 'captured') {
       const uri = res.localUri
+      cfCard.edited()
       setCheckFirst(v => (v ? {
         ...v,
         saving: v.saving.includes(line.id) ? v.saving : [...v.saving, line.id],
@@ -621,15 +599,22 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   // Beds/baths/sqft aren't in the list-screen job payload, so fetch them here —
-  // works no matter which screen opened this job.
-  async function loadPropMeta() {
-    // Time-boxed crew access code (smart lock) lives on the job, not the list
-    // payload — same for the laundry flag and the client's type.
-    const { data: jr } = await cachedRead(jobMetaRead(job.id))
+  // works no matter which screen opened this job. Time-boxed crew access code
+  // (smart lock) lives on the job, not the list payload — same for the laundry
+  // flag and the client's type. lib/stopDetails reads all three at once.
+  function loadPropMeta() {
+    details.load(job).catch(() => {})
+  }
+
+  // `flags`: the crew hasn't changed laundry-on-site or the pet fee since the
+  // load began (an answer from before their change must not undo it).
+  function showJobMeta(jr: any, flags: boolean) {
     if ((jr as any)?.seam_access_code) setAccessCode((jr as any).seam_access_code)
     if (jr) {
-      setLaundryDoneOnsite(!!(jr as any).laundry_done_onsite)
-      setPetFeeApplied(!!(jr as any).pet_fee_applied)
+      if (flags) {
+        setLaundryDoneOnsite(!!(jr as any).laundry_done_onsite)
+        setPetFeeApplied(!!(jr as any).pet_fee_applied)
+      }
       const ct = (jr as any).clients?.client_type
       if (ct) setClientType(ct)
       if ((jr as any).checkout_time) setTurnover({
@@ -643,15 +628,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       const pc = (jr as any).property_reservations?.pet_count
       if (pc != null) setBookedPets(pc)
     }
+  }
 
-    // Full crew roster for this job, lead first.
-    const { data: crewRows, fromCache: crewFromCache } = await cachedRead(jobCrewRead(job.id))
-    if (crewRows) setRoster({ ids: (crewRows as any[]).map(a => a.user_id ?? a.users?.id).filter(Boolean), live: !crewFromCache })
-    setCrewOnJob((crewRows ?? []).map((a: any) => ({ id: a.users?.id, name: a.users?.full_name, isLead: !!a.is_lead })).filter((c: any) => c.id && c.name))
+  // Full crew roster for this job, lead first. (Who the server counts as on
+  // it, for Clock in, is the separate roster: lib/stopDetails hands that over
+  // only once it is final.)
+  function showCrew(crewRows: any[]) {
+    setCrewOnJob(crewRows.map((a: any) => ({ id: a.users?.id, name: a.users?.full_name, isLead: !!a.is_lead })).filter((c: any) => c.id && c.name))
+  }
 
-    const addrId = job.client_addresses?.id || job.address_id
-    if (!addrId) return
-    const { data } = await cachedRead(propMetaRead(addrId))
+  function showPropMeta(data: any) {
     if (data) {
       setPropMeta(data as any)
       setBagColor((data as any).laundry_bag_color ?? null)
@@ -668,6 +654,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   async function toggleLaundryDoneOnsite() {
     const next = !laundryDoneOnsite
+    details.flagEdited()
     setLaundryDoneOnsite(next)
     const { error } = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { laundry_done_onsite: next } })
     if (error) { setLaundryDoneOnsite(!next); Alert.alert(t('error'), error.message) }
@@ -675,6 +662,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
 
   async function togglePetFee() {
     const next = !petFeeApplied
+    details.flagEdited()
     setPetFeeApplied(next)
     const { error } = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: { pet_fee_applied: next } })
     if (error) { setPetFeeApplied(!next); Alert.alert(t('error'), error.message) }
@@ -805,8 +793,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   // The roster loads after mount. Once it says this is somebody else's clean,
-  // widen the clock to the whole job so a proxy punch is visible and closable.
-  useEffect(() => { if (recordsForOthers) loadTimeEntries() }, [recordsForOthers])
+  // widen the clock to the whole job so a proxy punch is visible and closable;
+  // narrow it back if a later answer says otherwise (the saved crew list shows
+  // first on a weak signal, the live one after it).
+  const clockWidened = useRef(false)
+  useEffect(() => {
+    if (recordsForOthers === clockWidened.current) return
+    clockWidened.current = recordsForOthers
+    loadTimeEntries()
+  }, [recordsForOthers])
 
   /**
    * How many named property shots this job still owes.
@@ -1513,6 +1508,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // Skipped when they already ticked the toggle mid-clean: they have answered.
     if (!petFeeApplied && (petFriendly || petFee > 0)) {
       if (await askPetFee() === 'yes') {
+        details.flagEdited()
         setPetFeeApplied(true)
         // ORDER MATTERS. auto-invoice fires from a DB trigger on the status
         // change to 'completed' and reads jobs.pet_fee_applied at that moment,

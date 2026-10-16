@@ -14,7 +14,7 @@
 // and, in the screen and strings, that Clock in, Resume and Complete give way
 // to the note (Complete since rinsebase-app #1493; Pause stays, an inspection
 // keeps its button), a 42501 says "not on this clean" instead of "check your signal", the
-// roster is read with user_id and marked live or saved, and the two strings
+// roster is read with user_id and marked live or saved (lib/stopDetails), and the two strings
 // exist in all three languages.
 //
 // Usage: node scripts/test-clock-in-gate.mjs
@@ -100,9 +100,13 @@ check('clock-in and resume send every refusal through clockInRefused, never stra
 check('clockInRefused: 42501 from crew → "not on this clean" and the note; anything else → as before',
   [/err\?\.code === '42501' && !isAdminRole/.test(refused), /setRefusedHere\(true\)/.test(refused),
    /t\('not_on_this_clean_failed'\)/.test(refused), /t\('clock_in_failed'\)/.test(refused)], [true, true, true, true])
+// The roster is read by lib/stopDetails (with the property and the job's
+// extras) and handed to the screen's setRoster once final.
+const details = readFileSync(join(repo, 'src/lib/stopDetails.ts'), 'utf8')
 check('the roster is read with user_id and kept as live or saved',
   [/jobCrewRead[\s\S]{0,120}\.select\('user_id, is_lead, users!job_assignments_user_id_fkey\(id, full_name\)'\)/.test(reads),
-   /setRoster\(\{ ids: [^}]*a\.user_id \?\? a\.users\?\.id[^}]*live: !crewFromCache \}\)/.test(screen)], [true, true])
+   /ui\.roster\(\{ ids: [^}]*a\.user_id \?\? a\.users\?\.id[^}]*live: !fin\.fromCache \}\)/.test(details),
+   /stopDetails\(\{[^}]*roster: setRoster[^}]*\}\)/.test(screen)], [true, true, true])
 
 const i18n = readFileSync(join(repo, 'src/lib/i18n.ts'), 'utf8')
 for (const key of ['not_on_this_clean', 'not_on_this_clean_failed']) {
