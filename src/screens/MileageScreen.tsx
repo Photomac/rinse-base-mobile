@@ -9,11 +9,25 @@ import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startTrip, stopTrip, getTripState, accumulate } from '../lib/mileageTracker'
 
-const IRS_RATE = 0.70 // 2025 IRS standard mileage rate fallback
+// A trip logged here is priced by the database at miles x the company's
+// mileage rate (stamp_mileage_log_pay, web 20261016175210), whatever this
+// screen sends, and refused above 500 miles. So the screen shows the company's
+// rate exactly, 0 included, and never a made-up one: until it loads, estimates
+// read "—" and saving fetches it first. (It used to start at a $0.70 IRS
+// fallback, which a trip saved before the rate loaded was priced at.)
+const MAX_TRIP_MILES = 500
+function rateOf(row: { mileage_rate?: unknown } | null | undefined): number | null {
+  const raw = row?.mileage_rate
+  if (raw == null || raw === '') return null
+  const rate = Number(raw)
+  return Number.isFinite(rate) && rate >= 0 ? rate : null
+}
+function priceTrip(miles: number, rate: number) { return Math.round(miles * rate * 100) / 100 }
 const PURPOSES_KEYS = ['job_travel', 'supply_run_miles', 'equipment_pickup', 'client_meeting', 'training', 'other'] as const
 type PurposeKey = typeof PURPOSES_KEYS[number]
 
 function fmt$(n: number) { return '$' + n.toFixed(2) }
+function fmtEstimate(miles: number, rate: number | null) { return rate == null || !Number.isFinite(miles) ? '—' : fmt$(miles * rate) }
 function fmtDuration(ms: number) {
   const mins = Math.floor(ms / 60000)
   if (mins < 60) return `${mins}m`
@@ -38,7 +52,7 @@ export function MileageScreen({ user }: { user: any }) {
   const locationSub = useRef<any>(null)
   const timerRef = useRef<any>(null)
   const pollRef = useRef<any>(null)
-  const [mileageRate, setMileageRate] = useState(IRS_RATE)
+  const [mileageRate, setMileageRate] = useState<number | null>(null)
 
   async function load() {
     try {
@@ -49,7 +63,8 @@ export function MileageScreen({ user }: { user: any }) {
         supabase.from('tenants').select('mileage_rate').eq('id', user.tenant_id).single()
       ])
       setTrips(tripsRes.data ?? [])
-      if (tenantRes.data?.mileage_rate != null) setMileageRate(tenantRes.data.mileage_rate)
+      const rate = rateOf(tenantRes.data)
+      if (rate != null) setMileageRate(rate)
     } catch (err) {
       console.warn('Failed to load mileage data:', err)
     }
@@ -58,6 +73,16 @@ export function MileageScreen({ user }: { user: any }) {
   }
 
   useEffect(() => { load() }, [])
+
+  // The company's rate for a save: the loaded one, else one more read (the
+  // first may have failed on a weak signal). null = still unknown: don't save.
+  async function ensureRate(): Promise<number | null> {
+    if (mileageRate != null) return mileageRate
+    const { data } = await supabase.from('tenants').select('mileage_rate').eq('id', user.tenant_id).single()
+    const rate = rateOf(data)
+    if (rate != null) setMileageRate(rate)
+    return rate
+  }
 
   // A trip may already be running (screen re-opened mid-drive, or the app was
   // killed and relaunched) — the odometer lives in persisted state, so pick it
@@ -131,10 +156,25 @@ export function MileageScreen({ user }: { user: any }) {
       setTrackingMiles(0)
       return
     }
+    if (miles > MAX_TRIP_MILES) {
+      Alert.alert(t('error'), t('trip_over_max_miles'))
+      setTrackingMiles(0)
+      return
+    }
+    const rate = await ensureRate()
+    if (rate == null) {
+      // Nothing is lost: the trip's miles move to the manual form, which
+      // saves the same trip once the rate can be read.
+      Alert.alert(t('error'), t('mileage_rate_unavailable') + '\n\n' + t('gps_trip_kept_in_form'))
+      setForm(fm => ({ ...fm, from: 'GPS tracked', to: 'GPS tracked', miles: String(miles), purpose: trackingPurpose }))
+      setShowForm(true)
+      setTrackingMiles(0)
+      return
+    }
 
     Alert.alert(
       ti(t('save_trip_title'), { miles: String(miles) }),
-      ti(t('estimated_reimbursement'), { amt: fmt$(miles * mileageRate) }),
+      ti(t('estimated_reimbursement'), { amt: fmt$(miles * rate) }),
       [
         { text: t('cancel'), style: 'cancel' },
         {
@@ -146,7 +186,7 @@ export function MileageScreen({ user }: { user: any }) {
               started_at: trip?.startedAt || trackingStart?.toISOString() || new Date().toISOString(),
               origin_label: 'GPS tracked', dest_label: 'GPS tracked',
               distance_miles: miles,
-              reimbursement_amt: Math.round(miles * mileageRate * 100) / 100,
+              reimbursement_amt: priceTrip(miles, rate),
               purpose: trackingPurpose, notes: t('auto_tracked_gps'), flagged: false,
             })
             setSaving(false)
@@ -163,12 +203,15 @@ export function MileageScreen({ user }: { user: any }) {
     if (!form.from || !form.to) { Alert.alert(t('error'), t('enter_origin_dest')); return }
     const miles = parseFloat(form.miles)
     if (!miles || miles <= 0) { Alert.alert(t('error'), t('enter_valid_miles')); return }
+    if (miles > MAX_TRIP_MILES) { Alert.alert(t('error'), t('trip_over_max_miles')); return }
     setSaving(true)
+    const rate = await ensureRate()
+    if (rate == null) { setSaving(false); Alert.alert(t('error'), t('mileage_rate_unavailable')); return }
     const { error } = await supabase.from('mileage_logs').insert({
       tenant_id: user.tenant_id, user_id: user.id,
       started_at: new Date(form.date + 'T08:00:00').toISOString(),
       origin_label: form.from.trim(), dest_label: form.to.trim(),
-      distance_miles: miles, reimbursement_amt: Math.round(miles * mileageRate * 100) / 100,
+      distance_miles: miles, reimbursement_amt: priceTrip(miles, rate),
       purpose: form.purpose, notes: form.notes.trim() || null, flagged: false,
     })
     setSaving(false)
@@ -224,7 +267,7 @@ export function MileageScreen({ user }: { user: any }) {
                 </View>
                 <View style={styles.gpsStatDivider} />
                 <View style={styles.gpsStat}>
-                  <Text style={[styles.gpsStatValue, { color: '#10B981' }]}>{fmt$(trackingMiles * mileageRate)}</Text>
+                  <Text style={[styles.gpsStatValue, { color: '#10B981' }]}>{fmtEstimate(trackingMiles, mileageRate)}</Text>
                   <Text style={styles.gpsStatLabel}>{t('estimated')}</Text>
                 </View>
               </View>
@@ -262,7 +305,7 @@ export function MileageScreen({ user }: { user: any }) {
             <Text style={styles.fieldLabel}>{t('miles')} *</Text>
             <TextInput style={styles.input} value={form.miles} onChangeText={v => f('miles', v)} placeholder="0.0" keyboardType="decimal-pad" placeholderTextColor="#94A3B8" />
             {form.miles && parseFloat(form.miles) > 0 && (
-              <View style={styles.estimateBadge}><Text style={styles.estimateText}>💰 {fmt$(parseFloat(form.miles) * mileageRate)}</Text></View>
+              <View style={styles.estimateBadge}><Text style={styles.estimateText}>💰 {fmtEstimate(parseFloat(form.miles), mileageRate)}</Text></View>
             )}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 8 }}>
               {PURPOSES_KEYS.map(key => (
