@@ -52,6 +52,20 @@ export function dashTodayRead(user: any, now: Date): CacheRead {
   }
 }
 
+/** Home's day shift (daily time tracking): the person's open shift, a
+ *  job_time_entries row with no job and no clock-out. Start / End my day save
+ *  their answer under this key (writeCacheEntry), so a reload with no signal
+ *  shows what this phone last did, not the read from before it. */
+export function dashShiftRead(user: any): CacheRead {
+  return {
+    key: `dash:shift:${user.id}`,
+    q: () => supabase.from('job_time_entries')
+      .select('id, clocked_in_at')
+      .eq('user_id', user.id).is('job_id', null).eq('entry_type', 'shift').is('clocked_out_at', null)
+      .order('clocked_in_at', { ascending: false }).limit(1).maybeSingle(),
+  }
+}
+
 /** The rows Home shows for one tenant day: the office's whole company, crew
  *  only their own. Rows outside `ymd` never pass — the read carries tomorrow,
  *  and a cached copy can be from an earlier day. */

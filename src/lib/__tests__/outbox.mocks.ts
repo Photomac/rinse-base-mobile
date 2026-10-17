@@ -38,6 +38,12 @@ export const net = {
   blocked: new Map<string, string[]>(),
   /** Called as a write reaches the server, before it is answered. */
   beforeWrite: null as null | ((table: string, op: string, values: any) => void),
+  /** Server-side OPEN day shifts, keyed by user_id; mirrors
+   *  job_time_entries_one_open_shift. An open-shift upsert for a person who
+   *  already has a different one open gets 23505 / 409, as PostgREST returns it. */
+  openShifts: new Map<string, { id: string; clocked_in_at: string }>(),
+  /** The open shift is ended between the refused insert and the read-back. */
+  hideOpenOnRead: false,
 }
 
 const filterVal = (filters: string[], k: string) =>
@@ -49,6 +55,26 @@ function result(table: string, op: string, values: any, filters: string[], opts?
   if (!net.online || (op === 'select' && net.readsOffline)) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
   if (net.rejectTables.has(table) && (!net.rejectOp || net.rejectOp === op)) {
     return { error: { message: 'violates row-level security' }, status: 403 }
+  }
+  if (table === 'job_time_entries' && filterVal(filters, 'entry_type') === 'shift' && op === 'select') {
+    const open = net.hideOpenOnRead ? undefined : net.openShifts.get(filterVal(filters, 'user_id') ?? '')
+    return { data: open ? [{ ...open }] : [], error: null, status: 200 }
+  }
+  if (table === 'job_time_entries' && op === 'upsert' && !Array.isArray(values)
+    && values?.entry_type === 'shift' && !values.clocked_out_at && values.user_id) {
+    const open = net.openShifts.get(values.user_id)
+    if (open && open.id !== values.id) {
+      return { error: { code: '23505', message: 'duplicate key value violates unique constraint "job_time_entries_one_open_shift"' }, status: 409 }
+    }
+    net.openShifts.set(values.user_id, { id: values.id, clocked_in_at: values.clocked_in_at })
+  }
+  if (table === 'job_time_entries' && op === 'update') {
+    const id = filterVal(filters, 'id')
+    for (const [u, s] of net.openShifts) {
+      if (s.id !== id) continue
+      if (values?.clocked_out_at) net.openShifts.delete(u)
+      else if (values?.clocked_in_at) net.openShifts.set(u, { ...s, clocked_in_at: values.clocked_in_at })
+    }
   }
   if (table === 'job_time_entries' && op === 'select' && filterIn(filters, 'id')) {
     const ids = filterIn(filters, 'id')!.filter(id => net.storedEntries.has(id))
