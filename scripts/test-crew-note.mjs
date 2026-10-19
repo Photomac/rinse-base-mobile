@@ -119,8 +119,10 @@ check('"Not yet" only when a start is waiting', /onNotYet=\{notePrompt\?\.then \
 check('the acknowledgment never goes through the pay outbox', /writeThrough\(\{\s*table: 'job_crew_note_acks'/.test(screen), false)
 // The read itself lives in src/lib/jobReads.ts (shared with the offline day pack).
 const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
+// The note's load lives in src/lib/stopInfo.ts (how soon the saved copy shows).
+const info = readFileSync(join(repo, 'src/lib/stopInfo.ts'), 'utf8')
 check('the note is read on its own, failing soft',
-  [/cachedRead\(crewNoteRead\(job\.id\)\)/.test(screen),
+  [/readSoon\(crewNoteRead\(job\.id\), wait\)/.test(info) && /info\.load\(job, user\)\.catch\(\(\) => \{\}\)/.test(screen),
    /key: `crewnote:\$\{jobId\}`,\s*q: \(\) => supabase\.from\('jobs'\)\s*\.select\('crew_note, crew_note_at_clock_in'\)/.test(reads)], [true, true])
 
 console.log(`\n${pass} passed, ${fail} failed`)

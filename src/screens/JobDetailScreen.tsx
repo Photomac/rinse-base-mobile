@@ -5,8 +5,8 @@ import * as ImagePicker from 'expo-image-picker'
 import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 // Job times render in the tenant's zone, not the phone's — src/lib/timezone.ts.
-import { fmtTime, dayKey } from '../lib/timezone'
-import { pickNextArrival, fmtWallTime, type ArrivalRow, type NextArrival } from '../lib/nextArrival'
+import { fmtTime } from '../lib/timezone'
+import { fmtWallTime, type NextArrival } from '../lib/nextArrival'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { WalkthroughScreen } from './WalkthroughScreen'
 import { JobInventoryScreen } from './JobInventoryScreen'
@@ -38,14 +38,14 @@ import { cachedRead } from '../lib/dataCache'
 import { noteCachedJobs } from '../lib/cachePrune'
 // Every cached read here is built in lib/jobReads, shared with the offline day
 // pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
-import {
-  tenantVideoRead, routeStopRead, nextArrivalReads, crewNoteRead, crewNoteAckRead,
-  crewClockRead, timeEntriesRead, checkFirstStartRead,
-} from '../lib/jobReads'
+import { crewClockRead, checkFirstStartRead } from '../lib/jobReads'
 import { checklistCard, type ChecklistView } from '../lib/checklistCard'
 import { stopDetails } from '../lib/stopDetails'
 import { checkFirstCard } from '../lib/checkFirstCard'
-import { ackRow, clockInNote, crewNoteText, flushAcks, localAcks, recordAck, type CrewNoteJob } from '../lib/crewNote'
+import { timeTracker } from '../lib/timeTracker'
+import { stopInfo } from '../lib/stopInfo'
+import { requiredPhotoCount, type PhotoCount } from '../lib/requiredPhotoCount'
+import { ackRow, clockInNote, crewNoteText, recordAck, type CrewNoteJob } from '../lib/crewNote'
 import { crewClockFor, type CrewClock, type CrewClockEntry } from '../lib/crewClock'
 import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
 import {
@@ -252,6 +252,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // and crews were asked for photos of rooms this screen will not even render.
   // null = unknown (RPC error, or an older DB) and everything counts, fail-open.
   const [owedReqs, setOwedReqs] = useState<Set<string> | null>(null)
+  // The counter's loads (lib/requiredPhotoCount): cached reads in one round,
+  // the saved copy within a few seconds on a weak signal.
+  const [photoCount] = useState(() => requiredPhotoCount({ show: showPhotoCount }))
 
   // Time tracking
   const [timeEntries, setTimeEntries] = useState<any[]>([])
@@ -265,6 +268,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null; lockbox_code?: string | null; arrival_instructions?: string | null } | null>(null)
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
+  // The tracker's loads and this screen's punches (lib/timeTracker): the
+  // saved copy within a few seconds on a weak signal, and never a copy that
+  // predates a punch made here.
+  const [tracker] = useState(() => timeTracker({ show: showTimeEntries }))
 
   // Listed, shootable, but not outstanding for THIS clean — added after the
   // crew clocked in, or on a room the owner archived.
@@ -350,6 +357,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [notePrompt, setNotePrompt] = useState<{ then: (() => void) | null } | null>(null)
   // When "Got it" last closed that window (the Check first window waits for it to go).
   const noteClosedAt = useRef(0)
+  // The office's note and "Got it"s, who arrives next, Stop k of M and the
+  // video switch (lib/stopInfo): read at once, each saved copy within a few
+  // seconds on a weak signal, the live answer replacing it when it comes.
+  const [info] = useState(() => stopInfo({
+    note: setCrewNote, acks: setAckedNotes, nextArrival: setNextArrival, routeStop: setRouteStop, video: setVideoEnabled,
+  }))
   // "Check first" (lib/checkFirst.ts): the property's own list, ticked on every
   // clean there. null = nothing to show: no lines, not a clean, or no answer.
   const [checkFirst, setCheckFirst] = useState<CheckFirstView | null>(null)
@@ -431,27 +444,20 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const cfStarted = startedAt(firstClockIn([...timeEntries, ...(crewClockRows ?? [])]), checkFirst?.jobStartedAt)
 
   useEffect(() => {
-    // Fails closed: offline with nothing cached, or a server without the column
-    // yet, just leaves the Walkthrough button hidden.
-    cachedRead(tenantVideoRead(user.tenant_id))
-      .then(({ data }) => setVideoEnabled(!!(data as any)?.video_walkthroughs_enabled))
-      .catch(() => {})
-  }, [user.tenant_id])
-
-  useEffect(() => {
     // Drain queued offline writes first chance we get (same trigger set as the
     // photo queue: screen mount, app foreground, next write).
     flushOutbox().catch(() => {})
     // Opened on this phone: its offline copy is kept a week (lib/cachePrune).
     noteCachedJobs([job]).catch(() => {})
     loadChecklist()
-    loadTimeEntries()
+    loadTimeEntries({ soon: true })
     loadPropMeta()
-    loadNextArrival().catch(() => {})
-    loadRouteStop()
-    loadCrewNote().catch(() => {})
+    // The office's note, the next arrival, Stop k of M and the video switch.
+    // Each fails soft: offline with nothing saved, it just isn't shown (the
+    // Walkthrough button stays hidden).
+    info.load(job, user).catch(() => {})
     loadCheckFirst({ soon: true }).catch(() => {})
-    loadPhotoRequirements()
+    loadPhotoRequirements({ soon: true })
   }, [])
 
   // Live mirror of teammates' phones + the owner dashboard: stream checklist
@@ -494,45 +500,6 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       supabase.removeChannel(channel)
     }
   }, [job.id])
-
-  // Rank this job among the crew member's own route-ordered jobs for the same
-  // day, so the badge is a clean "Stop k of M" (matches the Dashboard).
-  async function loadRouteStop() {
-    const { data } = await cachedRead(routeStopRead(job, user))
-    if (!data || !data.length) { setRouteStop(null); return }
-    const ordered = [...data].sort((a: any, b: any) => a.route_order - b.route_order)
-    const idx = ordered.findIndex((j: any) => j.id === job.id)
-    setRouteStop(idx === -1 ? null : { k: idx + 1, m: ordered.length })
-  }
-
-  // Who arrives after this clean, read off the property's calendar. The job row
-  // only carries a check-in for same-day turnovers, so crew had no idea a guest
-  // was due in two days, and a block was easy to mistake for a guest
-  // (lib/nextArrival). Silent when the property has nothing on file.
-  async function loadNextArrival() {
-    if (isTask || !addr?.id || !job.scheduled_start) return
-    const cleanYmd = dayKey(job.scheduled_start)
-    const reads = nextArrivalReads(job, addr.id, user.tenant_id)
-    const [{ data: rows }, { data: a }, { data: ten }] = await Promise.all([
-      cachedRead(reads.stays), cachedRead(reads.property), cachedRead(reads.company),
-    ])
-    if (!rows || !rows.length) { setNextArrival(null); return }
-    setNextArrival(pickNextArrival(cleanYmd, rows as ArrivalRow[],
-      { property: (a as any)?.default_checkin_time, company: (ten as any)?.default_checkin_time }))
-  }
-
-  // The office's note: its own read, failing soft. A server without the columns
-  // yet, or offline with nothing cached, just shows no note.
-  async function loadCrewNote() {
-    flushAcks().catch(() => {})
-    const [{ data: jn }, { data: rows }, mine] = await Promise.all([
-      cachedRead(crewNoteRead(job.id)),
-      cachedRead(crewNoteAckRead(job.id, user.id)),
-      localAcks(job.id, user.id),
-    ])
-    setAckedNotes(Array.from(new Set([...mine, ...((rows as any[]) ?? []).map((r: any) => r.note)])))
-    if (jn) setCrewNote({ crew_note: (jn as any).crew_note ?? null, crew_note_at_clock_in: !!(jn as any).crew_note_at_clock_in })
-  }
 
   // Check first: the property's lines and (only where it has some) this
   // clean's ticks, line photos and start, read by lib/checkFirstCard. Every
@@ -765,37 +732,38 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     return t('crew_clock_none')
   }
 
-  async function loadTimeEntries() {
+  // `soon`: the screen opening (the saved copy may show first). Every other
+  // load (after a punch) waits for the live answer.
+  function loadTimeEntries(opts: { soon?: boolean } = {}) {
     // Teammates' status beside their names refreshes with every own punch too.
     loadCrewClock().catch(() => {})
     // Own entries only — except for desk staff on a clean they aren't crew on,
     // who see (and run) the whole job's clock: the entry they recorded for a
     // cleaner has to survive a reload, or Complete could never close it.
-    const wholeJob = recordsForOthers
-    const { data: fetched } = await cachedRead(timeEntriesRead(job.id, user.id, wholeJob))
-    // Queued offline punches overlay the cached/live rows, so a relaunch in a
-    // dead zone still shows the running timer (and can pause/clock out).
-    const data = (await overlayPending('job_time_entries', fetched ?? [],
-      v => v.job_id === job.id && (wholeJob || v.user_id === user.id)))
-      .sort((a: any, b: any) => String(a.clocked_in_at).localeCompare(String(b.clocked_in_at)))
-    if (data) {
-      setTimeEntries(data)
-      // Prefer the viewer's own open punch; a proxy entry is the fallback.
-      const active = data.find(e => !e.clocked_out_at && e.user_id === user.id) || data.find(e => !e.clocked_out_at)
-      if (active) {
-        setActiveEntry(active)
-        setIsPaused(false)
-      } else {
-        // No open entry. If the most recent entry was closed by a PAUSE (has a
-        // pause_reason) and the job isn't finished, restore the paused state so
-        // the Resume button shows — otherwise a relaunch left it with no action.
-        setActiveEntry(null)
-        const last = data.length ? data[data.length - 1] : null
-        setIsPaused(!!last?.pause_reason && job.status !== 'completed')
-      }
-      const total = data.filter(e => e.clocked_out_at).reduce((s, e) => s + (e.duration_minutes || 0), 0)
-      setElapsedMinutes(total)
+    // Queued offline punches overlay the cached/live rows (lib/timeTracker),
+    // so a relaunch in a dead zone still shows the running timer.
+    tracker.load(job, user, recordsForOthers, opts).catch(() => {})
+  }
+
+  // The tracker's entries, oldest first: the timer, and Clock in / Pause /
+  // Resume / Complete.
+  function showTimeEntries(data: any[]) {
+    setTimeEntries(data)
+    // Prefer the viewer's own open punch; a proxy entry is the fallback.
+    const active = data.find(e => !e.clocked_out_at && e.user_id === user.id) || data.find(e => !e.clocked_out_at)
+    if (active) {
+      setActiveEntry(active)
+      setIsPaused(false)
+    } else {
+      // No open entry. If the most recent entry was closed by a PAUSE (has a
+      // pause_reason) and the job isn't finished, restore the paused state so
+      // the Resume button shows — otherwise a relaunch left it with no action.
+      setActiveEntry(null)
+      const last = data.length ? data[data.length - 1] : null
+      setIsPaused(!!last?.pause_reason && job.status !== 'completed')
     }
+    const total = data.filter(e => e.clocked_out_at).reduce((s, e) => s + (e.duration_minutes || 0), 0)
+    setElapsedMinutes(total)
   }
 
   // The person's running entry on this clean, straight from the server — read
@@ -820,45 +788,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }, [recordsForOthers])
 
   /**
-   * How many named property shots this job still owes.
-   *
-   * Gated on tenants.enforce_photo_requirements: ~18 required rows are
-   * auto-seeded into every STR property, so counting them for a tenant that
-   * does not enforce would put a scary "0/19" on thousands of jobs that are
-   * free to complete. Mirrors the server gate, which joins the same flag.
+   * How many named property shots this job still owes (lib/requiredPhotoCount).
+   * Cleans at a property only; laundry runs and tasks owe none. `soon`: the
+   * screen opening (the saved copy may show first); every other load waits
+   * for the live answer.
    */
-  async function loadPhotoRequirements() {
+  function loadPhotoRequirements(opts: { soon?: boolean } = {}) {
     const addrId = job.client_addresses?.id || job.address_id
     if (!addrId || isTask || isLaundry) { setReqTotal(0); return }
-    const { data: tenant } = await supabase
-      .from('tenants').select('enforce_photo_requirements')
-      .eq('id', user.tenant_id).maybeSingle()
-    if (!tenant?.enforce_photo_requirements) { setReqTotal(0); return }
+    photoCount.load(job, user, opts).catch(() => {})
+  }
 
-    // The DB decides what is owed. `done` is counted only WITHIN that set:
-    // counting satisfied shots against the whole property would let a crew who
-    // photographed a no-longer-owed area push done past total and render a
-    // negative "left".
-    const [{ data: reqRows }, { data: shot }, { data: owedRows }] = await Promise.all([
-      supabase.from('property_photo_requirements')
-        .select('id')
-        .eq('address_id', addrId).eq('required', true),
-      supabase.from('job_photos')
-        .select('photo_requirement_id')
-        .eq('job_id', job.id).not('photo_requirement_id', 'is', null),
-      supabase.rpc('job_required_photo_ids', { p_job_id: job.id }),
-    ])
-    const owedIds = Array.isArray(owedRows)
-      ? new Set((owedRows as any[]).map(r => r.requirement_id))
-      // Fail-open: an older DB or a failed RPC counts every required row.
-      : new Set(((reqRows ?? []) as any[]).map(r => r.id))
-    setOwedReqs(Array.isArray(owedRows) ? (owedIds as Set<string>) : null)
-    // Distinct requirements satisfied — two shots of the same area is still one.
-    const done = new Set(
-      (shot ?? []).map((p: any) => p.photo_requirement_id).filter((id: string) => owedIds.has(id))
-    ).size
-    setReqTotal(owedIds.size)
-    setReqDone(done)
+  function showPhotoCount(c: PhotoCount) {
+    setReqTotal(c.total)
+    setReqDone(c.done)
+    setOwedReqs(c.owed)
   }
 
   // The checklist card's loads (lib/checklistCard): every read at once, the
@@ -1080,7 +1024,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setNotePrompt(null)
     noteClosedAt.current = Date.now()
     if (note) {
-      setAckedNotes(prev => (prev.includes(note) ? prev : [...prev, note]))
+      info.acknowledged(note)
       recordAck(ackRow({ tenantId: user.tenant_id, jobId: job.id, userId: user.id, note })).catch(() => {})
     }
     then?.()
@@ -1157,8 +1101,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         }))
       }
     }
-    setActiveEntry(running ?? entry)
-    setIsPaused(false)
+    // On screen at once (and in the phone's saved copy), and kept there by
+    // any answer older than the punch.
+    tracker.punched(running ?? entry, user).catch(() => {})
     // Begin broadcasting location now that they're clocked in (don't wait for
     // an app relaunch, and don't require a job_assignment). Clock-in is the
     // user-initiated moment where we escalate to the "Always" location prompt
@@ -1258,21 +1203,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     setSaving(true)
     const now = new Date()
     const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
+    const paused = {
+      clocked_out_at: now.toISOString(),
+      pause_reason: pauseReason,
+      duration_minutes: Math.round(mins),
+    }
     const { error: pauseErr } = await writeThrough({
-      table: 'job_time_entries', op: 'update', match: { id: activeEntry.id },
-      values: {
-        clocked_out_at: now.toISOString(),
-        pause_reason: pauseReason,
-        duration_minutes: Math.round(mins),
-      },
+      table: 'job_time_entries', op: 'update', match: { id: activeEntry.id }, values: paused,
     })
     if (pauseErr) {
       setSaving(false)
       Alert.alert(t('error'), t('clock_out_failed'))
       return
     }
-    setActiveEntry(null)
-    setIsPaused(true)
+    // Paused on screen at once (Resume), and kept so by any older answer.
+    tracker.punched({ ...activeEntry, ...paused }, user).catch(() => {})
     setShowPauseModal(false)
     setPauseReason('')
     loadTimeEntries()
@@ -1298,8 +1243,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       clockInRefused(resumeErr)
       return
     }
-    setActiveEntry(running ?? entry)
-    setIsPaused(false)
+    tracker.punched(running ?? entry, user).catch(() => {})
     startLocationTracking(user, { requestBackground: true }).catch(() => {})
     loadTimeEntries()
     setSaving(false)
@@ -1590,19 +1534,21 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     const mins = (now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000
     // GPS-stamp the punch-out too (best-effort — never blocks the clock-out).
     const outStamp = await quickGpsStamp()
+    const out = {
+      clocked_out_at: now.toISOString(),
+      duration_minutes: Math.round(mins),
+      clock_out_lat: outStamp?.lat ?? null,
+      clock_out_lng: outStamp?.lng ?? null,
+    }
     const { error: outErr, queued: outQueued } = await writeThrough({
-      table: 'job_time_entries', op: 'update', match: { id: activeEntry.id },
-      values: {
-        clocked_out_at: now.toISOString(),
-        duration_minutes: Math.round(mins),
-        clock_out_lat: outStamp?.lat ?? null,
-        clock_out_lng: outStamp?.lng ?? null,
-      },
+      table: 'job_time_entries', op: 'update', match: { id: activeEntry.id }, values: out,
     })
     if (outErr) {
       Alert.alert(t('error'), t('clock_out_failed'))
       return false
     }
+    // The saved copy too: reopened later, the clean doesn't show a running clock.
+    tracker.punched({ ...activeEntry, ...out }, user).catch(() => {})
     if (outQueued) clockOutQueuedRef.current = true
     return true
   }

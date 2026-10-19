@@ -68,9 +68,14 @@ const builder = (name) => {
   const next = reads.indexOf('\nexport ', i + 1)
   return reads.slice(i, next < 0 ? undefined : next)
 }
+// The timer's loads live in src/lib/timeTracker.ts (how soon the saved copy shows).
+const tracker = readFileSync(join(repo, 'src/lib/timeTracker.ts'), 'utf8')
 check('the viewer\'s own timer still reads only their own entries',
-  [/cachedRead\(timeEntriesRead\(job\.id, user\.id, wholeJob\)\)/.test(fn('loadTimeEntries')), /if \(!wholeJob\) q = q\.eq\('user_id', userId\)/.test(builder('timeEntriesRead'))],
-  [true, true])
+  [/tracker\.load\(job, user, recordsForOthers, opts\)/.test(fn('loadTimeEntries')),
+   /readSoon\(timeEntriesRead\(job\.id, user\.id, wholeJob\), wait\)/.test(tracker),
+   /const inScope = \(e: any\) => wholeJob \|\| e\.user_id === user\.id/.test(tracker),
+   /if \(!wholeJob\) q = q\.eq\('user_id', userId\)/.test(builder('timeEntriesRead'))],
+  [true, true, true, true])
 check('the crew line reads every punch on the job, not filtered to the viewer',
   [/cachedRead\(crewClockRead\(job\.id\)\)/.test(fn('loadCrewClock')),
    /\.from\('job_time_entries'\)\s*\.select\('user_id, clocked_in_at, clocked_out_at, pause_reason'\)\s*\.eq\('job_id', jobId\),/.test(builder('crewClockRead')),

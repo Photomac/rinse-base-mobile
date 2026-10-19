@@ -43,12 +43,15 @@ const called = text => new Set([...text.matchAll(/\b(\w+Reads?)\(/g)].map(m => m
 const packed = new Set([...called(body(jobReads, 'jobPackReads')), ...called(prefetch)])
 const SCREENS = {
   'src/screens/JobDetailScreen.tsx': 'the stop\'s screen',
-  'src/screens/JobInventoryScreen.tsx': 'Supplies',
-  'src/components/WalkthroughChecklist.tsx': 'the walkthrough',
   'src/components/PrepCard.tsx': 'the prep card',
   'src/lib/checklistCard.ts': 'the stop\'s checklist card',
   'src/lib/stopDetails.ts': 'the stop\'s details (job, crew, property)',
   'src/lib/checkFirstCard.ts': 'the stop\'s Check first card',
+  'src/lib/timeTracker.ts': 'the stop\'s time tracker',
+  'src/lib/stopInfo.ts': 'the stop\'s note, next arrival, route stop and video switch',
+  'src/lib/requiredPhotoCount.ts': 'the stop\'s required-shot counter',
+  'src/lib/suppliesCard.ts': 'Supplies',
+  'src/lib/walkthroughCard.ts': 'the walkthrough',
 }
 for (const [file, what] of Object.entries(SCREENS)) {
   const src = read(file)
@@ -70,6 +73,40 @@ check('the stop\'s screen: laundry-on-site and pet-fee taps mark the flags chang
   flagged(fnBody(detail, 'async function toggleLaundryDoneOnsite(')) && flagged(fnBody(detail, 'async function togglePetFee(')) &&
   /details\.flagEdited\(\)\s*setPetFeeApplied\(true\)/.test(detail))
 check('the stop\'s screen: flags go on screen only when the load says so', /if \(flags\) \{\s*setLaundryDoneOnsite\(/.test(fnBody(detail, 'function showJobMeta(')))
+
+// The rest of the stop's screen reads through lib/timeTracker, stopInfo and
+// requiredPhotoCount (timed in their scenarios). Every punch made on the
+// screen goes to the tracker: shown at once, written into the saved copy, and
+// kept from older answers. Nothing else sets the running entry.
+const punchFns = ['async function clockInAs(', 'async function confirmPause(', 'async function handleResume(', 'async function clockOutActive(']
+check('the stop\'s screen: every punch goes to the tracker',
+  punchFns.every(sig => /tracker\.punched\(/.test(fnBody(detail, sig))) &&
+  (detail.match(/setActiveEntry\(/g) || []).length === 2 && /setActiveEntry\(active\)[\s\S]*setActiveEntry\(null\)/.test(fnBody(detail, 'function showTimeEntries(')),
+  punchFns.filter(sig => !/tracker\.punched\(/.test(fnBody(detail, sig))).join(', '))
+check('the stop\'s screen: the tracker, the counter and the info open with `soon`',
+  /loadTimeEntries\(\{ soon: true \}\)/.test(detail) && /loadPhotoRequirements\(\{ soon: true \}\)/.test(detail) && /info\.load\(job, user\)/.test(detail) &&
+  /tracker\.load\(job, user, recordsForOthers, opts\)/.test(fnBody(detail, 'function loadTimeEntries(')) &&
+  /photoCount\.load\(job, user, opts\)/.test(fnBody(detail, 'function loadPhotoRequirements(')))
+check('the stop\'s screen: "Got it" goes to the info, which never drops one', /info\.acknowledged\(note\)/.test(fnBody(detail, 'function acknowledgeCrewNote(')) && !/setAckedNotes\(prev/.test(detail))
+const arrival = read('src/lib/arrivalGeofence.ts')
+check('the arrival auto clock-in writes its entry into the saved copy, once it landed',
+  /if \(!insErr && entry\) \{[\s\S]{0,400}await savePunch\(auto, user\.id\)/.test(arrival) && /\.upsert\(auto, \{ onConflict: 'id' \}\)/.test(arrival))
+// Supplies and the walkthrough read only through their modules.
+const supplies = read('src/screens/JobInventoryScreen.tsx')
+const walk = read('src/components/WalkthroughChecklist.tsx')
+const ownReads = src => /\b(?:cachedRead|cachedQuery|readSoon)\(|supabase\.from\(/.test(src)
+check('Supplies and the walkthrough make no reads of their own',
+  !ownReads(supplies) && /suppliesCard\(\{ show, setLoading \}\)/.test(supplies) && !ownReads(walk) && /walkthroughCard\(\{ show, setLoading \}\)/.test(walk))
+const setters = ['function setQty(', 'function setRemaining(', 'function toggleLow(', 'function setNotes(']
+check('Supplies: the live answer after the saved copy keeps her changed lines, and becomes the save\'s baseline',
+  /savedRef\.current = v\.saved\s*if \(late\) \{\s*setLog\(prev => rebaseLines\(v\.lines, prev, editedRef\.current\)\)\s*return\s*\}/.test(fnBody(supplies, 'function show(')))
+check('Supplies: every change marks its line before it shows; a save tells the card before it writes',
+  setters.every(sig => { const f = fnBody(supplies, sig); return f.indexOf('editedRef.current.add(id)') > 0 && f.indexOf('editedRef.current.add(id)') < f.indexOf('setLog(') }) &&
+  (() => { const f = fnBody(supplies, 'async function save('); return f.indexOf('card.saving()') > 0 && f.indexOf('card.saving()') < f.indexOf('writeThrough(') })())
+check('the walkthrough: every answer tells the card before it shows; only the first load is `soon`',
+  ['async function looksGood(', 'async function answer(', 'async function saveNote('].every(sig => {
+    const f = fnBody(walk, sig); return f.indexOf('card.edited()') > 0 && f.indexOf('card.edited()') < f.indexOf('patch(')
+  }) && /card\.load\(job, \{ soon: !loaded\.current \}\)/.test(walk))
 
 const dash = read('src/screens/DashboardScreen.tsx')
 check('Home: the day read comes from dashTodayRead()', /cachedRead\(dashTodayRead\(/.test(dash) && !/dash:today/.test(dash))
@@ -108,6 +145,25 @@ const SCENARIOS = [
   'stopDetailsSavedRosterKeepsClockIn',
   'checkFirstOnAHangingLink',
   'checkFirstOnATrickle',
+  'timerOnAHangingLink',
+  'timerLiveAnswerReplacesSaved',
+  'timerLateAnswerNeverUndoesAPunch',
+  'timerPunchSurvivesTheSavedCopy',
+  'timerPauseNeverRunsAgain',
+  'timerQueuedPunchesOffline',
+  'timerOlderAnswerKeepsAClockOut',
+  'timerWholeJobForTheOffice',
+  'stopInfoOnAHangingLink',
+  'stopInfoTrickleKeepsGotIt',
+  'photoCountOnAHangingLink',
+  'photoCountOwedListNarrows',
+  'photoCountTrickle',
+  'photoCountNotEnforcedAsksNothingMore',
+  'suppliesOnAHangingLink',
+  'suppliesLiveAnswerKeepsHerLines',
+  'spinnersAlwaysClear',
+  'walkthroughOnAHangingLink',
+  'walkthroughTrickle',
 ]
 
 try {
