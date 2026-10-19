@@ -24,6 +24,8 @@ try {
     .replace(`from './photoQueue'`, `from './outbox.mocks'`)
   writeFileSync(join(work, 'outbox.ts'), outbox)
   cpSync(join(repo, 'src/lib/__tests__/outbox.mocks.ts'), join(work, 'outbox.mocks.ts'))
+  // outbox.ts imports ./timezone (dayKey) as-is: it has no imports of its own.
+  cpSync(join(repo, 'src/lib/timezone.ts'), join(work, 'timezone.ts'))
   cpSync(join(repo, 'src/lib/inventoryLogSave.ts'), join(work, 'inventoryLogSave.ts'))
   cpSync(join(repo, 'src/lib/inventoryLogOutbox.ts'), join(work, 'inventoryLogOutbox.ts'))
   const scenario = readFileSync(join(repo, 'src/lib/__tests__/inventoryLogSave.scenario.ts'), 'utf8')
@@ -32,7 +34,7 @@ try {
     .replace(`from '../inventoryLogOutbox'`, `from './inventoryLogOutbox'`)
   writeFileSync(join(work, 'scenario.ts'), scenario)
 
-  execSync('npx --yes esbuild outbox.ts outbox.mocks.ts inventoryLogSave.ts inventoryLogOutbox.ts scenario.ts --format=cjs --platform=node --outdir=out', {
+  execSync('npx --yes esbuild outbox.ts outbox.mocks.ts timezone.ts inventoryLogSave.ts inventoryLogOutbox.ts scenario.ts --format=cjs --platform=node --outdir=out', {
     cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
   })
   execSync('node out/scenario.js', { cwd: work, stdio: 'inherit' })
