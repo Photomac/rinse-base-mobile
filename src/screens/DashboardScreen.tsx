@@ -21,6 +21,7 @@ import { prefetchDays, loadDayPack, onDayPackChange, stopsAhead, type DayPack } 
 import { writeThrough, overlayPending, flushOutbox, onOutboxDrained, uuid4, isQueued } from '../lib/outbox'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { PrepCard } from '../components/PrepCard'
+import { JobClock } from '../components/JobClock'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
 // src/lib/timezone.ts.
@@ -551,6 +552,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   </Text>
                   <Text style={styles.activeTime}>{fmtTime(activeJob.scheduled_start)} – {fmtTime(activeJob.scheduled_end)}</Text>
                 </View>
+                {/* Day shift: time on this job so far, from its Start (lib/jobTimer). */}
+                {dailyMode && <JobClock job={activeJob} prefix="⏱ " style={styles.activeClock} />}
                 <Text style={styles.activeArrow}>→</Text>
               </TouchableOpacity>
             )}
@@ -661,6 +664,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                       <Text style={styles.jobTime}>{[fmtTime(job.scheduled_start), ...kindParts(job, kindLabels)].join(' · ')}</Text>
                       <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                     </View>
+                    {dailyMode && isActive && <JobClock job={job} prefix="⏱ " style={styles.jobClock} />}
                     {stop && (
                       <View style={styles.routeStopBadge}>
                         <Text style={styles.routeStopText}>🧭 {ti(t('route_stop_of'), { k: String(stop.k), m: String(stop.m) })}</Text>
@@ -754,6 +758,8 @@ const styles = StyleSheet.create({
   activeClient: { fontSize: 16, fontWeight: '800', color: '#111827', marginBottom: 2 },
   activeTime: { fontSize: 12, color: '#6B7280' },
   activeArrow: { fontSize: 18, color: '#F59E0B', fontWeight: '700' },
+  activeClock: { fontSize: 18, fontWeight: '900', color: '#92400E', marginRight: 10, fontVariant: ['tabular-nums'] },
+  jobClock: { fontSize: 13, fontWeight: '800', color: '#B45309', marginLeft: 8, fontVariant: ['tabular-nums'] },
   nextJobCard: { margin: 16, marginTop: 0, backgroundColor: '#fff', borderRadius: 14, padding: 16, borderWidth: 1, borderColor: '#E2E8F0', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
   nextJobHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   nextJobLabel: { fontSize: 11, fontWeight: '700', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5 },
