@@ -44,11 +44,25 @@ export function dashTodayRead(user: any, now: Date): CacheRead {
   return {
     key: `dash:today:${user.id}`,
     q: () => supabase.from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
+      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, started_at, is_turnover, route_order, window_minutes, job_type, internal_notes, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', from.toISOString())
       .lte('scheduled_start', to.toISOString())
       .order('scheduled_start'),
+  }
+}
+
+/** Home's day shift (daily time tracking): the person's open shift, a
+ *  job_time_entries row with no job and no clock-out. Start / End my day save
+ *  their answer under this key (writeCacheEntry), so a reload with no signal
+ *  shows what this phone last did, not the read from before it. */
+export function dashShiftRead(user: any): CacheRead {
+  return {
+    key: `dash:shift:${user.id}`,
+    q: () => supabase.from('job_time_entries')
+      .select('id, clocked_in_at')
+      .eq('user_id', user.id).is('job_id', null).eq('entry_type', 'shift').is('clocked_out_at', null)
+      .order('clocked_in_at', { ascending: false }).limit(1).maybeSingle(),
   }
 }
 

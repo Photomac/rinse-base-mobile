@@ -3,7 +3,8 @@
 // against the REAL src/lib/supabase.ts, netFetch.ts, dataCache.ts, outbox.ts
 // and locationTracker.ts, bundled with the app's own supabase-js 2.99.2 from
 // node_modules. The network is a mock Supabase server inside the scenario;
-// native modules are stubs (offlineAuth.mocks.ts, via esbuild --alias).
+// native modules are stubs (offlineAuth.mocks.ts and stubs/expo-file-system,
+// via esbuild --alias).
 //
 // Each scenario runs in its own process: the auth client, its timers and the
 // module state are per-process, exactly like an app launch.
@@ -27,7 +28,9 @@ const tests = join(repo, 'src/lib/__tests__')
 const mocks = join(tests, 'offlineAuth.mocks.ts')
 const MOCKED = ['react-native', '@react-native-async-storage/async-storage', 'expo-location',
   'expo-task-manager', 'expo-notifications', 'expo-image-picker']
-const alias = MOCKED.map(p => `--alias:${p}=${mocks}`).join(' ')
+// outbox.ts reads the photo queue (a Complete waits for its photos), which
+// keeps its files with expo-file-system.
+const alias = [...MOCKED.map(p => `--alias:${p}=${mocks}`), `--alias:expo-file-system=${join(tests, 'stubs/expo-file-system')}`].join(' ')
 const esbuild = (entry, out) => execSync(
   `npx --yes esbuild ${JSON.stringify(entry)} --bundle --platform=node --format=cjs --log-level=error ${alias} --outfile=${JSON.stringify(out)}`,
   { cwd: repo, stdio: ['ignore', 'ignore', 'inherit'], env: { ...process.env, NODE_PATH: join(repo, 'node_modules') } },

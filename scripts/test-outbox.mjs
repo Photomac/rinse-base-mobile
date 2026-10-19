@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Runs the outbox scenario test (src/lib/__tests__/outbox.scenario.ts)
-// against the REAL src/lib/outbox.ts with its three imports (AsyncStorage,
-// supabase, errorReporter) rewritten to the test mocks.
+// against the REAL src/lib/outbox.ts with its imports (AsyncStorage,
+// supabase, errorReporter, photoQueue) rewritten to the test mocks. The real
+// outbox and photo queue together: scripts/test-complete-after-photos.mjs.
 //
 // Zero project dependencies: the repo has no test runner, and adding one for
 // a single pure-logic module wasn't worth the install weight. esbuild is
@@ -25,14 +26,17 @@ try {
     .replace(`import AsyncStorage`, `import { AsyncStorage }`)
     .replace(`from './supabase'`, `from './outbox.mocks'`)
     .replace(`from './errorReporter'`, `from './outbox.mocks'`)
+    .replace(`from './photoQueue'`, `from './outbox.mocks'`)
   writeFileSync(join(work, 'outbox.ts'), outbox)
   cpSync(join(repo, 'src/lib/__tests__/outbox.mocks.ts'), join(work, 'outbox.mocks.ts'))
+  // outbox.ts imports ./timezone (dayKey) as-is: it has no imports of its own.
+  cpSync(join(repo, 'src/lib/timezone.ts'), join(work, 'timezone.ts'))
   const scenario = readFileSync(join(repo, 'src/lib/__tests__/outbox.scenario.ts'), 'utf8')
     .replace(`from '../outbox'`, `from './outbox'`)
     .replace(`from './outbox.mocks'`, `from './outbox.mocks'`)
   writeFileSync(join(work, 'scenario.ts'), scenario)
 
-  execSync('npx --yes esbuild outbox.ts outbox.mocks.ts scenario.ts --format=cjs --platform=node --outdir=out', {
+  execSync('npx --yes esbuild outbox.ts outbox.mocks.ts timezone.ts scenario.ts --format=cjs --platform=node --outdir=out', {
     cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
   })
   execSync('node out/scenario.js', { cwd: work, stdio: 'inherit' })

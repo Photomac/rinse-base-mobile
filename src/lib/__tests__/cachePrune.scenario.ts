@@ -145,6 +145,7 @@ const scenarios: Record<string, () => Promise<void>> = {
     const j = job(J, '2026-10-13', A)
     const BUILDERS: Record<string, () => any> = {
       dashTodayRead: () => R.dashTodayRead(CREW, new Date()),
+      dashShiftRead: () => R.dashShiftRead(CREW),
       tenantVideoRead: () => R.tenantVideoRead(T),
       routeStopRead: () => R.routeStopRead(j, CREW),
       nextArrivalReads: () => R.nextArrivalReads(j, A, T),

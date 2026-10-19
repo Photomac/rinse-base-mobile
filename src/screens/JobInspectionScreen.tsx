@@ -34,6 +34,7 @@ import React, { useState, useEffect } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image, Modal } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { fetchJobTaskPay } from '../lib/jobTaskPay'
 import { fmtDateTime } from '../lib/timezone'
 import { useLang } from '../contexts/LangContext'
 import { useMachineTranslation } from '../lib/machineTranslate'
@@ -130,9 +131,11 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
 
   async function load() {
     setLoading(true)
-    const [{ data }, { data: jobRow }, { count: entryCount }] = await Promise.all([
+    const [{ data }, payById, { count: entryCount }] = await Promise.all([
       supabase.from('job_inspections').select('*').eq('job_id', job.id).maybeSingle(),
-      supabase.from('jobs').select('task_pay').eq('id', job.id).maybeSingle(),
+      // The visit's own crew read its pay; anyone else gets nothing back, and
+      // null here = can't tell (lib/jobTaskPay).
+      fetchJobTaskPay([job.id]).catch(() => null),
       supabase.from('job_time_entries').select('id', { count: 'exact', head: true }).eq('job_id', job.id),
     ])
     // A FLAT rate now pays on filing (crew_pay_for_period_core's
@@ -141,8 +144,10 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
     // clocked time, and zero clocked time is zero pay — with no payroll line at
     // all rather than a $0 one anyone would spot. Checked at load, which is
     // after any clock-in on the job screen; clock-out happens later in doFile().
-    const pay = Number((jobRow as any)?.task_pay ?? 0)
-    setNoPay(pay === 0 && (entryCount ?? 0) === 0)
+    // A pay this person can't read is no reason to warn.
+    const known = !!payById && payById.has(job.id)
+    const pay = Number(payById?.get(job.id) ?? 0)
+    setNoPay(known && pay === 0 && (entryCount ?? 0) === 0)
     if (data) {
       setRec(data)
       setLayer(data.layer ?? 'supervisor')

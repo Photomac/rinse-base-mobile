@@ -14,17 +14,23 @@ import { ti, localeFor } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
-import { cachedQuery, cachedRead } from '../lib/dataCache'
-import { dashTodayRead, homeDayRows } from '../lib/jobReads'
+import { cachedQuery, cachedRead, readSoon, writeCacheEntry, cacheEpoch } from '../lib/dataCache'
+import { lastTripFailed } from '../lib/netFetch'
+import { dashTodayRead, dashShiftRead, homeDayRows } from '../lib/jobReads'
 import { prefetchDays, loadDayPack, onDayPackChange, stopsAhead, type DayPack } from '../lib/offlinePrefetch'
-import { writeThrough, overlayPending, flushOutbox, uuid4 } from '../lib/outbox'
+import { writeThrough, overlayPending, flushOutbox, onOutboxDrained, uuid4, isQueued } from '../lib/outbox'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { PrepCard } from '../components/PrepCard'
+import { JobClock } from '../components/JobClock'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
 // src/lib/timezone.ts.
 import { fmtTime, fmtDate, fmtDateTime, dayKey, todayKey, startOfDayInTz, startOfMonthInTz } from '../lib/timezone'
 import { shiftYmd } from '../lib/nextArrival'
+
+// How long the shift card waits for the live read on a weak signal before it
+// answers from the saved copy (as the checklist does: lib/checklistCard).
+const SHIFT_WAIT_MS = 3_000
 
 export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user: any; onJobPress: (job: any) => void; onNavigate: (screen: string) => void; onSOS: () => void }) {
   const { t, lang } = useLang()
@@ -56,8 +62,20 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   // Day-long shift clock-in (only when tenant uses 'daily' time tracking)
   const dailyMode = user._timeMode === 'daily'
   const [activeShift, setActiveShift] = useState<any>(null)
+  // False until this screen has read whether a shift is open. Until then the
+  // card offers neither Start nor End: a Dashboard that just mounted (app
+  // opened, back from a job) used to show "Start my day" over a running shift
+  // for as long as its load took, and a tap started a second one.
+  const [shiftKnown, setShiftKnown] = useState(false)
   const [shiftElapsed, setShiftElapsed] = useState('')
   const [shiftBusy, setShiftBusy] = useState(false)
+  // Bumped by every Start/End: a read that began before one must not put the
+  // older state back (9/27: the load's read returned [] a millisecond after
+  // Start's insert and the button came back).
+  const shiftOps = useRef(0)
+  // Set synchronously on the first tap, so a second one that lands before the
+  // button re-renders busy can't start a second shift.
+  const startingDay = useRef(false)
 
   // Crew see the property, not the homeowner — client names are for admins.
   const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
@@ -68,6 +86,33 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const isOffice = isOfficeRole(user.role)
   const [scope, setScope] = useJobScope(user.id)
   const viewScope: JobScope = isOffice ? scope : 'everyone'
+
+  // The day shift (daily mode), read on its own and first, never behind the
+  // day's jobs: the shift card shows nothing until it knows. On a weak signal
+  // the saved copy answers within SHIFT_WAIT_MS and the live answer replaces
+  // it when it lands. `gen` is the load it belongs to.
+  const readShift = useCallback((gen: number) => {
+    if (user._timeMode !== 'daily') return
+    const opsAtRead = shiftOps.current
+    const apply = async (shift: any) => {
+      // Overlay queued shift punches (start/end made offline) so a relaunch in
+      // a dead zone still shows the running shift — or its queued end.
+      const rows = await overlayPending('job_time_entries', shift ? [shift] : [],
+        v => v.user_id === user.id && v.entry_type === 'shift' && !v.job_id)
+      const open = rows.filter((r: any) => !r.clocked_out_at)
+      // A Start/End made while this read was in flight is newer: keep it.
+      // So is a later load's read.
+      if (shiftOps.current !== opsAtRead || gen !== loadGen.current) return
+      setActiveShift(open.length ? open[open.length - 1] : null)
+      setShiftKnown(true)
+    }
+    readSoon(dashShiftRead(user), lastTripFailed() ? 0 : SHIFT_WAIT_MS)
+      .then(async first => {
+        await apply(first.data)
+        if (first.late) await apply((await first.late).data)
+      })
+      .catch(() => { if (shiftOps.current === opsAtRead && gen === loadGen.current) setShiftKnown(true) })
+  }, [user])
 
   // pulled = pull-to-refresh: the crew asked for fresh data, so the day pack
   // refreshes too instead of waiting out its 10 minutes.
@@ -85,6 +130,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
     const gen = ++loadGen.current
+
+    readShift(gen)
 
     // Earnings via the crew_pay_for_period RPC — the same canonical pay
     // hierarchy the owner Payroll page uses (property crew rate → property
@@ -109,7 +156,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // The day read runs to the end of TOMORROW (lib/jobReads), so the copy
     // saved tonight still has the morning's jobs with no signal. Only today is
     // shown: every row goes through homeDayRows() below.
-    const [todayRes, monthRes, strandedRes, shiftRes] = await Promise.all([
+    const [todayRes, monthRes, strandedRes] = await Promise.all([
       cachedRead(dashTodayRead(user, now)),
       // Monthly stats. For crew, filter to THEIR jobs server-side (inner join)
       // — the old fetch-everything-then-filter pulled every tenant job of the
@@ -145,14 +192,6 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         .lt('scheduled_start', todayStart.toISOString())
         .order('scheduled_start')
         .limit(50)),
-
-      // Open shift (daily mode) — a job_time_entries row with no job and no clock-out.
-      user._timeMode === 'daily'
-        ? cachedQuery(`dash:shift:${user.id}`, supabase.from('job_time_entries')
-            .select('id, clocked_in_at')
-            .eq('user_id', user.id).is('job_id', null).eq('entry_type', 'shift').is('clocked_out_at', null)
-            .order('clocked_in_at', { ascending: false }).limit(1).maybeSingle())
-        : Promise.resolve(null),
     ])
     if (gen !== loadGen.current) return
     setOffline(todayRes.fromCache)
@@ -188,16 +227,6 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // (dayView picks active/next from this order.)
     setDayRows([...myTodayAll].sort(byCrewDayOrder))
 
-    if (shiftRes) {
-      const shift = shiftRes.data as any
-      // Overlay queued shift punches (start/end made offline) so a relaunch in
-      // a dead zone still shows the running shift — or its queued end.
-      const shiftRows = await overlayPending('job_time_entries', shift ? [shift] : [],
-        v => v.user_id === user.id && v.entry_type === 'shift' && !v.job_id)
-      const open = shiftRows.filter((r: any) => !r.clocked_out_at)
-      setActiveShift(open.length ? open[open.length - 1] : null)
-    }
-
     setLoading(false)
     setRefreshing(false)
 
@@ -212,9 +241,14 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     if (!todayRes.fromCache && !todayRes.error) {
       prefetchDays(user, { rows: todayRes.data as any[], force: pulled }).catch(() => {})
     }
-  }, [user])
+  }, [user, readShift])
 
   useEffect(() => { load() }, [load])
+
+  // A queued Start that lost to a shift already running is settled into it
+  // once signal returns (lib/outbox, resolveShiftStart). Read the shift again
+  // then, so the card shows when the day really began, not the queued tap.
+  useEffect(() => onOutboxDrained(() => readShift(loadGen.current)), [readShift])
 
   useEffect(() => {
     let live = true
@@ -285,45 +319,120 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     return () => clearInterval(id)
   }, [activeShift])
 
+  // "9:24 AM" for a shift started today; "Mon, Sep 28 4:00 PM" for one still
+  // open from an earlier day, so a forgotten shift doesn't read as this
+  // morning's.
+  const shiftSince = (iso: string) => new Date(iso) < startOfDayInTz(new Date())
+    ? `${fmtDate(iso, localeFor(lang), { weekday: 'short' })} ${fmtTime(iso)}`
+    : fmtTime(iso)
+
+  // The person's open shift as the server has it now. `error` set = no answer.
+  const readOpenShift = () => supabase.from('job_time_entries')
+    .select('id, clocked_in_at')
+    .eq('user_id', user.id).is('job_id', null).eq('entry_type', 'shift').is('clocked_out_at', null)
+    .order('clocked_in_at', { ascending: false }).limit(1)
+
+  // What Home shows for the shift after a reload with no signal.
+  const saveShift = (shift: { id: string; clocked_in_at: string } | null, epoch: number) =>
+    writeCacheEntry(dashShiftRead(user).key, shift, epoch)
+
   async function handleStartDay() {
+    if (startingDay.current) return
+    startingDay.current = true
+    shiftOps.current++
     setShiftBusy(true)
-    // Client-minted id: offline the punch queues in the outbox (a shift IS the
-    // day's pay) and replays idempotently when signal returns.
-    const entry = {
-      id: uuid4(),
-      tenant_id: user.tenant_id, user_id: user.id, job_id: null,
-      entry_type: 'shift', clocked_in_at: new Date().toISOString(),
+    const epoch = cacheEpoch()
+    try {
+      // Client-minted id: offline the punch queues in the outbox (a shift IS the
+      // day's pay) and replays idempotently when signal returns. The server
+      // allows one open shift per person (job_time_entries_one_open_shift), so
+      // this insert is also the "already started?" check; a shift left open
+      // from an earlier day is closed by the server as this one starts.
+      const entry = {
+        id: uuid4(),
+        tenant_id: user.tenant_id, user_id: user.id, job_id: null,
+        entry_type: 'shift', clocked_in_at: new Date().toISOString(),
+      }
+      const { error, queued } = await writeThrough({
+        table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
+      })
+      let started: { id: string; clocked_in_at: string } = entry
+      if (error?.code === '23505') {
+        // Already started: on the web, on another phone, or by a tap this
+        // screen lost track of. Not a failure; show that shift.
+        const { data: open } = await readOpenShift()
+        // Couldn't read it back (signal dropped): reload, which shows it.
+        if (!open?.length) { load(); return }
+        started = open[0]
+        Alert.alert('🟢', ti(t('day_already_started'), { time: shiftSince(started.clocked_in_at) }))
+      } else if (error) {
+        Alert.alert('Error', error.message)
+        return
+      } else if (queued) {
+        Alert.alert('📡', t('queued_offline'))
+      }
+      setActiveShift(started)
+      setShiftKnown(true)
+      saveShift(started, epoch)
+      // Start broadcasting location for the day so the crew shows live on
+      // dispatch. Start-of-day is a user-initiated moment, so escalate to the
+      // "Always" location prompt for pocket-tracking through the shift.
+      startLocationTracking(user, { requestBackground: true }).catch(() => {})
+    } finally {
+      // Again on the way out: a read issued while the write was in flight saw
+      // the state before it.
+      shiftOps.current++
+      setShiftBusy(false)
+      startingDay.current = false
     }
-    const { error, queued } = await writeThrough({
-      table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
-    })
-    setShiftBusy(false)
-    if (error) { Alert.alert('Error', error.message); return }
-    if (queued) Alert.alert('📡', t('queued_offline'))
-    setActiveShift(entry)
-    // Start broadcasting location for the day so the crew shows live on
-    // dispatch. Start-of-day is a user-initiated moment, so escalate to the
-    // "Always" location prompt for pocket-tracking through the shift.
-    startLocationTracking(user, { requestBackground: true }).catch(() => {})
   }
 
   async function handleEndDay() {
     if (!activeShift) return
-    Alert.alert(t('end_my_day'), t('on_shift_since') + ' ' + fmtTime(activeShift.clocked_in_at), [
+    Alert.alert(t('end_my_day'), t('on_shift_since') + ' ' + shiftSince(activeShift.clocked_in_at), [
       { text: t('cancel') || 'Cancel', style: 'cancel' },
       { text: t('end_my_day'), style: 'destructive', onPress: async () => {
+        shiftOps.current++
         setShiftBusy(true)
-        const out = new Date()
-        const mins = Math.round((out.getTime() - new Date(activeShift.clocked_in_at).getTime()) / 60000)
-        const { error } = await writeThrough({
-          table: 'job_time_entries', op: 'update', match: { id: activeShift.id },
-          values: { clocked_out_at: out.toISOString(), duration_minutes: mins },
-        })
-        setShiftBusy(false)
-        if (error) { Alert.alert('Error', error.message); return }
-        setActiveShift(null)
-        // Stop broadcasting once the shift ends.
-        stopLocationTracking().catch(() => {})
+        const epoch = cacheEpoch()
+        try {
+          // End the shift the server has open NOW. The one on screen can be
+          // stale (ended or restarted on the web, or a start that lost to one
+          // already running); ending its id changed nothing and left the real
+          // shift open into the 16 h auto-close.
+          let target = activeShift
+          const live = await readOpenShift()
+          if (!live.error) {
+            if (live.data?.length) target = live.data[0]
+            else if (!(await isQueued('job_time_entries', activeShift.id))) {
+              // Nothing open on the server and no start of ours still queued:
+              // the day was already ended elsewhere.
+              setActiveShift(null)
+              saveShift(null, epoch)
+              stopLocationTracking().catch(() => {})
+              Alert.alert('✓', t('day_already_ended'))
+              return
+            }
+          }
+          // No answer = no signal: end the one on screen. The outbox replays it,
+          // pointed at the right row if its start lost to another.
+          const out = new Date()
+          const { error } = await writeThrough({
+            table: 'job_time_entries', op: 'update', match: { id: target.id },
+            values: {
+              clocked_out_at: out.toISOString(),
+              duration_minutes: Math.max(0, Math.round((out.getTime() - new Date(target.clocked_in_at).getTime()) / 60000)),
+            },
+          })
+          if (error) { Alert.alert('Error', error.message); return }
+          setActiveShift(null)
+          saveShift(null, epoch)
+          // Stop broadcasting once the shift ends.
+          stopLocationTracking().catch(() => {})
+        } finally {
+          shiftOps.current++
+          setShiftBusy(false)
+        }
       } },
     ])
   }
@@ -406,10 +515,15 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
         {/* Day-long shift clock-in (daily mode) */}
         {dailyMode && (
-          activeShift ? (
+          !shiftKnown ? (
+            <View style={styles.shiftCardPending}>
+              <ActivityIndicator color={SLATE} size="small" />
+              <Text style={styles.shiftPendingText}>{t('checking_day')}</Text>
+            </View>
+          ) : activeShift ? (
             <View style={styles.shiftCardOn}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.shiftOnLabel}>🟢 {t('on_shift_since')} {fmtTime(activeShift.clocked_in_at)}</Text>
+                <Text style={styles.shiftOnLabel}>🟢 {t('on_shift_since')} {shiftSince(activeShift.clocked_in_at)}</Text>
                 {!!shiftElapsed && <Text style={styles.shiftTimer}>{shiftElapsed}</Text>}
               </View>
               <TouchableOpacity style={styles.endDayBtn} onPress={handleEndDay} disabled={shiftBusy} activeOpacity={0.85}>
@@ -438,6 +552,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   </Text>
                   <Text style={styles.activeTime}>{fmtTime(activeJob.scheduled_start)} – {fmtTime(activeJob.scheduled_end)}</Text>
                 </View>
+                {/* Day shift: time on this job so far, from its Start (lib/jobTimer). */}
+                {dailyMode && <JobClock job={activeJob} prefix="⏱ " style={styles.activeClock} />}
                 <Text style={styles.activeArrow}>→</Text>
               </TouchableOpacity>
             )}
@@ -548,6 +664,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                       <Text style={styles.jobTime}>{[fmtTime(job.scheduled_start), ...kindParts(job, kindLabels)].join(' · ')}</Text>
                       <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                     </View>
+                    {dailyMode && isActive && <JobClock job={job} prefix="⏱ " style={styles.jobClock} />}
                     {stop && (
                       <View style={styles.routeStopBadge}>
                         <Text style={styles.routeStopText}>🧭 {ti(t('route_stop_of'), { k: String(stop.k), m: String(stop.m) })}</Text>
@@ -614,6 +731,8 @@ const styles = StyleSheet.create({
   dayPackLine: { marginHorizontal: 16, marginTop: 10, fontSize: 11, color: '#64748B', textAlign: 'center' },
   startDayBtn:{ marginHorizontal: 16, marginTop: 16, backgroundColor: GOLD, borderRadius: 14, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' },
   startDayBtnText: { color: SLATE, fontSize: 17, fontWeight: '800' },
+  shiftCardPending: { marginHorizontal: 16, marginTop: 16, backgroundColor: '#F1F5F9', borderRadius: 14, paddingVertical: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  shiftPendingText: { color: '#64748B', fontSize: 15, fontWeight: '600' },
   shiftCardOn: { marginHorizontal: 16, marginTop: 16, backgroundColor: '#ECFDF5', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: '#A7F3D0' },
   shiftOnLabel: { color: '#065F46', fontSize: 14, fontWeight: '700' },
   shiftTimer: { color: '#047857', fontSize: 22, fontWeight: '800', marginTop: 2, fontVariant: ['tabular-nums'] },
@@ -639,6 +758,8 @@ const styles = StyleSheet.create({
   activeClient: { fontSize: 16, fontWeight: '800', color: '#111827', marginBottom: 2 },
   activeTime: { fontSize: 12, color: '#6B7280' },
   activeArrow: { fontSize: 18, color: '#F59E0B', fontWeight: '700' },
+  activeClock: { fontSize: 18, fontWeight: '900', color: '#92400E', marginRight: 10, fontVariant: ['tabular-nums'] },
+  jobClock: { fontSize: 13, fontWeight: '800', color: '#B45309', marginLeft: 8, fontVariant: ['tabular-nums'] },
   nextJobCard: { margin: 16, marginTop: 0, backgroundColor: '#fff', borderRadius: 14, padding: 16, borderWidth: 1, borderColor: '#E2E8F0', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
   nextJobHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
   nextJobLabel: { fontSize: 11, fontWeight: '700', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5 },
