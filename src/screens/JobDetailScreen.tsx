@@ -23,6 +23,8 @@ import { uploadImageToJobPhotos } from '../lib/chatAttachments'
 import { InspectionResultCard } from '../components/InspectionResultCard'
 import { CrewNoteBanner, CrewNoteModal } from '../components/CrewNoteModal'
 import { CheckFirstCard, CheckFirstModal, type CheckFirstView } from '../components/CheckFirst'
+import { JobClock } from '../components/JobClock'
+import { jobClockMs } from '../lib/jobTimer'
 import { useLang } from '../contexts/LangContext'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { ti, localeFor } from '../lib/i18n'
@@ -38,7 +40,7 @@ import { noteCachedJobs } from '../lib/cachePrune'
 // pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
 import {
   tenantVideoRead, routeStopRead, nextArrivalReads, crewNoteRead, crewNoteAckRead,
-  crewClockRead, timeEntriesRead,
+  crewClockRead, timeEntriesRead, checkFirstStartRead,
 } from '../lib/jobReads'
 import { checklistCard, type ChecklistView } from '../lib/checklistCard'
 import { stopDetails } from '../lib/stopDetails'
@@ -256,6 +258,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [activeEntry, setActiveEntry] = useState<any>(null)
   const [isPaused, setIsPaused] = useState(false)
   const [elapsedMinutes, setElapsedMinutes] = useState(0)
+  // Day shift: when this job started (jobs.started_at), for its running clock.
+  const [jobStartAt, setJobStartAt] = useState<string | null>(job.started_at ?? null)
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
   const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null; lockbox_code?: string | null; arrival_instructions?: string | null } | null>(null)
@@ -398,7 +402,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   ])
   const dailyMode = user._timeMode === 'daily'
   const isClockedIn = !!activeEntry && !isPaused
-  // In daily mode there's no per-job timer, so "started" tracks job status instead.
+  // In daily mode there are no per-job time entries, so "started" tracks job status instead.
   const isStarted = timeEntries.length > 0 || !!activeEntry || (dailyMode && (job.status === 'in_progress' || job.status === 'completed'))
   // A clean that is in_progress with no open punch — the crew clocked out but
   // the completion gate held the job open (a missing required area photo, say).
@@ -703,6 +707,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       )
     })
   }
+
+  // Day shift: a row from Home carries started_at. Otherwise read it (the saved
+  // copy with no signal), with a Start still queued on this phone laid over it.
+  useEffect(() => {
+    if (user._timeMode !== 'daily' || job.status !== 'in_progress' || jobStartAt) return
+    let live = true
+    cachedRead(checkFirstStartRead(job.id))
+      .then(r => overlayPending('jobs', [{ id: job.id, started_at: (r.data as any)?.started_at ?? null }]))
+      .then(rows => { if (live && rows[0]?.started_at) setJobStartAt(prev => prev ?? rows[0].started_at) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [job.id, job.status, jobStartAt, user._timeMode])
 
   // Live timer
   useEffect(() => {
@@ -1202,7 +1218,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // The server keeps it only on the move into in_progress and only if
     // plausible (rinsebase-app migration 20261009170000) — needs that
     // migration live before this ships, or PostgREST refuses the column.
-    await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, matchIn: { status: STARTABLE }, values: { status: 'in_progress', started_at: new Date().toISOString() } })
+    const at = new Date().toISOString()
+    const res = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, matchIn: { status: STARTABLE }, values: { status: 'in_progress', started_at: at } })
+    // The clock runs from the tap. Delivered, it takes the server's start, which
+    // is earlier when a teammate had already started this job.
+    setJobStartAt(at)
+    if (!res.queued && !res.error) {
+      cachedRead(checkFirstStartRead(job.id))
+        .then(r => { const s = (r.data as any)?.started_at; if (s) setJobStartAt(s) })
+        .catch(() => {})
+    }
     onStatusChange(job, 'in_progress')
     setSaving(false)
     announceRequiredPhotos()
@@ -1954,6 +1979,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             {!dailyMode && elapsedMinutes > 0 && (
               <Text style={{ fontSize: 18, fontWeight: '900', color: TEAL }}>{fmtDuration(elapsedMinutes)}</Text>
             )}
+            {/* Day shift: time on this job so far, from its Start (lib/jobTimer). */}
+            {dailyMode && <JobClock job={{ status: job.status, started_at: jobStartAt }} style={{ fontSize: 18, fontWeight: '900', color: TEAL, fontVariant: ['tabular-nums'] }} />}
           </View>
 
           {/* Time entries history */}
@@ -1982,6 +2009,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             </View>
           )}
 
+          {/* Day shift: when this job started, beside its clock. */}
+          {dailyMode && jobStartAt && jobClockMs({ status: job.status, started_at: jobStartAt }, Date.now()) != null && (
+            <View style={[styles.timeEntry, { backgroundColor: '#ECFDF5', borderColor: TEAL }]}>
+              <Text style={[styles.timeEntryText, { color: '#065F46' }]}>🟢 {t('active_since')} {fmtTime(jobStartAt)}</Text>
+            </View>
+          )}
+
           {/* On my way — tell dispatch you're heading out (starts GPS early).
               Mode-agnostic: shows before the clean is started. */}
           {job.status === 'scheduled' && (
@@ -1995,7 +2029,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             </View>
           )}
 
-          {/* Daily mode: Start / Complete only — no per-job timer. */}
+          {/* Daily mode: Start / Complete. No per-job punches; the clock in the
+              header runs from Start (lib/jobTimer). */}
           {dailyMode && job.status !== 'completed' && (
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
               {job.status !== 'in_progress' ? (
