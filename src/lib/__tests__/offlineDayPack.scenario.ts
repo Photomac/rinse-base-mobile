@@ -87,7 +87,7 @@ function jobRow(id: string, start: string, status: string, crew: string[], addr:
   return {
     id, job_number: ++jobNo, tenant_id: T, status, address_id: addr, client_id: 'c-1',
     scheduled_start: at(start), scheduled_end: at(new RealDate(RealDate.parse(start) + 3 * 3600_000).toISOString()),
-    is_turnover: true, route_order: null, window_minutes: null, job_type: 'clean', internal_notes: '',
+    is_turnover: true, route_order: null, window_minutes: null, job_type: 'clean', internal_notes: '', source_report_id: null,
     seam_access_code: null, laundry_done_onsite: false, pet_fee_applied: false, checkout_time: null, checkin_time: null, urgency: null,
     crew_note: null, crew_note_at_clock_in: false, started_at: null,
     clients: { full_name: 'Red Rock Rentals', phone: '555-0100', client_type: 'property_manager' },
