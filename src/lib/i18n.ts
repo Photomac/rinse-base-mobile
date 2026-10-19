@@ -113,7 +113,7 @@ export const translations = {
     status_scheduled: 'Scheduled', status_en_route: 'En route', status_in_progress: 'In progress',
     status_completed: 'Completed', status_cancelled: 'Cancelled',
     // Job detail
-    job_detail: 'Job detail', arrival_instructions: 'Arrival instructions', lockbox_code: 'Lockbox code', crew_door_code: 'Crew door code',
+    job_detail: 'Job detail', arrival_instructions: 'Arrival instructions', lockbox_code: 'Lockbox code', crew_door_code: 'Crew door code', wifi_name: 'WiFi name', wifi_password: 'WiFi password', hold_to_copy: 'Press and hold to copy',
     beds_short: 'bed', baths_short: 'bath', sqft_short: 'sqft', beds_total_short: 'beds', sleeps_n: 'sleeps {n}',
     property_notes: 'Property notes',
     clock_in: 'Clock in — Start job', clock_in_short: 'Clock in', pause: 'Pause', resume: 'Resume',
@@ -805,7 +805,7 @@ export const translations = {
     status_scheduled: 'Programado', status_en_route: 'En camino', status_in_progress: 'En progreso',
     status_completed: 'Completado', status_cancelled: 'Cancelado',
     // Job detail
-    job_detail: 'Detalle del trabajo', arrival_instructions: 'Instrucciones de llegada', lockbox_code: 'Código de caja', crew_door_code: 'Código de puerta del equipo',
+    job_detail: 'Detalle del trabajo', arrival_instructions: 'Instrucciones de llegada', lockbox_code: 'Código de caja', crew_door_code: 'Código de puerta del equipo', wifi_name: 'Nombre del WiFi', wifi_password: 'Contraseña del WiFi', hold_to_copy: 'Mantén presionado para copiar',
     beds_short: 'rec', baths_short: 'baño', sqft_short: 'ft²', beds_total_short: 'camas', sleeps_n: 'para {n} huéspedes',
     property_notes: 'Notas de la propiedad',
     clock_in: 'Registrar entrada — Iniciar', clock_in_short: 'Registrar entrada', pause: 'Pausar', resume: 'Continuar',
@@ -1491,7 +1491,7 @@ export const translations = {
     status_scheduled: 'Agendado', status_en_route: 'A caminho', status_in_progress: 'Em andamento',
     status_completed: 'Concluído', status_cancelled: 'Cancelado',
     // Job detail
-    job_detail: 'Detalhes do serviço', arrival_instructions: 'Instruções de chegada', lockbox_code: 'Código do cofre', crew_door_code: 'Código da porta da equipe',
+    job_detail: 'Detalhes do serviço', arrival_instructions: 'Instruções de chegada', lockbox_code: 'Código do cofre', crew_door_code: 'Código da porta da equipe', wifi_name: 'Nome do Wi-Fi', wifi_password: 'Senha do Wi-Fi', hold_to_copy: 'Toque e segure para copiar',
     beds_short: 'qto', baths_short: 'banh', sqft_short: 'ft²', beds_total_short: 'camas', sleeps_n: 'acomoda {n}',
     property_notes: 'Notas da propriedade',
     clock_in: 'Bater ponto — Iniciar serviço', clock_in_short: 'Bater ponto', pause: 'Pausar', resume: 'Continuar',
