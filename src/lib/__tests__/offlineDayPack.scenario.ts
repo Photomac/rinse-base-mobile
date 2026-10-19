@@ -67,12 +67,15 @@ const PJ = { ...CREW, _timeMode: 'per_job' }
 
 const ADDR: Record<string, any> = {
   A1: { id: 'A1', street: '1 Uptown Rd', nickname: 'Uptown', lockbox_code: '1111', arrival_instructions: null },
-  A2: { id: 'A2', street: '20 Red Rock Ln', nickname: 'Red Rock Casita', lockbox_code: '4321', arrival_instructions: 'Side gate, gate code 1122. Key in the lockbox by the hose.' },
+  // The dead-zone home: crew join the house WiFi there (CKS, 2026-10-19)
+  A2: { id: 'A2', street: '20 Red Rock Ln', nickname: 'Red Rock Casita', lockbox_code: '4321', arrival_instructions: 'Side gate, gate code 1122. Key in the lockbox by the hose.',
+        wifi_name: 'RedRockCasita-Guest', wifi_password: 'desert sky 22!' },
   A3: { id: 'A3', street: '3 Chapel Rd', nickname: 'Chapel View', lockbox_code: '7777', arrival_instructions: 'Front door keypad.' },
   A4: { id: 'A4', street: '4 Oak Creek Dr', nickname: 'Oak Creek', lockbox_code: '9999', arrival_instructions: 'Owner on site.' },
   A5: { id: 'A5', street: '5 Bell Rock Blvd', nickname: 'Bell Rock', lockbox_code: '5555', arrival_instructions: null },
 }
 const addressRow = (a: any) => ({
+  wifi_name: null, wifi_password: null,
   ...a, tenant_id: T, city: 'Sedona', lat: 34.87, lng: -111.76,
   photo_url: `https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/public/job-photos/${a.id}.jpg`,
   bedrooms: 2, bathrooms: 2, sqft: 1400, beds: 3, sleeps: 6, crew_notes: 'Hot tub cover stays on.',
@@ -444,6 +447,8 @@ const scenarios: Record<string, () => Promise<void>> = {
     }
     ok('every read the stop\'s screen makes comes back from the phone', missing.length === 0, missing.join(', ') || `${Object.keys(screen).length} reads`)
     ok('the door code', got.propmeta.data?.lockbox_code === '4321', String(got.propmeta.data?.lockbox_code))
+    ok('the WiFi, name and password exactly as stored', got.propmeta.data?.wifi_name === 'RedRockCasita-Guest' && got.propmeta.data?.wifi_password === 'desert sky 22!',
+      `${got.propmeta.data?.wifi_name} / ${got.propmeta.data?.wifi_password}`)
     ok('the arrival instructions', /gate code 1122/.test(got.propmeta.data?.arrival_instructions || ''), String(got.propmeta.data?.arrival_instructions))
     ok('the checklist, in room order', (got.chkrows.data || []).map((r: any) => r.task).join('|') === 'Scrub tub|Make beds|Wipe counters',
       (got.chkrows.data || []).map((r: any) => r.task).join('|'))

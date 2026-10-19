@@ -265,7 +265,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [jobStartAt, setJobStartAt] = useState<string | null>(job.started_at ?? null)
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
-  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null; lockbox_code?: string | null; arrival_instructions?: string | null } | null>(null)
+  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null; lockbox_code?: string | null; wifi_name?: string | null; wifi_password?: string | null; arrival_instructions?: string | null } | null>(null)
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
   // The tracker's loads and this screen's punches (lib/timeTracker): the
@@ -285,6 +285,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // (and Schedule doesn't select lockbox_code), so reading them off `addr`
   // left them blank depending on which screen the crew came from.
   const lockboxCode: string | null = (propMeta?.lockbox_code ?? addr?.lockbox_code)?.trim() || null
+  // The home's WiFi, next to the door code (CKS, 2026-10-19): only loadPropMeta's
+  // read has it, and the day pack saves that read for dead zones. Shown exactly
+  // as stored, never run through tx(): a translated password is a wrong one.
+  const wifiName: string | null = propMeta?.wifi_name?.trim() ? propMeta.wifi_name : null
+  const wifiPassword: string | null = propMeta?.wifi_password?.trim() ? propMeta.wifi_password : null
   const arrivalInstructions: string | null = (propMeta?.arrival_instructions ?? addr?.arrival_instructions)?.trim() || null
   const client = job.clients as any
   // Laundry + "how did the guests leave it" are STR/PM turnover features — a
@@ -1785,6 +1790,24 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>🔐</Text>
               <View><Text style={styles.infoLabel}>{t('lockbox_code')}</Text><Text style={styles.infoValue}>{lockboxCode}</Text></View>
+            </View>
+          )}
+          {/* Press and hold copies the password: selectable rather than a copy
+              button, since expo-clipboard is not installed and adding it would
+              need a native rebuild (see ProfileScreen's build line). */}
+          {(wifiName || wifiPassword) && (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoIcon}>📶</Text>
+              <View style={{ flex: 1 }}>
+                {wifiName && (<><Text style={styles.infoLabel}>{t('wifi_name')}</Text><Text style={styles.infoValue} selectable>{wifiName}</Text></>)}
+                {wifiPassword && (
+                  <>
+                    <Text style={[styles.infoLabel, wifiName ? { marginTop: 6 } : null]}>{t('wifi_password')}</Text>
+                    <Text style={styles.infoValue} selectable>{wifiPassword}</Text>
+                    <Text style={styles.infoOriginal}>{t('hold_to_copy')}</Text>
+                  </>
+                )}
+              </View>
             </View>
           )}
           {arrivalInstructions && (
