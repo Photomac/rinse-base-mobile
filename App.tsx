@@ -1,6 +1,6 @@
 import { Sentry } from './src/lib/sentry' // first: initializes Sentry before anything else
 import React, { useState, useEffect, useRef } from 'react'
-import { View, Text, StyleSheet, ActivityIndicator, AppState, Image } from 'react-native'
+import { View, Text, StyleSheet, ActivityIndicator, AppState, Image, Alert } from 'react-native'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { NavigationContainer } from '@react-navigation/native'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
@@ -30,12 +30,13 @@ import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
 import { USERS_READABLE_COLUMNS, fetchMyPay } from './src/lib/userPrivateDetails'
 import { clearDataCache } from './src/lib/dataCache'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
-import { flushOutbox, onOutboxDrained } from './src/lib/outbox'
+import { flushOutbox, onOutboxDrained, onCompletePastRefusedPhotos } from './src/lib/outbox'
 import { prefetchDays, isDayChangePush } from './src/lib/offlinePrefetch'
 import { flushIncidentNotifies } from './src/lib/incidentNotify'
 import { flushSOSQueue, resumableSOS } from './src/lib/sosQueue'
 import * as Notifications from 'expo-notifications'
-import { LangProvider } from './src/contexts/LangContext'
+import { LangProvider, useLang } from './src/contexts/LangContext'
+import { ti } from './src/lib/i18n'
 import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
 import { ErrorBoundary } from './src/components/ErrorBoundary'
 
@@ -368,6 +369,16 @@ function AppInner() {
     const offDrained = onOutboxDrained(() => { prefetchDays(user).catch(() => {}) })
     return () => { sub.remove(); clearInterval(iv); offDrained() }
   }, [user])
+
+  // A queued Complete waits for its clean's photos (lib/outbox), unless the
+  // server keeps refusing one: then it is sent anyway and the crew is told,
+  // as JobDetailScreen tells them at Complete when it is online.
+  const { t } = useLang()
+  const tRef = useRef(t)
+  tRef.current = t
+  useEffect(() => onCompletePastRefusedPhotos(({ error }) => {
+    Alert.alert(`⚠️ ${tRef.current('photo_upload_failing_title')}`, ti(tRef.current('photo_complete_sent_failing_msg'), { error: error || '?' }))
+  }), [])
 
   // The office assigned this phone a clean (notify-crew-assigned, data.type
   // 'job_assigned'): save the day for offline now, whether the push arrives

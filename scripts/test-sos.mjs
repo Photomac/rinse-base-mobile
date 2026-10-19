@@ -47,6 +47,7 @@ try {
   writeFileSync(join(work, 'outbox.ts'), rewrite(read('src/lib/outbox.ts'), [
     ...libMocks,
     [`from './errorReporter'`, `from './sos.mocks'`],
+    [`from './photoQueue'`, `from './sos.mocks'`],
   ], 'outbox.ts'))
   writeFileSync(join(work, 'sosTracker.ts'), rewrite(read('src/lib/sosTracker.ts'), [
     ...libMocks,
@@ -56,6 +57,8 @@ try {
     [`from './i18n'`, `from './sosTracker.mocks'`],
     ['const REQUEST_TIMEOUT_MS = 15_000', 'const REQUEST_TIMEOUT_MS = 150'],
   ], 'sosTracker.ts'))
+  // outbox.ts imports ./timezone (dayKey) as-is: it has no imports of its own.
+  writeFileSync(join(work, 'timezone.ts'), read('src/lib/timezone.ts'))
   // outbox.ts asks netFetch whether the link is answering; the real module
   // (no imports of its own). The SOS client doesn't fetch through it, so it
   // has seen no traffic and says yes, as before.

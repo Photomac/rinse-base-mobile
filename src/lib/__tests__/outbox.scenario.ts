@@ -10,8 +10,8 @@
 // flushOutbox is guarded against re-entry — so tests SETTLE (macrotask tick)
 // before counting flushes, or the fire-and-forget flush eats one iteration.
 // That guard is by design; the settle is the test accommodating it.
-import { writeThrough, flushOutbox, pendingOpCount, rejectedOps, overlayPending, uuid4 } from '../outbox'
-import { net, reported } from './outbox.mocks'
+import { writeThrough, flushOutbox, pendingOpCount, rejectedOps, overlayPending, uuid4, onCompletePastRefusedPhotos } from '../outbox'
+import { net, reported, photos, photoLanded } from './outbox.mocks'
 
 let failures = 0
 const ok = (name: string, cond: boolean) => {
@@ -60,6 +60,110 @@ const settle = () => new Promise(r => setTimeout(r, 10))
   ok('drop reported to the error channel', reported.length === 1 && reported[0].includes('job_time_entries'))
   ok('ops behind the poison proceed once it parks', (await pendingOpCount()) === 0 &&
     net.applied.some(a => a.table === 'jobs' && a.values.status === 'completed'))
+  net.rejectTables.clear()
+
+  // ── Day shift started twice (one open shift per person on the server) ────
+  // A queued Start that loses to a shift already open must not be retried
+  // into the park list, and the hours on both sides must survive.
+  const T = (d: number, h: number, m = 0) => new Date(Date.UTC(2026, 8, d, h, m)).toISOString()
+  const shiftParkedBefore = (await rejectedOps()).length
+  const shiftReportedBefore = reported.length
+  const shiftStart = (id: string, user: string, at: string) => writeThrough({
+    table: 'job_time_entries', op: 'upsert', onConflict: 'id',
+    values: { id, user_id: user, job_id: null, entry_type: 'shift', clocked_in_at: at },
+  })
+  const shiftEnd = (id: string, at: string, mins: number) => writeThrough({
+    table: 'job_time_entries', op: 'update', match: { id },
+    values: { clocked_out_at: at, duration_minutes: mins },
+  })
+
+  // S1 same day: phone offline starts X at 14:00 and ends it at 22:00; the
+  // web had started O at 14:05. O becomes the day: 14:00 to 22:00.
+  await settle(); net.online = false; net.applied.length = 0
+  const X1 = uuid4()
+  net.openShifts.set('u1', { id: 'O1', clocked_in_at: T(28, 14, 5) })
+  await shiftStart(X1, 'u1', T(28, 14))
+  await shiftEnd(X1, T(28, 22), 480)
+  await settle(); net.online = true; await flushOutbox()
+  ok('S1 same-day conflict drains the queue', (await pendingOpCount()) === 0)
+  ok('S1 no second shift row landed', !net.applied.some(a => a.op === 'upsert' && a.values.id === X1))
+  ok('S1 the open shift keeps the earlier start', net.applied.some(a => a.op === 'update' && a.filters.includes('id=eq.O1') && a.values.clocked_in_at === T(28, 14)))
+  ok('S1 End my day closes the open shift, minutes from 14:00',
+    net.applied.some(a => a.op === 'update' && a.filters.includes('id=eq.O1') && a.values.clocked_out_at === T(28, 22) && a.values.duration_minutes === 480))
+
+  // S2 a whole earlier shift queued offline (06:00-10:00) while O (14:00) is
+  // open: recorded closed, its End folded in, O untouched.
+  await settle(); net.online = false; net.applied.length = 0
+  const X2 = uuid4()
+  net.openShifts.set('u2', { id: 'O2', clocked_in_at: T(28, 14) })
+  await shiftStart(X2, 'u2', T(28, 6))
+  await shiftEnd(X2, T(28, 10), 240)
+  await settle(); net.online = true; await flushOutbox()
+  ok('S2 earlier whole shift recorded closed',
+    net.applied.some(a => a.op === 'upsert' && a.values.id === X2 && a.values.clocked_out_at === T(28, 10) && a.values.duration_minutes === 240))
+  ok('S2 its End was folded in, the open shift untouched', !net.applied.some(a => a.op === 'update') && net.openShifts.get('u2')?.id === 'O2')
+  ok('S2 queue drained', (await pendingOpCount()) === 0)
+
+  // S3 a start from yesterday that was never ended, replayed after today's O
+  // (13:00) exists: closed at its 16 h cap, flagged; an End tapped later on a
+  // screen still showing it goes to O.
+  await settle(); net.online = false; net.applied.length = 0
+  const X3 = uuid4()
+  net.openShifts.set('u3', { id: 'O3', clocked_in_at: T(28, 13) })
+  await shiftStart(X3, 'u3', T(27, 14))
+  await settle(); net.online = true; await flushOutbox()
+  ok('S3 forgotten earlier-day start recorded closed at 16 h, labelled',
+    net.applied.some(a => a.op === 'upsert' && a.values.id === X3 && a.values.clocked_out_at === T(28, 6)
+      && a.values.duration_minutes === 960 && a.values.pause_reason === 'Auto-closed: a new day was started'))
+  const r3 = await shiftEnd(X3, T(28, 21), 1860)
+  ok('S3 a later End for the lost start closes the running shift, minutes from its start',
+    r3.error === null && net.applied.some(a => a.op === 'update' && a.filters.includes('id=eq.O3') && a.values.duration_minutes === 480))
+
+  // S4 the open shift is ended between the refused insert and the read-back:
+  // retried (not resolved into anything), then lands on the next flush.
+  await settle(); net.online = false; net.applied.length = 0
+  const X4 = uuid4()
+  net.openShifts.set('u4', { id: 'O4', clocked_in_at: T(28, 8) })
+  await shiftStart(X4, 'u4', T(28, 9))
+  await settle(); net.online = true; net.hideOpenOnRead = true
+  await flushOutbox()
+  ok('S4 unresolved conflict stays queued', (await pendingOpCount()) === 1)
+  net.hideOpenOnRead = false; net.openShifts.delete('u4')
+  await settle(); await flushOutbox()
+  ok('S4 lands once the other shift is closed', (await pendingOpCount()) === 0 && net.applied.some(a => a.op === 'upsert' && a.values.id === X4))
+
+  ok('S1-S4 nothing parked, nothing reported', (await rejectedOps()).length === shiftParkedBefore && reported.length === shiftReportedBefore)
+
+  // S5 online with an empty queue: the refusal goes back to the caller (the
+  // Dashboard shows the running shift), nothing is queued.
+  await settle(); net.applied.length = 0
+  net.openShifts.set('u5', { id: 'O5', clocked_in_at: T(28, 8) })
+  const r5 = await shiftStart(uuid4(), 'u5', T(28, 8, 30))
+  ok('S5 live conflict returned as 23505, not queued', r5.error?.code === '23505' && r5.queued === false && (await pendingOpCount()) === 0)
+
+  // S6 CKS 2026-10-10 (Mia, Lilly): the day running since 07:28, a reload in a
+  // dead zone offered Start again and the 10:10 tap queued. That used to be
+  // refused five times, parked and shown as "your hours may be missing". Now
+  // it settles into the running shift, which keeps its 07:28 start, and End
+  // my day tapped later on the queued start's id closes the running one.
+  await settle(); net.online = false; net.applied.length = 0
+  const parkedBefore6 = (await rejectedOps()).length
+  const reportedBefore6 = reported.length
+  const X6 = uuid4()
+  net.openShifts.set('u6', { id: 'O6', clocked_in_at: T(10, 14, 28) })
+  await shiftStart(X6, 'u6', T(10, 17, 10))
+  await settle(); net.online = true
+  for (let i = 0; i < 5; i++) { await settle(); await flushOutbox() }
+  ok('S6 second Start on a running day: queue drained', (await pendingOpCount()) === 0)
+  ok('S6 …nothing parked, nothing reported', (await rejectedOps()).length === parkedBefore6 && reported.length === reportedBefore6)
+  ok('S6 …no second shift row, the running one keeps 07:28',
+    !net.applied.some(a => a.op === 'upsert' && a.values.id === X6) && !net.applied.some(a => a.op === 'update')
+    && net.openShifts.get('u6')?.clocked_in_at === T(10, 14, 28))
+  const r6 = await shiftEnd(X6, T(10, 22, 38), 328)
+  ok('S6 End my day on the queued start closes the running shift, 07:28 to 15:38',
+    r6.error === null && net.applied.some(a => a.op === 'update' && a.filters.includes('id=eq.O6')
+      && a.values.clocked_out_at === T(10, 22, 38) && a.values.duration_minutes === 490)
+    && !net.openShifts.has('u6'))
 
   // ── A replace-all save: new rows first, then delete what they replace ────
   // (JobInventoryScreen.save's shape until it went id-stable; see
@@ -138,6 +242,126 @@ const settle = () => new Promise(r => setTimeout(r, 10))
   ok('replayed start carries its status IN filter to the server',
     !!startWrite && startWrite.filters.includes('id=eq.J5') &&
     startWrite.filters.includes(`status=in.(${STARTABLE.join(',')})`))
+
+  // A queued Complete waits for its clean's photos (2026-10-16). Offline, the
+  // clock-out and the Complete queue while the photos are still on the phone;
+  // the gate refuses the Complete until they land. Sent first, it was refused
+  // five times and parked, leaving the clean open with its crew clocked out.
+  // Held, it is not sent, not counted, and goes once they land. Ops for that
+  // clean behind it wait with it; the next clean's go past.
+  const completedP = (id: string) => net.applied.filter(a => a.table === 'jobs' && a.filters.includes(`id=eq.${id}`) && a.values?.status === 'completed')
+  net.online = false
+  net.applied.length = 0
+  const rejectedBeforeP = (await rejectedOps()).length
+  const reportedBeforeP = reported.length
+  let completeTries = 0
+  net.beforeWrite = (table, _op, values) => { if (table === 'jobs' && values?.status === 'completed') completeTries++ }
+  photos.set('P1', { waiting: 2, refused: 0, lastServerError: null })
+  net.blocked.set('P1', ['no_after_photo'])
+  await writeThrough({ table: 'job_time_entries', op: 'update', match: { id: 'TE-P1' }, values: { clocked_out_at: '2026-10-16T15:00:00.000Z', duration_minutes: 60 } })
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P1' }, values: { status: 'completed', completed_at: '2026-10-16T15:00:00.000Z' } })
+  await writeThrough({ table: 'job_inventory_log', op: 'upsert', onConflict: 'id', values: [{ id: uuid4(), job_id: 'P1', inventory_id: 'TP', qty_used: 1 }] })
+  await writeThrough({ table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: {
+    id: 'TE-P2', job_id: 'P2', user_id: 'U1', clocked_in_at: '2026-10-16T15:20:00.000Z', entry_type: 'work', source: 'manual',
+  } })
+  await settle()
+  net.online = true
+  for (let i = 0; i < 6; i++) { await settle(); await flushOutbox() }
+  ok('Complete waiting on photos: the clock-out queued before it lands', net.applied[0]?.filters.includes('id=eq.TE-P1'))
+  ok('…the Complete is never sent (the gate is never asked)', completeTries === 0 && completedP('P1').length === 0)
+  ok('…the next clean\'s clock-in goes past it', net.applied[1]?.values?.id === 'TE-P2')
+  ok('…the supplies save for the same clean waits behind it',
+    !net.applied.some(a => a.table === 'job_inventory_log') && (await pendingOpCount()) === 2)
+  const nothingParked = (await rejectedOps()).length === rejectedBeforeP
+  ok('…six flushes later nothing is counted, parked or reported', nothingParked && reported.length === reportedBeforeP)
+  photos.delete('P1')
+  net.blocked.delete('P1')
+  photoLanded('P1')
+  await settle(); await settle()
+  ok('photos landed: the Complete goes at once, with no other trigger', completedP('P1').length === 1 && completeTries === 1)
+  ok('…then the supplies save queued behind it', net.applied[net.applied.length - 1]?.table === 'job_inventory_log' && (await pendingOpCount()) === 0)
+  ok('…nothing parked, nothing reported', (await rejectedOps()).length === rejectedBeforeP && reported.length === reportedBeforeP)
+
+  // A photo the server keeps refusing gives way (photoQueue says when): the
+  // Complete goes and the server decides, and the crew and the office are told.
+  const pastRefused: any[] = []
+  const offPast = onCompletePastRefusedPhotos(e => pastRefused.push(e))
+  net.online = false
+  photos.set('P3', { waiting: 0, refused: 1, lastServerError: 'HTTP 400: new row violates row-level security policy' })
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P3' }, values: { status: 'completed' } })
+  await settle()
+  net.online = true
+  await flushOutbox()
+  ok('refused photo, gate satisfied: the Complete lands', completedP('P3').length === 1 && (await pendingOpCount()) === 0)
+  ok('…the crew is told once, with the server\'s reason',
+    pastRefused.length === 1 && pastRefused[0].jobId === 'P3' && pastRefused[0].error.includes('row-level security'))
+  ok('…and the office (System Health)', reported.length === reportedBeforeP + 1 && reported[reported.length - 1].includes('past 1 photo'))
+
+  // Same, and the gate needs that photo: the server's refusal counts as any
+  // other, so the Complete parks after five and is reported. Told once.
+  net.online = false
+  photos.set('P4', { waiting: 0, refused: 2, lastServerError: 'HTTP 400: refused' })
+  net.blocked.set('P4', ['no_after_photo'])
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P4' }, values: { status: 'completed' } })
+  await settle()
+  net.online = true
+  for (let i = 0; i < 4; i++) { await settle(); await flushOutbox() }
+  ok('refused photo the gate needs: the refusals are counted (4 flushes, still queued)',
+    (await pendingOpCount()) === 1 && pastRefused.length === 2)
+  await settle()
+  await flushOutbox()
+  ok('…parked on the 5th and reported', (await pendingOpCount()) === 0 &&
+    (await rejectedOps()).length === rejectedBeforeP + 1 && reported[reported.length - 1].includes('dropped update on jobs'))
+  ok('…the crew was told once, not once a flush', pastRefused.length === 2)
+  offPast()
+  net.blocked.delete('P4')
+  photos.delete('P3'); photos.delete('P4')
+
+  // Live: queue empty, the blocker check had no answer so the Complete was
+  // sent, and the gate refused it for photos this phone is still sending. It
+  // is queued behind them instead of returned as an error.
+  photos.set('P5', { waiting: 1, refused: 0, lastServerError: null })
+  net.blocked.set('P5', ['no_after_photo', 'missing_required_area_photo'])
+  r = await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P5' }, values: { status: 'completed' } })
+  ok('live Complete refused for photos still on the phone: queued, no error', r.queued === true && !r.error && (await pendingOpCount()) === 1)
+  await settle()
+  await flushOutbox()
+  ok('…and held, uncounted', (await pendingOpCount()) === 1 && !(await rejectedOps()).some(x => x.match?.id === 'P5'))
+  photos.delete('P5'); net.blocked.delete('P5')
+  photoLanded('P5')
+  await settle(); await settle()
+  ok('…sent once they land', completedP('P5').length === 1 && (await pendingOpCount()) === 0)
+
+  // Any other refusal is the caller's to show, as before: a blocker no photo
+  // answers, or photo blockers with no photo on the phone.
+  photos.set('P6', { waiting: 1, refused: 0, lastServerError: null })
+  net.blocked.set('P6', ['no_after_photo', 'unchecked_required_item'])
+  r = await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P6' }, values: { status: 'completed' } })
+  ok('live Complete refused for a ticked-item blocker too: the error is returned', !r.queued && String(r.error?.message).startsWith('RB_BLOCKED'))
+  photos.delete('P6')
+  net.blocked.set('P6', ['no_after_photo'])
+  r = await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P6' }, values: { status: 'completed' } })
+  ok('…and for photos the phone doesn\'t have', !r.queued && String(r.error?.message).startsWith('RB_BLOCKED') && (await pendingOpCount()) === 0)
+  net.blocked.delete('P6')
+
+  // A photo queued between the check and the send: the refusal is not counted,
+  // the Complete waits for it.
+  net.online = false
+  net.blocked.set('P7', ['no_after_photo'])
+  await writeThrough({ table: 'jobs', op: 'update', match: { id: 'P7' }, values: { status: 'completed' } })
+  net.beforeWrite = (table, _op, values) => {
+    if (table === 'jobs' && values?.status === 'completed') photos.set('P7', { waiting: 1, refused: 0, lastServerError: null })
+  }
+  await settle()
+  net.online = true
+  for (let i = 0; i < 6; i++) { await settle(); await flushOutbox() }
+  ok('photo queued mid-send: the refusal is not counted, the Complete waits',
+    (await pendingOpCount()) === 1 && !(await rejectedOps()).some(x => x.match?.id === 'P7'))
+  net.beforeWrite = null
+  photos.delete('P7'); net.blocked.delete('P7')
+  photoLanded('P7')
+  await settle(); await settle()
+  ok('…and goes once it lands', completedP('P7').length === 1 && (await pendingOpCount()) === 0)
 
   // A clean's clock started twice (job_time_entries_one_open_per_job, 23505).
   // The tap queued in a dead zone; meanwhile the arrival auto clock-in (or

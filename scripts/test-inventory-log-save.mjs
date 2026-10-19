@@ -2,8 +2,8 @@
 // Runs the Supplies-save scenario test (src/lib/__tests__/inventoryLogSave.scenario.ts):
 // the REAL src/lib/inventoryLogSave.ts plan, turned into writes by the REAL
 // src/lib/inventoryLogOutbox.ts and sent through the REAL src/lib/outbox.ts,
-// whose four imports (AsyncStorage, supabase, errorReporter, netFetch) are rewritten to
-// the test mocks, as scripts/test-outbox.mjs does.
+// whose imports (AsyncStorage, supabase, errorReporter, photoQueue, netFetch) are
+// rewritten to the test mocks, as scripts/test-outbox.mjs does.
 //
 // Usage: node scripts/test-inventory-log-save.mjs
 import { execSync } from 'node:child_process'
@@ -21,9 +21,12 @@ try {
     .replace(`import AsyncStorage`, `import { AsyncStorage }`)
     .replace(`from './supabase'`, `from './outbox.mocks'`)
     .replace(`from './errorReporter'`, `from './outbox.mocks'`)
+    .replace(`from './photoQueue'`, `from './outbox.mocks'`)
     .replace(`from './netFetch'`, `from './outbox.mocks'`)
   writeFileSync(join(work, 'outbox.ts'), outbox)
   cpSync(join(repo, 'src/lib/__tests__/outbox.mocks.ts'), join(work, 'outbox.mocks.ts'))
+  // outbox.ts imports ./timezone (dayKey) as-is: it has no imports of its own.
+  cpSync(join(repo, 'src/lib/timezone.ts'), join(work, 'timezone.ts'))
   cpSync(join(repo, 'src/lib/inventoryLogSave.ts'), join(work, 'inventoryLogSave.ts'))
   cpSync(join(repo, 'src/lib/inventoryLogOutbox.ts'), join(work, 'inventoryLogOutbox.ts'))
   const scenario = readFileSync(join(repo, 'src/lib/__tests__/inventoryLogSave.scenario.ts'), 'utf8')
@@ -32,7 +35,7 @@ try {
     .replace(`from '../inventoryLogOutbox'`, `from './inventoryLogOutbox'`)
   writeFileSync(join(work, 'scenario.ts'), scenario)
 
-  execSync('npx --yes esbuild outbox.ts outbox.mocks.ts inventoryLogSave.ts inventoryLogOutbox.ts scenario.ts --format=cjs --platform=node --outdir=out', {
+  execSync('npx --yes esbuild outbox.ts outbox.mocks.ts timezone.ts inventoryLogSave.ts inventoryLogOutbox.ts scenario.ts --format=cjs --platform=node --outdir=out', {
     cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
   })
   execSync('node out/scenario.js', { cwd: work, stdio: 'inherit' })

@@ -170,3 +170,8 @@ export async function fakeFetch(input: any, init: any = {}): Promise<Response> {
   if (mode === 'lose-ack') throw new TypeError('Network request failed')
   return res
 }
+
+// outbox.ts holds a queued Complete while its clean has photos on the phone
+// (photoQueue.ts). No photos here.
+export async function photosAheadOfComplete(_jobId: string) { return { waiting: 0, refused: 0, lastServerError: null } }
+export function onPhotoQueueChange(_fn: (e: { uploadedJobId?: string }) => void) { return () => {} }

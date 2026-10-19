@@ -114,4 +114,22 @@ every open (CKS, Brittany at 70 C MAIN).
          the ticks, the photo, and the stop completed.
    - [ ] The Saved for offline line refreshes to the current time.
 
+## 6b. Complete while a photo is still uploading (the queued Complete waits)
+
+A queued Complete must not reach the server before its clean's photos: the
+completion gate would refuse it, and it used to be dropped after five tries
+with the clean left open and the crew clocked out.
+
+1. Network Link Conditioner **100% Loss ON** (or Airplane Mode) on a clocked-in
+   stop. Take the **after photo**, then tap **Complete** → "Saved on your phone".
+2. Switch the profile to **Very Bad Network** (slow, not dead) and stay on Home,
+   pulling to refresh a few times over a minute or two.
+   - [ ] Web: the clock-out arrives; the stop stays **In progress** while the
+         photo still shows "⏳ waiting to upload" on the phone.
+   - [ ] Profile → Sync card: 1 pending, **nothing rejected**.
+3. Network Link Conditioner **OFF**.
+   - [ ] Within about a minute: the web shows the photo, then the stop
+         **Completed**, with the completed time of the tap in step 1.
+   - [ ] Profile → Sync card: nothing pending, nothing rejected.
+
 If any step fails, note the step, the screen, and the Profile build line.

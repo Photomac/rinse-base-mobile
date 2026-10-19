@@ -38,6 +38,17 @@ export const net = {
   loseAcks: 0,
   /** Reads fail like a dead network while writes still get through. */
   readsOffline: false,
+  /** The completion gate (enforce_job_completion_gate): a Complete for one of
+   *  these cleans is refused with RB_BLOCKED and these blocker codes. */
+  blocked: new Map<string, string[]>(),
+  /** Called as a write reaches the server, before it is answered. */
+  beforeWrite: null as null | ((table: string, op: string, values: any) => void),
+  /** Server-side OPEN day shifts, keyed by user_id; mirrors
+   *  job_time_entries_one_open_shift. An open-shift upsert for a person who
+   *  already has a different one open gets 23505 / 409, as PostgREST returns it. */
+  openShifts: new Map<string, { id: string; clocked_in_at: string }>(),
+  /** The open shift is ended between the refused insert and the read-back. */
+  hideOpenOnRead: false,
 }
 
 const filterVal = (filters: string[], k: string) =>
@@ -50,6 +61,26 @@ function result(table: string, op: string, values: any, filters: string[], opts?
   if (!net.online || (op === 'select' && net.readsOffline)) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
   if (net.rejectTables.has(table) && (!net.rejectOp || net.rejectOp === op)) {
     return { error: { message: 'violates row-level security' }, status: 403 }
+  }
+  if (table === 'job_time_entries' && filterVal(filters, 'entry_type') === 'shift' && op === 'select') {
+    const open = net.hideOpenOnRead ? undefined : net.openShifts.get(filterVal(filters, 'user_id') ?? '')
+    return { data: open ? [{ ...open }] : [], error: null, status: 200 }
+  }
+  if (table === 'job_time_entries' && op === 'upsert' && !Array.isArray(values)
+    && values?.entry_type === 'shift' && !values.clocked_out_at && values.user_id) {
+    const open = net.openShifts.get(values.user_id)
+    if (open && open.id !== values.id) {
+      return { error: { code: '23505', message: 'duplicate key value violates unique constraint "job_time_entries_one_open_shift"' }, status: 409 }
+    }
+    net.openShifts.set(values.user_id, { id: values.id, clocked_in_at: values.clocked_in_at })
+  }
+  if (table === 'job_time_entries' && op === 'update') {
+    const id = filterVal(filters, 'id')
+    for (const [u, s] of net.openShifts) {
+      if (s.id !== id) continue
+      if (values?.clocked_out_at) net.openShifts.delete(u)
+      else if (values?.clocked_in_at) net.openShifts.set(u, { ...s, clocked_in_at: values.clocked_in_at })
+    }
   }
   if (table === 'job_time_entries' && op === 'select' && filterIn(filters, 'id')) {
     const ids = filterIn(filters, 'id')!.filter(id => net.storedEntries.has(id))
@@ -82,6 +113,11 @@ function result(table: string, op: string, values: any, filters: string[], opts?
         else if (values?.clocked_in_at) v.clocked_in_at = values.clocked_in_at
       }
     }
+  }
+  if (op !== 'select') net.beforeWrite?.(table, op, values)
+  const gated = table === 'jobs' && op === 'update' && values?.status === 'completed' && net.blocked.get(filterVal(filters, 'id') ?? '')
+  if (gated) {
+    return { error: { code: 'P0001', message: `RB_BLOCKED: ${JSON.stringify(gated.map(code => ({ code })))}` }, status: 400 }
   }
   net.applied.push({ table, op, values, filters, ...(opts ? { opts } : {}) })
   if (table === 'job_time_entries' && op === 'upsert') {
@@ -122,6 +158,20 @@ export const supabase = {
 
 export const reported: string[] = []
 export function reportClientError(msg: string) { reported.push(msg) }
+
+// The photo queue (photoQueue.ts) as the outbox sees it: what each clean's
+// photos still on the phone say about its queued Complete. Unset = none.
+export const photos = new Map<string, { waiting: number; refused: number; lastServerError: string | null }>()
+export async function photosAheadOfComplete(jobId: string) {
+  return photos.get(jobId) ?? { waiting: 0, refused: 0, lastServerError: null }
+}
+const photoListeners = new Set<(e: { uploadedJobId?: string }) => void>()
+export function onPhotoQueueChange(fn: (e: { uploadedJobId?: string }) => void) {
+  photoListeners.add(fn)
+  return () => { photoListeners.delete(fn) }
+}
+/** A photo for this clean became its job_photos row (photoQueue's event). */
+export function photoLanded(jobId: string) { photoListeners.forEach(fn => fn({ uploadedJobId: jobId })) }
 
 /** netFetch linkAnswering(), as the test sets it. */
 export async function linkAnswering(): Promise<boolean> { return net.answering }
