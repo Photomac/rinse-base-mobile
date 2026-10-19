@@ -8,7 +8,8 @@ import { supabase, isSignedOut } from './src/lib/supabase'
 import { LoginScreen } from './src/screens/LoginScreen'
 import { DashboardScreen } from './src/screens/DashboardScreen'
 import { ScheduleScreen } from './src/screens/ScheduleScreen'
-import { OpenJobsScreen, offeredFirstTo } from './src/screens/OpenJobsScreen'
+import { OpenJobsScreen } from './src/screens/OpenJobsScreen'
+import { boardQuery, boardJobsFor } from './src/lib/openJobs'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
@@ -109,9 +110,9 @@ function AppInner() {
   const [loading, setLoading] = useState(true)
   const [selectedJob, setSelectedJob] = useState<any>(null)
   const [chatUnread, setChatUnread] = useState(0)
-  // Cleans on the crew job board right now (open_for_claims_at set, not yet
-  // full). Drives the Open jobs tab badge, and whether the tab shows at all
-  // for a company still on default-crew assignment.
+  // Cleans on the crew job board right now, by the same rule as the list on
+  // the tab (lib/openJobs.ts). Drives the Open jobs tab badge, and whether
+  // the tab shows at all for a company still on default-crew assignment.
   const [openJobsCount, setOpenJobsCount] = useState(0)
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [showSOS, setShowSOS] = useState(false)
@@ -298,18 +299,15 @@ function AppInner() {
   const refreshOpenJobs = async () => {
     if (!user) return
     try {
-      // Counted here, not by the database: a clean still offered to another
-      // property's crew first (jobs.open_to_all_at) isn't this person's to see.
-      const { data } = await supabase.from('jobs')
-        .select('id, open_to_all_at, client_addresses!jobs_address_id_fkey(default_crew)')
-        .eq('tenant_id', user.tenant_id)
-        .not('open_for_claims_at', 'is', null)
-        .in('status', ['pending_approval', 'scheduled'])
-        .eq('crew_filled', false)
-        .gt('scheduled_start', new Date().toISOString())
-        .limit(500)
-      const now = Date.now()
-      setOpenJobsCount((data ?? []).filter((j: any) => offeredFirstTo(j, user.id, now) !== 'others').length)
+      // Counted here, not by the database, and by the list's own rule: a
+      // clean still offered to another property's crew first
+      // (jobs.open_to_all_at) isn't this person's to see, and a clean is open
+      // while it has a spot left (max_crew), not just until it is staffed.
+      const now = new Date()
+      const { data } = await boardQuery(supabase.from('jobs')
+        .select('id, status, scheduled_start, max_crew, open_for_claims_at, open_to_all_at, client_addresses!jobs_address_id_fkey(default_crew), job_assignments(user_id)'),
+        user.tenant_id, now)
+      setOpenJobsCount(boardJobsFor(data ?? [], user.id, now.getTime()).length)
     } catch { /* badge is best-effort */ }
   }
 

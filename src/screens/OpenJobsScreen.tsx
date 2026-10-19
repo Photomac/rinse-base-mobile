@@ -8,7 +8,8 @@
 // READS: crew already download every job in the company for Schedule and
 // Home and filter to their own client-side, so this is the same read with a
 // different filter (open_for_claims_at set, still pending/scheduled, in the
-// future, not yet full).
+// future, not yet full). That filter lives in lib/openJobs.ts, shared with
+// the tab's badge, so the badge never counts a clean this list leaves out.
 //
 // WRITES: only through the claim_open_job RPC. Crew have no INSERT on
 // job_assignments and never will; the RPC row-locks the job so two people
@@ -30,8 +31,7 @@ import { ti, localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD, SLATE } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
 import { fmtTime, fmtDate } from '../lib/timezone'
-
-const HORIZON_DAYS = 60
+import { boardQuery, boardJobsFor, offeredFirstTo } from '../lib/openJobs'
 
 const RESULT_KEY: Record<string, string> = {
   full: 'open_jobs_r_full',
@@ -43,22 +43,6 @@ const RESULT_KEY: Record<string, string> = {
   off_that_day: 'open_jobs_r_off_day',
   double_booked: 'open_jobs_r_double',
   first_tier_only: 'open_jobs_r_first_tier',
-}
-
-export function isOpenJob(j: any, now = Date.now()): boolean {
-  return !!j.open_for_claims_at
-    && ['pending_approval', 'scheduled'].includes(j.status)
-    && new Date(j.scheduled_start).getTime() > now
-    && (j.job_assignments?.length ?? 0) < Math.max(Number(j.max_crew ?? 1), 1)
-}
-
-/** Crew first, then everyone (web migration 20261014230000): inside its
- *  first-pick window (jobs.open_to_all_at) a clean is its property's default
- *  crew's alone — claim_open_job refuses anyone else — so only they see it. */
-export function offeredFirstTo(j: any, userId: string, now = Date.now()): 'all' | 'me' | 'others' {
-  if (!j.open_to_all_at || new Date(j.open_to_all_at).getTime() <= now) return 'all'
-  const crew: string[] = j.client_addresses?.default_crew ?? []
-  return crew.includes(userId) ? 'me' : 'others'
 }
 
 export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
@@ -75,19 +59,13 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
 
   const load = useCallback(async () => {
     const now = new Date()
-    const res = await cachedQuery(`openjobs:${user.tenant_id}`, supabase
+    const res = await cachedQuery(`openjobs:${user.tenant_id}`, boardQuery(supabase
       .from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, max_crew, open_for_claims_at, open_to_all_at, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, default_crew), service_types(name), job_assignments(user_id, claimed_at)')
-      .eq('tenant_id', user.tenant_id)
-      .not('open_for_claims_at', 'is', null)
-      .in('status', ['pending_approval', 'scheduled'])
-      .gt('scheduled_start', now.toISOString())
-      .lte('scheduled_start', new Date(now.getTime() + HORIZON_DAYS * 86_400_000).toISOString())
-      .order('scheduled_start')
-      .limit(200))
+      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, max_crew, open_for_claims_at, open_to_all_at, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, default_crew), service_types(name), job_assignments(user_id, claimed_at)'),
+      user.tenant_id, now))
     setOffline(res.fromCache)
     const rows = res.data ?? []
-    setJobs(rows.filter((j: any) => isOpenJob(j, now.getTime()) && offeredFirstTo(j, user.id, now.getTime()) !== 'others'))
+    setJobs(boardJobsFor(rows, user.id, now.getTime()))
     // Board cleans this person claimed. A full one drops out of the open list,
     // so it needs its own row here — that is where "give back" lives.
     setMine(rows.filter((j: any) => (j.job_assignments ?? []).some((a: any) => a.user_id === user.id && a.claimed_at)))
