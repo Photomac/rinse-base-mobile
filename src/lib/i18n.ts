@@ -859,7 +859,7 @@ export const translations = {
     prep_access_title: 'Revisa el acceso',
     prep_access_sub: 'No hay código de caja de llaves ni instrucciones de entrada — llama a la oficina antes de ir',
     // Disponibles — tablero de limpiezas (claim_open_job)
-    open_jobs_tab: 'Disponibles',
+    open_jobs_tab: 'Abiertos',
     open_jobs_title: 'Disponibles',
     open_jobs_sub: 'Quien la tome primero se la queda',
     open_jobs_offline: 'Sin conexión — se muestra la última lista cargada. Para tomar una necesitas señal.',
@@ -1689,7 +1689,7 @@ export const translations = {
     prep_access_title: 'Verifique o acesso',
     prep_access_sub: 'Sem código do cofre de chaves nem instruções de entrada — ligue para o escritório antes de ir',
     // Disponíveis — quadro de limpezas (claim_open_job)
-    open_jobs_tab: 'Disponíveis',
+    open_jobs_tab: 'Abertos',
     open_jobs_title: 'Disponíveis',
     open_jobs_sub: 'Quem pegar primeiro fica com ela',
     open_jobs_offline: 'Sem conexão — mostrando a última lista carregada. Para pegar uma é preciso sinal.',
