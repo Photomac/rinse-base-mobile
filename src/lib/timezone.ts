@@ -96,14 +96,42 @@ export function fmtTime(input: Date | string | null | undefined, locale = 'en-US
 }
 
 /** Format a date in the tenant's zone. Date-only strings render as that
- *  literal calendar date, never shifted. */
+ *  literal calendar date, never shifted. Month and day are always included —
+ *  `opts` adds to them ({ weekday: 'short' } reads 'Thu, Oct 22'); for a
+ *  single part on its own use fmtDatePart. */
 export function fmtDate(
   input: Date | string | null | undefined,
   locale = 'en-US',
   opts?: Intl.DateTimeFormatOptions,
 ): string {
+  return formatCalendarDate(input, locale, { month: 'short', day: 'numeric', ...(opts || {}) })
+}
+
+export type DatePart = 'weekday' | 'day' | 'month'
+const DATE_PART_OPTS: Record<DatePart, Intl.DateTimeFormatOptions> = {
+  weekday: { weekday: 'short' },
+  day: { day: 'numeric' },
+  month: { month: 'short' },
+}
+
+/** One part of a date in the tenant's zone — 'Thu', '22' or 'Oct' ('jue' /
+ *  'oct' in es-MX, 'qui.' / 'out.' in pt-BR) — for a date tile that stacks
+ *  them. fmtDate can't do this: its month/day defaults turned each line of the
+ *  Open jobs tile into the whole date. */
+export function fmtDatePart(
+  input: Date | string | null | undefined,
+  part: DatePart,
+  locale = 'en-US',
+): string {
+  return formatCalendarDate(input, locale, DATE_PART_OPTS[part])
+}
+
+function formatCalendarDate(
+  input: Date | string | null | undefined,
+  locale: string,
+  fmtOpts: Intl.DateTimeFormatOptions,
+): string {
   if (!input) return ''
-  const fmtOpts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', ...(opts || {}) }
   if (typeof input === 'string') {
     const m = DATE_ONLY_RE.exec(input)
     if (m) {
