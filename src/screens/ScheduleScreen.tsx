@@ -247,7 +247,8 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                     </View>
                     {dayJobs.map((job, i) => (
                       <View key={i} style={[styles.weekJobBlock, { backgroundColor: STATUS_COLORS[job.status] || GOLD }]}>
-                        <Text style={styles.weekJobText} numberOfLines={1}>
+                        {/* "10:30 a.m." is wider than "10:30 AM": shrink, don't cut. */}
+                        <Text style={styles.weekJobText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
                           {fmtTime(job.scheduled_start, locale)}
                         </Text>
                         <Text style={styles.weekJobName} numberOfLines={1}>
