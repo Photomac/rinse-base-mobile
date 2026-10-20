@@ -17,9 +17,10 @@
 //   · the day a clean is bucketed into must agree with the time printed on it,
 //     or we have traded one wrong answer for a different one.
 import {
-  setCurrentTz, fmtTime, fmtDate, dayKey, localDayKey,
+  setCurrentTz, fmtTime, fmtDate, fmtDatePart, dayKey, localDayKey,
   startOfDayInTz, endOfDayInTz, startOfMonthInTz, isForeignTz,
 } from '../timezone'
+import type { DatePart } from '../timezone'
 
 let failures = 0
 const ok = (name: string, got: unknown, want: unknown) => {
@@ -81,6 +82,31 @@ ok('month rolls with a tenant ahead of the phone',
 // ── Postgres `date` columns are calendar days and must never shift ──────────
 setCurrentTz('America/Los_Angeles')
 ok('date-only string holds its day', fmtDate('2026-05-09'), 'May 9')
+
+// ── A date tile shows one part per line ─────────────────────────────────────
+// The Open jobs tile asked fmtDate for { weekday }, { day }, { month } and got
+// "Thu, Oct 22" / "Oct 22" / "Oct 22": fmtDate always adds month and day.
+// fmtDatePart renders exactly one, in the tenant's zone and the app language.
+const PARTS: DatePart[] = ['weekday', 'day', 'month']
+const tile = (input: string, locale?: string) => PARTS.map(p => fmtDatePart(input, p, locale)).join(' / ')
+setCurrentTz('America/Chicago')
+const thu = '2026-10-22T15:00:00Z' // Thu Oct 22, 10:00 AM in Chicago
+ok('tile weekday', fmtDatePart(thu, 'weekday'), 'Thu')
+ok('tile day', fmtDatePart(thu, 'day'), '22')
+ok('tile month', fmtDatePart(thu, 'month'), 'Oct')
+ok('tile in Spanish', tile(thu, 'es-MX'), 'jue / 22 / oct')
+ok('tile in Portuguese', tile(thu, 'pt-BR'), 'qui. / 22 / out.')
+// 11:30 PM Oct 31 in Chicago is already Sun Nov 1 on the Lisbon phone: every
+// part of the tile has to come from the tenant's day, not the phone's.
+const halloween = '2026-11-01T04:30:00Z'
+ok('tile parts follow the tenant day across a month seam', tile(halloween), 'Sat / 31 / Oct')
+setCurrentTz('America/Los_Angeles')
+ok('tile from a date-only string holds its day', tile('2026-05-09'), 'Sat / 9 / May')
+ok('empty tile part', fmtDatePart(null, 'day'), '')
+// ...and fmtDate keeps its defaults: Home's "still open since" shift line asks
+// for { weekday } alone and relies on getting the date with it.
+setCurrentTz('America/Chicago')
+ok('fmtDate still adds month and day', fmtDate(thu, 'en-US', { weekday: 'short' }), 'Thu, Oct 22')
 
 // ── Empties render empty, not "Invalid Date" ────────────────────────────────
 ok('null time', fmtTime(null), '')
