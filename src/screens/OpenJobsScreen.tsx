@@ -30,7 +30,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD, SLATE } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
-import { fmtTime, fmtDate } from '../lib/timezone'
+import { fmtTime, fmtDate, fmtDatePart } from '../lib/timezone'
 import { boardQuery, boardJobsFor, offeredFirstTo } from '../lib/openJobs'
 
 const RESULT_KEY: Record<string, string> = {
@@ -188,9 +188,9 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
             <View key={job.id} style={styles.card}>
               <View style={styles.cardTop}>
                 <View style={styles.dateBox}>
-                  <Text style={styles.dateDow}>{fmtDate(job.scheduled_start, localeFor(lang), { weekday: 'short' })}</Text>
-                  <Text style={styles.dateDay}>{fmtDate(job.scheduled_start, localeFor(lang), { day: 'numeric' })}</Text>
-                  <Text style={styles.dateMon}>{fmtDate(job.scheduled_start, localeFor(lang), { month: 'short' })}</Text>
+                  <Text style={styles.dateDow}>{fmtDatePart(job.scheduled_start, 'weekday', localeFor(lang))}</Text>
+                  <Text style={styles.dateDay}>{fmtDatePart(job.scheduled_start, 'day', localeFor(lang))}</Text>
+                  <Text style={styles.dateMon}>{fmtDatePart(job.scheduled_start, 'month', localeFor(lang))}</Text>
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.jobTitle} numberOfLines={2}>
