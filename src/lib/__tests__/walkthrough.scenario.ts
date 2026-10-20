@@ -61,7 +61,7 @@ ok('Looks good: one outbox write for the section\'s open lines',
   comp.includes("match: { job_id: job.id }, matchIn: { id: ids }") && comp.includes("values: { result: 'ok', completed_at: new Date().toISOString(), completed_by: user.id }"))
 ok('an answer goes through the outbox, by line id', comp.includes("table: 'job_checklist_items', op: 'update', match: { id: line.id }"))
 ok('a refused write reverts the line', comp.includes('patch([line.id], before)') && comp.includes('patch(ids, { result: null })'))
-ok('a line photo hands its id to the photo screen', comp.includes('onAddPhoto({ title: l.task, jobItemId: l.id })'))
+ok('a line photo hands its id to the photo screen, as a walkthrough photo', comp.includes('onAddPhoto({ title: l.task, jobItemId: l.id, walkthrough: true })'))
 ok('owner-written text is translated', comp.includes('useMachineTranslation(lang,'))
 
 const insp = src('screens/JobInspectionScreen.tsx')

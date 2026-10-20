@@ -22,7 +22,10 @@
 //   during one runs once more after it.
 // - About 4 reads at a time, and the run stops at the first network failure:
 //   on one bar it must not queue a hundred requests that will each time out.
-// - No images. Photo URLs come along inside rows, the files do not.
+// - No images: photo URLs come along inside rows, the files do not. One
+//   exception, after the rows are saved: the photos of lines missed at the
+//   last inspection of a stop's home (lib/carriedPhotoFiles), because there the
+//   photo is the point. Capped, one at a time, stopping at the first failure.
 // - After a saved run, stops nobody will need offline any more are dropped
 //   from the cache (lib/cachePrune): the cache would otherwise only grow.
 // - Runs only while the app is open. Downloading with the app never opened
@@ -33,6 +36,9 @@ import { dashTodayRead, homeDayRows, jobPackReads, prepJobs, prepReads, PREP_DAY
 import { dayView, isMyJob, isOfficeRole } from './jobScope'
 import { savedJobScope } from './useJobScope'
 import { dayKey, todayKey, tomorrowKey } from './timezone'
+import { carriedLinesRead } from './jobReads'
+import { carriedFromRpc, photosToSave } from './carriedLines'
+import { saveCarriedPhotos, pruneCarriedPhotos } from './carriedPhotoFiles'
 
 export const DAY_PACK_THROTTLE_MS = 10 * 60_000
 const WIDTH = 4
@@ -177,7 +183,21 @@ async function runPack(user: any, given: any[] | null): Promise<DayPackResult> {
   if (epoch !== cacheEpoch()) return { status: 'skipped' }
   lastSaved.set(user.id, Date.now())
   listeners.forEach(fn => { try { fn(user.id, pack) } catch { /* a listener's problem */ } })
+  await saveStopPhotos(mine, epoch).catch(() => {})
   return { status: 'saved', pack, reads }
+}
+
+/** The photos of lines missed at the last inspection of each packed stop's
+ *  home, from the rows just saved: saved as files, and files no packed stop
+ *  needs any more deleted (only after a run that reached every one). */
+async function saveStopPhotos(stops: any[], epoch: number): Promise<void> {
+  const urls: string[] = []
+  for (const job of stops) {
+    const rows = await readCacheEntry(carriedLinesRead(job.id).key)
+    for (const u of photosToSave(carriedFromRpc(rows))) if (!urls.includes(u)) urls.push(u)
+  }
+  if (epoch !== cacheEpoch()) return
+  if (await saveCarriedPhotos(urls, epoch)) await pruneCarriedPhotos(urls)
 }
 
 /** WIDTH reads at a time; stop starting new ones at the first network

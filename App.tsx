@@ -32,6 +32,7 @@ import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/
 import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
 import { USERS_READABLE_COLUMNS, fetchMyPay } from './src/lib/userPrivateDetails'
 import { clearDataCache } from './src/lib/dataCache'
+import { clearCarriedPhotos } from './src/lib/carriedPhotoFiles'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
 import { flushOutbox, onOutboxDrained, onCompletePastRefusedPhotos } from './src/lib/outbox'
 import { prefetchDays, isDayChangePush } from './src/lib/offlinePrefetch'
@@ -149,7 +150,7 @@ function AppInner() {
         if (!signedOut) return
         setSession(null)
         // Safe to drop the offline profile copy: this is never a network blip.
-        if (_event === 'SIGNED_OUT' && lastAuthId.current) { clearCachedProfile(lastAuthId.current); clearDataCache() }
+        if (_event === 'SIGNED_OUT' && lastAuthId.current) { clearCachedProfile(lastAuthId.current); clearDataCache(); clearCarriedPhotos() }
         // Shared devices: don't leave the previous tenant's zone armed for
         // whoever signs in next.
         setCurrentTz(null)

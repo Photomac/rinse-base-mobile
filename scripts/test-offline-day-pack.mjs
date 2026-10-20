@@ -52,6 +52,7 @@ const SCREENS = {
   'src/lib/requiredPhotoCount.ts': 'the stop\'s required-shot counter',
   'src/lib/suppliesCard.ts': 'Supplies',
   'src/lib/walkthroughCard.ts': 'the walkthrough',
+  'src/lib/carriedLinesCard.ts': 'the stop\'s "Missed at the last inspection" card',
 }
 for (const [file, what] of Object.entries(SCREENS)) {
   const src = read(file)
@@ -94,7 +95,10 @@ check('the arrival auto clock-in writes its entry into the saved copy, once it l
 // Supplies and the walkthrough read only through their modules.
 const supplies = read('src/screens/JobInventoryScreen.tsx')
 const walk = read('src/components/WalkthroughChecklist.tsx')
+const carriedCard = read('src/components/CarriedLinesCard.tsx')
 const ownReads = src => /\b(?:cachedRead|cachedQuery|readSoon)\(|supabase\.from\(/.test(src)
+check('the "Missed at the last inspection" card makes no reads of its own',
+  !ownReads(carriedCard) && /loadCarried\(job, /.test(carriedCard))
 check('Supplies and the walkthrough make no reads of their own',
   !ownReads(supplies) && /suppliesCard\(\{ show, setLoading \}\)/.test(supplies) && !ownReads(walk) && /walkthroughCard\(\{ show, setLoading \}\)/.test(walk))
 const setters = ['function setQty(', 'function setRemaining(', 'function toggleLow(', 'function setNotes(']
@@ -164,6 +168,8 @@ const SCENARIOS = [
   'spinnersAlwaysClear',
   'walkthroughOnAHangingLink',
   'walkthroughTrickle',
+  'carriedLinesRideAlong',
+  'carriedPhotoFailureNeverFailsThePack',
 ]
 
 try {

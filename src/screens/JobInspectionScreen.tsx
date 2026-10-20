@@ -118,7 +118,7 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   const [stagingViewerIndex, setStagingViewerIndex] = useState<number | null>(null)
   const [openStd, setOpenStd] = useState<Record<string, boolean>>({})
   // A walkthrough line's photo: the photo screen opens over this one.
-  const [photoLine, setPhotoLine] = useState<{ title: string; jobItemId: string } | null>(null)
+  const [photoLine, setPhotoLine] = useState<{ title: string; jobItemId: string; walkthrough?: boolean } | null>(null)
   const [walkKey, setWalkKey] = useState(0)
 
   const [layer, setLayer] = useState('supervisor')
