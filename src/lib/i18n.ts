@@ -61,6 +61,7 @@ export const translations = {
     // Auth
     sign_in: 'Sign in', email: 'Email', password: 'Password',
     email_placeholder: 'you@email.com', password_placeholder: 'Your password',
+    password_show: 'Show', password_hide: 'Hide', password_show_label: 'Show password', password_hide_label: 'Hide password',
     login_failed: 'Login failed', contact_manager: 'No account yet? Ask your manager for an invite',
     forgot_password: 'Forgot your password?',
     reset_title: 'Reset your password',
@@ -835,6 +836,7 @@ export const translations = {
     // Auth
     sign_in: 'Iniciar sesión', email: 'Correo', password: 'Contraseña',
     email_placeholder: 'tu@correo.com', password_placeholder: 'Tu contraseña',
+    password_show: 'Mostrar', password_hide: 'Ocultar', password_show_label: 'Mostrar contraseña', password_hide_label: 'Ocultar contraseña',
     login_failed: 'Error al iniciar sesión', contact_manager: '¿No tienes cuenta? Pide una invitación a tu gerente',
     forgot_password: '¿Olvidaste tu contraseña?',
     reset_title: 'Restablecer tu contraseña',
@@ -1601,6 +1603,7 @@ export const translations = {
     // Auth
     sign_in: 'Entrar', email: 'E-mail', password: 'Senha',
     email_placeholder: 'seu@email.com', password_placeholder: 'Sua senha',
+    password_show: 'Mostrar', password_hide: 'Ocultar', password_show_label: 'Mostrar senha', password_hide_label: 'Ocultar senha',
     login_failed: 'Falha ao entrar', contact_manager: 'Ainda não tem conta? Peça um convite ao seu gerente',
     forgot_password: 'Esqueceu sua senha?',
     reset_title: 'Redefinir sua senha',
