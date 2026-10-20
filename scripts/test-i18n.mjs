@@ -87,6 +87,8 @@ check('… and in Portuguese', pauseReasonLabel('Supply run', pt), T.pt.supply_r
 check('… and stays itself in English', pauseReasonLabel('Supply run', enT), 'Supply run')
 check('every crew reason has its label', PAUSE_REASONS.map(r => pauseReasonLabel(r.value, es)), PAUSE_REASONS.map(r => T.es[r.key]))
 check('the nightly auto-close note', pauseReasonLabel('Auto-closed: forgot to clock out', es), T.es.pr_auto_forgot)
+check('the older Payroll close-out is a fixed note, not a name',
+  pauseReasonLabel('Clocked out by owner (left open)', es), T.es.pr_clocked_out_owner_open)
 check('the office ended the day (lib/endDay)', pauseReasonLabel('Day ended by Maria Lopez', es), 'Día terminado por Maria Lopez')
 check('… with no name: "the office" reads as a phrase ("pelo", not "por o")',
   [pauseReasonLabel('Clocked out by the office', pt), pauseReasonLabel('Day started by the office', es)],
