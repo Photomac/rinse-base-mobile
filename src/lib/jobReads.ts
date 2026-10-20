@@ -365,6 +365,16 @@ export const trashDaysRead = (addrId: string): CacheRead => ({
   q: () => supabase.from('client_addresses').select('trash_pickup_days').eq('id', addrId).maybeSingle(),
 })
 
+/** The lines an inspector marked Not right at this job's home that no later
+ *  inspection has marked OK (lib/carriedLines.ts; web migration
+ *  20261020123000_walkthrough_carried_lines). On a clean: the crew card. On an
+ *  inspection: the "Missed last time" block, with this visit's own rows. */
+export const carriedLinesRead = (jobId: string): CacheRead => ({
+  key: `wtcarry:${jobId}`,
+  // GET (the function is STABLE): a read, with a read's deadline (lib/netFetch).
+  q: () => supabase.rpc('walkthrough_carried_lines', { p_job_id: jobId }, { get: true }),
+})
+
 // ── "Get ready for today" (PrepCard) ────────────────────────────────────────
 
 /** The cleans the prep card covers: still ahead of (or under) the crew, at a
@@ -442,7 +452,7 @@ export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^
 // builder must be listed here, or its keys are kept for ever:
 // scripts/test-cache-prune.mjs fails until it is.
 const JOB_KEYS = new Set(['chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
-  'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'cfticks', 'cfphotos', 'cfstart',
+  'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'wtcarry', 'cfticks', 'cfphotos', 'cfstart',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
   'crewNoteAck'])
 const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'wttrash', 'cflines'])
@@ -477,7 +487,7 @@ export function jobPackReads(job: any, user: any): PackRead[] {
   const dailyMode = user._timeMode === 'daily'
   const walkthrough = (): CacheRead[] => [
     walkthroughLinesRead(job.id), walkthroughPhotosRead(job.id),
-    ...(addrId ? [trashDaysRead(addrId)] : []),
+    ...(addrId ? [trashDaysRead(addrId), carriedLinesRead(job.id)] : []),
   ]
   const reads: PackRead[] = [
     tenantVideoRead(user.tenant_id),
@@ -511,6 +521,9 @@ export function jobPackReads(job: any, user: any): PackRead[] {
   }
   // loadRouteStop: a job with no route order is never ranked.
   if (job.route_order != null && job.scheduled_start) reads.push(routeStopRead(job, user))
+  // What the last inspection here found and no inspection has cleared since
+  // (the crew card at the top of the clean).
+  if (!isTask && addrId) reads.push(carriedLinesRead(job.id))
   // The Supplies screen (cleans only).
   if (!isTask && addrId) {
     reads.push(inventoryItemsRead(addrId), inventoryLogRead(job.id), inventoryRoomsRead(addrId), linenExtrasRead(job.id))

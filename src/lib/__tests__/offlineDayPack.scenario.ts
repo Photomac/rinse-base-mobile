@@ -305,7 +305,8 @@ const noAnswer = (init: any) => new Promise<Response>((_, reject) => {
     if (table.startsWith('rpc/')) {
       const fn = server.rpc[table.slice(4)]
       if (!fn) return json(404, { code: 'PGRST202', message: `function ${table.slice(4)} not found` })
-      const out = fn(JSON.parse(init.body || '{}'))
+      // A read-only function is called with GET (args in the query), as supabase-js does for { get: true }.
+      const out = fn(method === 'GET' ? Object.fromEntries(url.searchParams) : JSON.parse(init.body || '{}'))
       return out && typeof out === 'object' && 'status' in out ? json(out.status, out.body) : json(200, out)
     }
     if (method !== 'GET') { write(method, table, url.searchParams, init); return new Response('', { status: 201, headers: { date } }) }
@@ -371,6 +372,62 @@ function relaunch() {
 
 // ── Scenarios ───────────────────────────────────────────────────────────────
 const scenarios: Record<string, () => Promise<void>> = {
+  // CKS, 2026-10-19: "the crew and I see 'this is what got missed last time,
+  // here's the photo'". The lines missed at the last inspection of a stop's
+  // home ride along with the day's stops, and so does their photo, as a file:
+  // the one image the pack saves. A file no stop needs any more goes.
+  async carriedLinesRideAlong() {
+    setClock(EVENING); seedServer(); seedSession()
+    const PHOTO = 'https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/public/job-photos/t-cks/J-insp/sink.jpg'
+    const line = { room: 'Kitchen', task: 'Sink scrubbed', sort_order: 20005, issue_note: 'Dirty sponge', photo_urls: [PHOTO],
+      missed_at: '2026-10-12T23:01:11Z', missed_job_id: 'J-insp', missed_item_id: 'i-1', times_missed: 1,
+      inspector_name: 'Catherine', this_item_id: null, this_result: null }
+    let carried: Record<string, any[]> = { 'J-red': [line] }
+    server.rpc.walkthrough_carried_lines = (args: any) => carried[args?.p_job_id] ?? []
+    h.downloads = []
+    let c = load()
+    ok('evening: the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+    ok('the missed lines are saved with the stop', cachedVal('wtcarry:J-red')?.[0]?.task === 'Sink scrubbed')
+    ok('…for every one of her stops, none at all for a stop not hers', cached('wtcarry:J-chapel') && !cached('wtcarry:J-oak'))
+    ok('the photo comes down once, as a file', h.downloads.filter((u: string) => u === PHOTO).length === 1, JSON.stringify(h.downloads))
+
+    setClock(MORNING)
+    server.mode = 'offline'
+    c = relaunch()
+    let shown: any = null
+    await c.loadCarried(JOBS.red, (v: any) => { shown = v })
+    ok('next morning with no signal: the card shows her words', shown?.lines?.[0]?.issue_note === 'Dirty sponge')
+    ok('…and the photo from the file on the phone', typeof shown?.files?.[PHOTO] === 'string' && shown.files[PHOTO].startsWith('file:///harness-cache/carried-photos/'),
+      JSON.stringify(shown?.files))
+
+    // An inspection marks it OK: the next pack has nothing for the stop, and the file goes.
+    server.mode = 'online'
+    carried = {}
+    setClock('2026-10-15T03:30:00.000Z')
+    c = relaunch()
+    ok('next evening: the pack saves', (await c.prefetchDays(CREW, { force: true })).status === 'saved')
+    ok('the file no stop needs is deleted', ![...h.files.keys()].some((k: string) => k.startsWith('file:///harness-cache/carried-photos/')),
+      [...h.files.keys()].join(','))
+  },
+
+  // A stop's photo that fails to come down stops the photos, never the pack.
+  async carriedPhotoFailureNeverFailsThePack() {
+    setClock(EVENING); seedServer(); seedSession()
+    const P1 = 'https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/public/job-photos/t-cks/J-insp/a.jpg'
+    const P2 = 'https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/public/job-photos/t-cks/J-insp/b.jpg'
+    const row = (task: string, url: string, so: number) => ({ room: 'Kitchen', task, sort_order: so, issue_note: null, photo_urls: [url],
+      missed_at: '2026-10-12T23:01:11Z', missed_job_id: 'J-insp', missed_item_id: `i-${task}`, times_missed: 1,
+      inspector_name: null, this_item_id: null, this_result: null })
+    server.rpc.walkthrough_carried_lines = (args: any) => (args?.p_job_id === 'J-red' ? [row('a', P1, 1), row('b', P2, 2)] : [])
+    h.downloads = []
+    h.download = async () => 0   // the signal drops: no answer at all
+    const c = load()
+    const res = await c.prefetchDays(CREW)
+    ok('the pack still saves', res.status === 'saved', res.status)
+    ok('the first failure stops the photos (one bar must not queue a dozen)', h.downloads.length === 1, JSON.stringify(h.downloads))
+    h.download = undefined
+  },
+
 
   // The CKS morning: the office dispatches tonight, the phone is on home Wi-Fi
   // with the app open, and tomorrow the first stop has no signal at all.

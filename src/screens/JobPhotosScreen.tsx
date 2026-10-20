@@ -52,7 +52,10 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
   const [loading, setLoading] = useState(true)
   const [selectedType, setSelectedType] = useState('after')
   const [caption, setCaption] = useState(preselectedItem?.title || '')
-  const [visibleToClient, setVisibleToClient] = useState(true)
+  // An inspection walkthrough line's photo is a finding for the office and the
+  // crew, not the client: hidden unless the inspector turns it on (a clean
+  // booked as the inspection service shows in the client portal).
+  const [visibleToClient, setVisibleToClient] = useState(!preselectedItem?.walkthrough)
   const [pending, setPending] = useState<PendingStatus>({ count: 0, serverRejected: 0, lastServerError: null })
   // An upload pass is running: the banner says "uploading", not "waiting".
   const [queueActive, setQueueActive] = useState(photoQueueActive())
