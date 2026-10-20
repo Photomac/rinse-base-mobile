@@ -34,7 +34,9 @@ function fmtDuration(ms: number) {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`
 }
 
-export function MileageScreen({ user }: { user: any }) {
+// onBack: opened full screen from Profile (the office of a day-shift company,
+// whose tab slot holds Team today), not as a tab.
+export function MileageScreen({ user, onBack }: { user: any; onBack?: () => void }) {
   const { t, lang } = useLang()
   const [trips, setTrips] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -229,7 +231,14 @@ export function MileageScreen({ user }: { user: any }) {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>↗ {t('my_mileage')}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          {onBack && (
+            <TouchableOpacity onPress={onBack} accessibilityLabel={t('back')}>
+              <Text style={styles.backText}>‹ {t('back')}</Text>
+            </TouchableOpacity>
+          )}
+          <Text style={styles.headerTitle}>↗ {t('my_mileage')}</Text>
+        </View>
         <TouchableOpacity style={styles.addBtn} onPress={() => setShowForm(v => !v)}>
           <Text style={styles.addBtnText}>{showForm ? '✕' : '+ ' + t('log_trip')}</Text>
         </TouchableOpacity>
@@ -363,6 +372,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
   header: { backgroundColor: SLATE_DARK, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 20 },
   headerTitle: { color: '#fff', fontSize: 20, fontWeight: '800' },
+  backText: { color: GOLD, fontSize: 15, fontWeight: '700' },
   addBtn: { backgroundColor: 'rgba(255,255,255,0.12)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 },
   addBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   scroll: { padding: 16, paddingBottom: 40 },

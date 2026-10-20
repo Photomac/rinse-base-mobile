@@ -11,6 +11,8 @@ import { ScheduleScreen } from './src/screens/ScheduleScreen'
 import { OpenJobsScreen } from './src/screens/OpenJobsScreen'
 import { boardQuery, boardJobsFor } from './src/lib/openJobs'
 import { MileageScreen } from './src/screens/MileageScreen'
+import { TeamTodayScreen } from './src/screens/TeamTodayScreen'
+import { teamTabReplacesMileage, canSeeTeam } from './src/lib/teamDay'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
 import { SOSScreen } from './src/screens/SOSScreen'
@@ -116,6 +118,9 @@ function AppInner() {
   const [openJobsCount, setOpenJobsCount] = useState(0)
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [showSOS, setShowSOS] = useState(false)
+  // Mileage or Team today opened full screen from Profile (or Home's Log
+  // miles): whichever of the two isn't a tab for this person.
+  const [subScreen, setSubScreen] = useState<'mileage' | 'team' | null>(null)
   const [activeChannel, setActiveChannel] = useState<any>(null)
   const navigationRef = useRef<any>(null)
   const lastAuthId = useRef<string | null>(null)
@@ -419,6 +424,14 @@ function AppInner() {
     return <SOSScreen user={user} onCancel={() => setShowSOS(false)} onSent={() => {}} />
   }
 
+  if (subScreen === 'mileage') {
+    return <MileageScreen user={user} onBack={() => setSubScreen(null)} />
+  }
+
+  if (subScreen === 'team') {
+    return <TeamTodayScreen user={user} onBack={() => setSubScreen(null)} />
+  }
+
   if (selectedJob) {
     return (
       <JobDetailScreen
@@ -429,6 +442,10 @@ function AppInner() {
       />
     )
   }
+
+  // The office of a day-shift company gets the day's clock roster in Mileage's
+  // slot; Mileage moves under Profile (lib/teamDay). Crew never see Team.
+  const teamTab = teamTabReplacesMileage(user)
 
   return (
     <NavigationContainer>
@@ -457,6 +474,8 @@ function AppInner() {
               user={user}
               onJobPress={setSelectedJob}
               onNavigate={(screen: string) => {
+                // No Mileage tab for the office of a day-shift company: Log miles opens it full screen.
+                if (screen === 'mileage' && teamTab) { setSubScreen('mileage'); return }
                 const tabMap: Record<string, string> = { dashboard: 'Dashboard', jobs: 'Schedule', schedule: 'Schedule', mileage: 'Mileage', profile: 'Profile' }
                 if (tabMap[screen]) navigation.navigate(tabMap[screen])
               }}
@@ -489,12 +508,21 @@ function AppInner() {
           </Tab.Screen>
         )}
 
-        <Tab.Screen
-          name="Mileage"
-          options={{ tabBarLabel: 'Mileage', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>↗</Text> }}
-        >
-          {() => <MileageScreen key={user?.id} user={user} />}
-        </Tab.Screen>
+        {teamTab ? (
+          <Tab.Screen
+            name="Team"
+            options={{ tabBarLabel: t('team_tab'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>👥</Text> }}
+          >
+            {({ navigation }: any) => <TeamTodayScreen key={user?.id} user={user} navigation={navigation} />}
+          </Tab.Screen>
+        ) : (
+          <Tab.Screen
+            name="Mileage"
+            options={{ tabBarLabel: 'Mileage', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>↗</Text> }}
+          >
+            {() => <MileageScreen key={user?.id} user={user} />}
+          </Tab.Screen>
+        )}
 
         <Tab.Screen
           name="Chat"
@@ -512,7 +540,14 @@ function AppInner() {
           name="Profile"
           options={{ tabBarLabel: 'Profile', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>◉</Text> }}
         >
-          {() => <ProfileScreen key={user?.id} user={user} />}
+          {() => (
+            <ProfileScreen
+              key={user?.id}
+              user={user}
+              onOpenMileage={teamTab ? () => setSubScreen('mileage') : undefined}
+              onOpenTeam={!teamTab && canSeeTeam(user.role) ? () => setSubScreen('team') : undefined}
+            />
+          )}
         </Tab.Screen>
       </Tab.Navigator>
     </NavigationContainer>
