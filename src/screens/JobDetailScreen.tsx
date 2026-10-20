@@ -53,6 +53,7 @@ import {
   type CheckFirstLine, type CheckFirstTick,
 } from '../lib/checkFirst'
 import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
+import { isRepairVisit, returnVisitValues } from '../lib/repairVisit'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -179,6 +180,9 @@ function fmtDuration(minutes: number) {
 export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: any; user: any; onBack: () => void; onStatusChange: (job: any, status: string) => void }) {
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [notes, setNotes] = useState('')
+  // A repair visit's "I need to come back": sent with Complete as
+  // jobs.needs_return_visit (lib/repairVisit.ts).
+  const [needsReturn, setNeedsReturn] = useState(false)
   const [saving, setSaving] = useState(false)
   const [showPhotos, setShowPhotos] = useState(false)
   // true = plain open; { roomId } = opened from a room's Restock task, the
@@ -1593,6 +1597,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         status: 'completed',
         completed_at: completedAt,
         internal_notes: mergedNotes,
+        // A repair visit whose tech has to come back: the same write, so the
+        // visit is never done without it, offline included.
+        ...returnVisitValues(job, needsReturn),
         // Sign-off attribution (distinct from per-item completed_by = last ticker).
         ...(user?.id ? { completed_by_user_id: user.id } : {}),
       },
@@ -2368,7 +2375,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         {isStarted && (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>{t('notes_optional')}</Text>
-            <TextInput style={styles.notesInput} value={notes} onChangeText={setNotes} placeholder={t('notes_placeholder')} placeholderTextColor="#9CA3AF" multiline numberOfLines={3} />
+            <TextInput style={styles.notesInput} value={notes} onChangeText={setNotes} placeholder={t(needsReturn ? 'needs_return_visit_ph' : 'notes_placeholder')} placeholderTextColor="#9CA3AF" multiline numberOfLines={3} />
+            {isRepairVisit(job) && job.status !== 'completed' && (
+              <TouchableOpacity onPress={() => setNeedsReturn(v => !v)} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 12 }}
+                accessibilityRole="checkbox" accessibilityState={{ checked: needsReturn }}>
+                <View style={[styles.checkbox, needsReturn && { backgroundColor: '#D97706', borderColor: '#D97706' }]}>
+                  {needsReturn && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.checkLabel, needsReturn && { color: '#B45309' }]}>↩ {t('needs_return_visit')}</Text>
+                  <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{t('needs_return_visit_hint')}</Text>
+                </View>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
