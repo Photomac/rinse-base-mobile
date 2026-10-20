@@ -19,6 +19,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, A
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
+import { pauseReasonLabel } from '../lib/pauseReason'
 import { GOLD, SLATE_DARK } from '../lib/theme'
 import { cachedRead } from '../lib/dataCache'
 import { writeThrough, overlayPending, flushOutbox, onOutboxDrained, uuid4 } from '../lib/outbox'
@@ -503,7 +504,7 @@ export function TeamTodayScreen({ user, navigation, onBack }: { user: any; navig
           {open ? ti(t('team_so_far'), { dur: dur(Math.max(0, nowMs - s), true) }) : dur((end as number) - s, false)}
         </Text>
         {!!e.edited_by && <Text style={styles.entryMeta}>{ti(t('team_edited_by'), { name: nameOf(e.edited_by) })}</Text>}
-        {!!e.pause_reason && <Text style={styles.entryMeta} numberOfLines={3}>{e.pause_reason}</Text>}
+        {!!e.pause_reason && <Text style={styles.entryMeta} numberOfLines={3}>{pauseReasonLabel(e.pause_reason, t)}</Text>}
         {canFix && (
           <View style={styles.entryBtns}>
             {open && (

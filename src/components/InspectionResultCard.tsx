@@ -18,6 +18,7 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { tv } from '../lib/vocab'
 import { fmtDate } from '../lib/timezone'
+import { localeFor } from '../lib/i18n'
 import { CARD, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
 
 const VERDICT: Record<string, { i18n: any; bg: string; fg: string }> = {
@@ -83,7 +84,7 @@ export function InspectionResultCard({ job }: { job: any }) {
         {!!inspector && (
           <Text style={{ fontSize: 11, color: TEXT_MUTED }}>
             {t('insp_results_by')} {inspector}
-            {insp.completed_at ? ` · ${fmtDate(insp.completed_at)}` : ''}
+            {insp.completed_at ? ` · ${fmtDate(insp.completed_at, localeFor(lang))}` : ''}
           </Text>
         )}
       </View>

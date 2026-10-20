@@ -10,7 +10,7 @@ import { CrewGroupHeader } from '../components/CrewGroupHeader'
 import { useJobScope } from '../lib/useJobScope'
 import { isOfficeRole, isMyJob, jobsInScope, type JobScope } from '../lib/jobScope'
 import { crewGroups, listItems } from '../lib/crewGroups'
-import { ti } from '../lib/i18n'
+import { ti, localeFor, capFirst } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
 import { byCrewDayOrder } from '../lib/jobOrder'
@@ -40,7 +40,8 @@ function addDays(d: Date, n: number) { const r = new Date(d); r.setDate(r.getDat
 type ViewMode = 'month' | 'week'
 
 export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
+  const locale = localeFor(lang)
   // What kind of clean each card is: see lib/cleanKind.
   const kindLabels = { turnover: t('turnover'), backToBack: t('back_to_back') }
   const DAY_NAMES = [t('day_sun'), t('day_mon'), t('day_tue'), t('day_wed'), t('day_thu'), t('day_fri'), t('day_sat')]
@@ -138,9 +139,9 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
   }
 
-  const monthLabel = anchor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  const monthLabel = capFirst(anchor.toLocaleDateString(locale, { month: 'long', year: 'numeric' }))
   const weekStart = new Date(anchor); weekStart.setDate(anchor.getDate() - anchor.getDay())
-  const weekLabel = weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' – ' + addDays(weekStart, 6).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  const weekLabel = weekStart.toLocaleDateString(locale, { month: 'short', day: 'numeric' }) + ' – ' + addDays(weekStart, 6).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -240,7 +241,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                     {dayJobs.map((job, i) => (
                       <View key={i} style={[styles.weekJobBlock, { backgroundColor: STATUS_COLORS[job.status] || GOLD }]}>
                         <Text style={styles.weekJobText} numberOfLines={1}>
-                          {fmtTime(job.scheduled_start)}
+                          {fmtTime(job.scheduled_start, locale)}
                         </Text>
                         <Text style={styles.weekJobName} numberOfLines={1}>
                           {(job.client_addresses as any)?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : (job.client_addresses as any)?.street)}
@@ -256,7 +257,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
 
         <View style={styles.selectedDaySection}>
           <Text style={styles.selectedDayLabel}>
-            {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+            {capFirst(selectedDate.toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric' }))}
             {localDayKey(selectedDate) === today ? ` · ${t('today')}` : ''}
           </Text>
           {selectedJobs.length === 0 ? (
@@ -273,7 +274,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
               <TouchableOpacity key={job.id} style={[styles.jobCard, { borderLeftColor: color }]} onPress={() => onJobPress(job)}>
                 <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={styles.jobTime}>{fmtTime(job.scheduled_start)}</Text>
+                    <Text style={styles.jobTime}>{fmtTime(job.scheduled_start, locale)}</Text>
                     <View style={[styles.statusBadge, { backgroundColor: color + '22' }]}>
                       <Text style={[styles.statusText, { color }]}>{t((STATUS_LABEL_KEYS[job.status] || 'status_scheduled') as any)}</Text>
                     </View>

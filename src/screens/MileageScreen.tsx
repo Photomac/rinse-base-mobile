@@ -5,7 +5,7 @@ import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
 import { fmtDate } from '../lib/timezone'
 import { useLang } from '../contexts/LangContext'
-import { ti } from '../lib/i18n'
+import { ti, localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startTrip, stopTrip, getTripState, accumulate } from '../lib/mileageTracker'
 
@@ -192,7 +192,7 @@ export function MileageScreen({ user, onBack }: { user: any; onBack?: () => void
               purpose: trackingPurpose, notes: t('auto_tracked_gps'), flagged: false,
             })
             setSaving(false)
-            if (error) { Alert.alert(t('error'), 'Failed to save trip. Please try again.'); return }
+            if (error) { Alert.alert(t('error'), t('trip_save_failed')); return }
             setTrackingMiles(0)
             load()
           }
@@ -217,7 +217,7 @@ export function MileageScreen({ user, onBack }: { user: any; onBack?: () => void
       purpose: form.purpose, notes: form.notes.trim() || null, flagged: false,
     })
     setSaving(false)
-    if (error) { Alert.alert(t('error'), 'Failed to save mileage. Please try again.'); return }
+    if (error) { Alert.alert(t('error'), t('mileage_save_failed')); return }
     setForm({ date: new Date().toISOString().split('T')[0], from: '', to: '', miles: '', purpose: 'job_travel', notes: '' })
     setShowForm(false)
     load()
@@ -258,7 +258,7 @@ export function MileageScreen({ user, onBack }: { user: any; onBack?: () => void
         {/* GPS Tracker */}
         <View style={[styles.gpsCard, tracking && styles.gpsCardActive]}>
           <View style={styles.gpsHeader}>
-            <Text style={styles.gpsTitle}>{tracking ? '📍 ' + t('loading').replace('...', '...') : '🚗 ' + t('log_trip')}</Text>
+            <Text style={styles.gpsTitle}>{tracking ? '📍 ' + t('trip_tracking') : '🚗 ' + t('log_trip')}</Text>
             {tracking && <View style={styles.gpsPulse} />}
           </View>
 
@@ -272,7 +272,7 @@ export function MileageScreen({ user, onBack }: { user: any; onBack?: () => void
                 <View style={styles.gpsStatDivider} />
                 <View style={styles.gpsStat}>
                   <Text style={styles.gpsStatValue}>{fmtDuration(elapsed)}</Text>
-                  <Text style={styles.gpsStatLabel}>Time</Text>
+                  <Text style={styles.gpsStatLabel}>{t('trip_time')}</Text>
                 </View>
                 <View style={styles.gpsStatDivider} />
                 <View style={styles.gpsStat}>
@@ -349,7 +349,7 @@ export function MileageScreen({ user, onBack }: { user: any; onBack?: () => void
                     {isGPS ? '📍 ' + t('auto_tracked_gps') : `${trip.origin_label} → ${trip.dest_label}`}
                   </Text>
                 </View>
-                <Text style={styles.tripMeta}>{fmtDate(trip.started_at)} · {t(trip.purpose as PurposeKey) || trip.purpose}</Text>
+                <Text style={styles.tripMeta}>{fmtDate(trip.started_at, localeFor(lang))} · {t(trip.purpose as PurposeKey) || trip.purpose}</Text>
               </View>
               <View style={styles.tripRight}>
                 <Text style={styles.tripMiles}>{Number(trip.distance_miles).toFixed(1)} mi</Text>
