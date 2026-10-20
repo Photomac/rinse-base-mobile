@@ -226,6 +226,35 @@ export function startOfDayInTz(date: Date): Date {
   }
 }
 
+/** The instant that reads `h`:`mi` on calendar day `ymd` ('YYYY-MM-DD') on the
+ *  tenant's clock — what an owner means by "she clocked in at 8:21". Invalid
+ *  Date for an unreadable day. */
+export function wallTimeInTz(ymd: string, h: number, mi: number): Date {
+  const m = DATE_ONLY_RE.exec(ymd)
+  if (!m) return new Date(NaN)
+  const naive = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), h, mi, 0, 0)
+  const tz = getCurrentTz()
+  try {
+    // As startOfDayInTz: guess with the offset at the naive instant, then
+    // correct once for a DST change between the two.
+    const guess = new Date(naive - tzOffsetMs(new Date(naive), tz))
+    return new Date(naive - tzOffsetMs(guess, tz))
+  } catch {
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), h, mi)
+  }
+}
+
+/** Hour (0-23) and minute of an instant on the tenant's clock. */
+export function clockInTz(input: Date | string): { h: number; mi: number } {
+  const d = toDate(input) ?? new Date(NaN)
+  try {
+    const { h, mi } = partsInTz(d, getCurrentTz())
+    return { h, mi }
+  } catch {
+    return { h: d.getHours(), mi: d.getMinutes() }
+  }
+}
+
 /** The last millisecond of `date`'s day in the tenant's zone. */
 export function endOfDayInTz(date: Date): Date {
   const start = startOfDayInTz(date)
