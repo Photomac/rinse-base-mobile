@@ -1776,8 +1776,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             <Text style={styles.propSpecs}>
               🏠 {[
                 propMeta?.bedrooms != null ? `${propMeta.bedrooms} ${t('beds_short')}` : null,
-                propMeta?.bathrooms != null ? `${propMeta.bathrooms} ${t('baths_short')}` : null,
-                propMeta?.beds != null ? `🛏 ${propMeta.beds} ${t('beds_total_short')}` : null,
+                propMeta?.bathrooms != null ? `${propMeta.bathrooms} ${t(Number(propMeta.bathrooms) === 1 ? 'baths_short_one' : 'baths_short')}` : null,
+                propMeta?.beds != null ? `🛏 ${propMeta.beds} ${t(Number(propMeta.beds) === 1 ? 'beds_total_short_one' : 'beds_total_short')}` : null,
                 propMeta?.sleeps != null ? `👥 ${ti(t('sleeps_n'), { n: String(propMeta.sleeps) })}` : null,
                 propMeta?.sqft != null ? `${propMeta.sqft.toLocaleString(locale)} ${t('sqft_short')}` : null,
               ].filter(Boolean).join('   ·   ')}
