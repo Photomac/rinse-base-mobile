@@ -157,12 +157,13 @@ export const jobCrewRead = (jobId: string): CacheRead => ({
     .order('is_lead', { ascending: false }),
 })
 
-/** The property: size, crew notes, door code, arrival instructions, bag color,
- *  staging photos (URLs only), pets. */
+/** The property: size, crew notes, door code, WiFi, arrival instructions, bag
+ *  color, staging photos (URLs only), pets. The day pack saves it, so the door
+ *  code and the WiFi are on the phone at a dead-zone home (CKS, 2026-10-19). */
 export const propMetaRead = (addrId: string): CacheRead => ({
   key: `propmeta:${addrId}`,
   q: () => supabase.from('client_addresses')
-    .select('bedrooms, bathrooms, sqft, beds, sleeps, crew_notes, lockbox_code, arrival_instructions, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
+    .select('bedrooms, bathrooms, sqft, beds, sleeps, crew_notes, lockbox_code, wifi_name, wifi_password, arrival_instructions, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
     .eq('id', addrId)
     .maybeSingle(),
 })
