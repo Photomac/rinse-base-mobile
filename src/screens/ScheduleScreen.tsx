@@ -139,6 +139,13 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
   }
 
+  // A job's name in the month and week grids. A laundry run or task sits on
+  // the company's internal shell, whose nickname (or the 'Internal task'
+  // sentinel street) is not a place: name it like the cards below do.
+  const cellName = (job: any) => job.job_type === 'laundry_run' ? t('laundry_run')
+    : job.job_type === 'task' ? (job.internal_notes || t('task')).split('\n')[0]
+    : (job.client_addresses as any)?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : (job.client_addresses as any)?.street)
+
   const monthLabel = capFirst(anchor.toLocaleDateString(locale, { month: 'long', year: 'numeric' }))
   const weekStart = new Date(anchor); weekStart.setDate(anchor.getDate() - anchor.getDay())
   const weekLabel = weekStart.toLocaleDateString(locale, { month: 'short', day: 'numeric' }) + ' – ' + addDays(weekStart, 6).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
@@ -211,7 +218,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       {dayJobs.slice(0, 2).map((job, i) => (
                         <View key={i} style={[styles.jobDot, { backgroundColor: STATUS_COLORS[job.status] || GOLD }]}>
                           <Text style={styles.jobDotText} numberOfLines={1}>
-                            {(job.client_addresses as any)?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : (job.client_addresses as any)?.street)}
+                            {cellName(job)}
                           </Text>
                         </View>
                       ))}
@@ -244,7 +251,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                           {fmtTime(job.scheduled_start, locale)}
                         </Text>
                         <Text style={styles.weekJobName} numberOfLines={1}>
-                          {(job.client_addresses as any)?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : (job.client_addresses as any)?.street)}
+                          {cellName(job)}
                         </Text>
                       </View>
                     ))}
