@@ -149,7 +149,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       {addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street)}
                       {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
                     </Text>
-                    <Text style={styles.jobMeta}>{fmtDate(job.scheduled_start, localeFor(lang), { weekday: 'short', month: 'short', day: 'numeric' })} · {fmtTime(job.scheduled_start)}</Text>
+                    <Text style={styles.jobMeta}>{fmtDate(job.scheduled_start, localeFor(lang), { weekday: 'short', month: 'short', day: 'numeric' })} · {fmtTime(job.scheduled_start, localeFor(lang))}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.releaseBtn, (offline || busy === job.id) && { opacity: 0.5 }]}
@@ -198,7 +198,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
                     {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
                   </Text>
                   <Text style={styles.jobMeta}>
-                    {fmtTime(job.scheduled_start)} · {ti(t('open_jobs_hours'), { h: String(hrs) })}
+                    {fmtTime(job.scheduled_start, localeFor(lang))} · {ti(t('open_jobs_hours'), { h: String(hrs) })}
                     {addr?.city ? ` · ${addr.city}` : ''}
                   </Text>
                   <View style={styles.badges}>

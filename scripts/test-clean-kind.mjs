@@ -126,7 +126,7 @@ check('Schedule\'s read fetches the service through the FK-named embed', schedSr
 check('no unhinted or column-hinted service_types embed on these reads',
   /service_types(\(|!service_id)/.test(dash + schedSrc + reads), false)
 check('Home\'s card prints the time, then kindParts()',
-  dash.includes("{[fmtTime(job.scheduled_start), ...kindParts(job, kindLabels)].join(' · ')}"), true)
+  dash.includes("{[fmtTime(job.scheduled_start, localeFor(lang)), ...kindParts(job, kindLabels)].join(' · ')}"), true)
 check('Schedule\'s card prints kindParts() on the line under the address',
   /const kind = kindParts\(job, kindLabels\)/.test(schedSrc) && schedSrc.includes("{kind.length > 0 && <Text style={styles.kindTag}>{kind.join('  ·  ')}</Text>}"), true)
 check('neither card hand-builds the turnover tag any more',

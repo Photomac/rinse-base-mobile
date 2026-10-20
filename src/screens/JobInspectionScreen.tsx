@@ -43,7 +43,7 @@ import { StagingPhotoGroups, stagingViewerPhotos } from '../components/StagingPh
 import { WalkthroughChecklist } from '../components/WalkthroughChecklist'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import type { StagingPhotoRow } from '../lib/stagingRooms'
-import type { TranslationKey } from '../lib/i18n'
+import { localeFor, type TranslationKey } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const NAVY = SLATE_DARK
@@ -319,7 +319,7 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
                 wrong one's empty checklist reads as a bug (Todd, 2026-08-24). */}
             {parentJob?.completed_at && (
               <Text style={{ fontSize: 11, color: '#6B7280', marginBottom: 6 }}>
-                {t('insp_parent_clean')} {fmtDateTime(parentJob.completed_at)}
+                {t('insp_parent_clean')} {fmtDateTime(parentJob.completed_at, localeFor(lang))}
               </Text>
             )}
             {/* An untouched checklist is a FACT the inspector should weigh

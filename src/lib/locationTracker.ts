@@ -325,7 +325,7 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
         showsBackgroundLocationIndicator: true,
         foregroundService: {
           notificationTitle: 'Rinsebase',
-          notificationBody: 'Tracking location for active job',
+          notificationBody: tStatic('loc_fg_body'),
           notificationColor: '#D4A843',
         },
       })

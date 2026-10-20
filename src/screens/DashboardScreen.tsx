@@ -10,7 +10,7 @@ import { CrewGroupHeader } from '../components/CrewGroupHeader'
 import { useJobScope } from '../lib/useJobScope'
 import { isOfficeRole, isMyJob, jobsInScope, dayView, type JobScope } from '../lib/jobScope'
 import { crewGroups, listItems } from '../lib/crewGroups'
-import { ti, localeFor } from '../lib/i18n'
+import { ti, localeFor, capFirst } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
@@ -323,8 +323,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   // open from an earlier day, so a forgotten shift doesn't read as this
   // morning's.
   const shiftSince = (iso: string) => new Date(iso) < startOfDayInTz(new Date())
-    ? `${fmtDate(iso, localeFor(lang), { weekday: 'short' })} ${fmtTime(iso)}`
-    : fmtTime(iso)
+    ? `${fmtDate(iso, localeFor(lang), { weekday: 'short' })} ${fmtTime(iso, localeFor(lang))}`
+    : fmtTime(iso, localeFor(lang))
 
   // The person's open shift as the server has it now. `error` set = no answer.
   const readOpenShift = () => supabase.from('job_time_entries')
@@ -366,7 +366,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         started = open[0]
         Alert.alert('🟢', ti(t('day_already_started'), { time: shiftSince(started.clocked_in_at) }))
       } else if (error) {
-        Alert.alert('Error', error.message)
+        Alert.alert(t('error'), error.message)
         return
       } else if (queued) {
         Alert.alert('📡', t('queued_offline'))
@@ -424,7 +424,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               duration_minutes: Math.max(0, Math.round((out.getTime() - new Date(target.clocked_in_at).getTime()) / 60000)),
             },
           })
-          if (error) { Alert.alert('Error', error.message); return }
+          if (error) { Alert.alert(t('error'), error.message); return }
           setActiveShift(null)
           saveShift(null, epoch)
           // Stop broadcasting once the shift ends.
@@ -460,7 +460,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           <View style={styles.headerTop}>
             <View>
               <Text style={styles.greeting}>{greeting}, {user.full_name?.split(' ')[0]} 👋</Text>
-              <Text style={styles.date}>{fmtDate(now, localeFor(lang), { weekday: 'long', month: 'long', day: 'numeric' })}</Text>
+              <Text style={styles.date}>{capFirst(fmtDate(now, localeFor(lang), { weekday: 'long', month: 'long', day: 'numeric' }))}</Text>
             </View>
             <TouchableOpacity style={styles.sosBtn} onPress={onSOS} activeOpacity={0.8}>
               <Text style={styles.sosBtnText}>🆘</Text>
@@ -550,7 +550,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   <Text style={styles.activeClient}>
                     {(activeJob.client_addresses as any)?.nickname || (canSeeClientNames ? (activeJob.clients as any)?.full_name : (activeJob.client_addresses as any)?.street)}
                   </Text>
-                  <Text style={styles.activeTime}>{fmtTime(activeJob.scheduled_start)} – {fmtTime(activeJob.scheduled_end)}</Text>
+                  <Text style={styles.activeTime}>{fmtTime(activeJob.scheduled_start, localeFor(lang))} – {fmtTime(activeJob.scheduled_end, localeFor(lang))}</Text>
                 </View>
                 {/* Day shift: time on this job so far, from its Start (lib/jobTimer). */}
                 {dailyMode && <JobClock job={activeJob} prefix="⏱ " style={styles.activeClock} />}
@@ -566,7 +566,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               <TouchableOpacity style={styles.nextJobCard} onPress={() => onJobPress(nextJob)}>
                 <View style={styles.nextJobHeader}>
                   <Text style={styles.nextJobLabel}>⏰ {t('next_job')}</Text>
-                  <Text style={styles.nextJobTime}>{fmtTime(nextJob.scheduled_start)}</Text>
+                  <Text style={styles.nextJobTime}>{fmtTime(nextJob.scheduled_start, localeFor(lang))}</Text>
                 </View>
                 <Text style={styles.nextJobClient}>
                   {(nextJob.client_addresses as any)?.nickname || (canSeeClientNames ? (nextJob.clients as any)?.full_name : (nextJob.client_addresses as any)?.street)}
@@ -661,7 +661,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     <View style={[styles.jobDot, { backgroundColor: isDone ? '#10B981' : isActive ? '#F59E0B' : '#3B82F6' }]} />
                     <View style={styles.jobInfo}>
                       <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}</Text>
-                      <Text style={styles.jobTime}>{[fmtTime(job.scheduled_start), ...kindParts(job, kindLabels)].join(' · ')}</Text>
+                      <Text style={styles.jobTime}>{[fmtTime(job.scheduled_start, localeFor(lang)), ...kindParts(job, kindLabels)].join(' · ')}</Text>
                       <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                     </View>
                     {dailyMode && isActive && <JobClock job={job} prefix="⏱ " style={styles.jobClock} />}

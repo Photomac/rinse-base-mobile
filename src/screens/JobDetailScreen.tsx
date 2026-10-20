@@ -28,6 +28,7 @@ import { jobClockMs } from '../lib/jobTimer'
 import { useLang } from '../contexts/LangContext'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { ti, localeFor } from '../lib/i18n'
+import { PAUSE_REASONS, pauseReasonLabel } from '../lib/pauseReason'
 import { captureRequiredPhoto, captureCheckFirstPhoto } from '../lib/requiredPhotoCapture'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -67,15 +68,6 @@ const NAVY = SLATE_DARK
 // late replay matches no row and changes nothing.
 const STARTABLE = ['pending_approval', 'scheduled', 'en_route', 'in_progress']
 const EN_ROUTE_FROM = ['pending_approval', 'scheduled', 'en_route']
-
-const PAUSE_REASONS = [
-  { value: 'Waiting for laundry', key: 'waiting_laundry' as const },
-  { value: 'Going to another job', key: 'going_another_job' as const },
-  { value: 'Supply run', key: 'supply_run' as const },
-  { value: 'Waiting for access', key: 'waiting_access' as const },
-  { value: 'Break', key: 'break_time' as const },
-  { value: 'Other', key: 'other' as const },
-]
 
 // Laundry on a regular clean: where did the bags go? Four destinations, each
 // with its own per-bag rate on the tenant (take home / washed on-site /
@@ -283,6 +275,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     !!owedReqs && required && !owedReqs.has(reqId)
 
   const { t, lang } = useLang()
+  const locale = localeFor(lang)
   const addr = job.client_addresses as any
   // Access info comes from loadPropMeta's own read of the property, not the
   // job the list screen handed us: no list query selects arrival_instructions
@@ -735,9 +728,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   }
 
   function crewClockLabel(c: CrewClock): string {
-    if (c.state === 'on') return `🟢 ${ti(t('crew_clock_on'), { time: fmtTime(c.at) })}`
+    if (c.state === 'on') return `🟢 ${ti(t('crew_clock_on'), { time: fmtTime(c.at, locale) })}`
     if (c.state === 'paused') return `⏸ ${t('paused')}`
-    if (c.state === 'out') return c.at ? ti(t('crew_clock_out'), { time: fmtTime(c.at) }) : t('crew_clock_out_plain')
+    if (c.state === 'out') return c.at ? ti(t('crew_clock_out'), { time: fmtTime(c.at, locale) }) : t('crew_clock_out_plain')
     return t('crew_clock_none')
   }
 
@@ -1099,14 +1092,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (running) {
       // Its start stands; this tap's arrival record is spent either way.
       if (arrival) clearPendingArrival(job.id)
-      Alert.alert('⏱', ti(t('already_clocked_in_since'), { time: fmtTime(running.clocked_in_at) }))
+      Alert.alert('⏱', ti(t('already_clocked_in_since'), { time: fmtTime(running.clocked_in_at, locale) }))
     } else if (arrival) {
       clearPendingArrival(job.id)
       // Tell them the backdate happened — the timer starting "in the past"
       // without explanation reads as a bug.
       if (Date.now() - clockedInAt.getTime() > 90_000) {
         Alert.alert('📍', ti(t('clocked_in_from_arrival'), {
-          time: fmtTime(clockedInAt),
+          time: fmtTime(clockedInAt, locale),
         }))
       }
     }
@@ -1718,12 +1711,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
               <Text style={styles.routeStopText}>🧭 {ti(t('route_stop_of'), { k: String(routeStop.k), m: String(routeStop.m) })}</Text>
             </View>
           )}
-          <Text style={styles.timeRow}>🕐 {fmtTime(job.scheduled_start)} – {fmtTime(job.scheduled_end)}</Text>
+          <Text style={styles.timeRow}>🕐 {fmtTime(job.scheduled_start, locale)} – {fmtTime(job.scheduled_end, locale)}</Text>
           {turnover?.checkout && (
             <View style={{ backgroundColor: turnover.urgency === 'rapid' ? '#FEF2F2' : turnover.urgency === 'tight' ? '#FFFBEB' : '#EFF6FF', borderRadius: 10, padding: 10, marginTop: 8, marginBottom: 4 }}>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827' }}>🧳 {t('guest_checkout')}: {fmtTime(turnover.checkout)}</Text>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827' }}>🧳 {t('guest_checkout')}: {fmtTime(turnover.checkout, locale)}</Text>
               {turnover.checkin && (
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827', marginTop: 3 }}>🔑 {t('next_checkin')}: {fmtTime(turnover.checkin)}</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827', marginTop: 3 }}>🔑 {t('next_checkin')}: {fmtTime(turnover.checkin, locale)}</Text>
               )}
               {guestCount != null && (
                 <Text style={{ fontSize: 12, fontWeight: '600', color: '#374151', marginTop: 3 }}>👥 {ti(t('guests_stayed'), { n: String(guestCount) })}</Text>
@@ -1748,7 +1741,6 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             if (n.kind === 'none') {
               return <Text style={{ fontSize: 12, color: '#6B7280', marginTop: 6 }}>🔑 {t('next_arrival_none')}</Text>
             }
-            const locale = localeFor(lang)
             const day = n.sameDay ? t('next_arrival_same_day')
               : new Date(n.date + 'T12:00:00').toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })
             const time = fmtWallTime(n.time, locale)
@@ -1783,7 +1775,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 propMeta?.bathrooms != null ? `${propMeta.bathrooms} ${t('baths_short')}` : null,
                 propMeta?.beds != null ? `🛏 ${propMeta.beds} ${t('beds_total_short')}` : null,
                 propMeta?.sleeps != null ? `👥 ${ti(t('sleeps_n'), { n: String(propMeta.sleeps) })}` : null,
-                propMeta?.sqft != null ? `${propMeta.sqft.toLocaleString()} ${t('sqft_short')}` : null,
+                propMeta?.sqft != null ? `${propMeta.sqft.toLocaleString(locale)} ${t('sqft_short')}` : null,
               ].filter(Boolean).join('   ·   ')}
             </Text>
           )}
@@ -1963,10 +1955,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {!dailyMode && timeEntries.filter(e => e.clocked_out_at).map((entry, i) => (
             <View key={entry.id} style={styles.timeEntry}>
               <Text style={styles.timeEntryText}>
-                {entryOwnerLabel(entry)}{t('session')} {i + 1}: {fmtTime(entry.clocked_in_at)} – {fmtTime(entry.clocked_out_at)}
+                {entryOwnerLabel(entry)}{t('session')} {i + 1}: {fmtTime(entry.clocked_in_at, locale)} – {fmtTime(entry.clocked_out_at, locale)}
               </Text>
               <Text style={styles.timeEntryDuration}>{fmtDuration(entry.duration_minutes || 0)}</Text>
-              {entry.pause_reason && <Text style={styles.timeEntryReason}>⏸ {entry.pause_reason}</Text>}
+              {entry.pause_reason && <Text style={styles.timeEntryReason}>⏸ {pauseReasonLabel(entry.pause_reason, t)}</Text>}
             </View>
           ))}
 
@@ -1974,7 +1966,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {!dailyMode && isClockedIn && (
             <View style={[styles.timeEntry, { backgroundColor: '#ECFDF5', borderColor: TEAL }]}>
               <Text style={[styles.timeEntryText, { color: '#065F46' }]}>
-                🟢 {entryOwnerLabel(activeEntry)}{t('active_since')} {fmtTime(activeEntry.clocked_in_at)}
+                🟢 {entryOwnerLabel(activeEntry)}{t('active_since')} {fmtTime(activeEntry.clocked_in_at, locale)}
               </Text>
             </View>
           )}
@@ -1988,7 +1980,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           {/* Day shift: when this job started, beside its clock. */}
           {dailyMode && jobStartAt && jobClockMs({ status: job.status, started_at: jobStartAt }, Date.now()) != null && (
             <View style={[styles.timeEntry, { backgroundColor: '#ECFDF5', borderColor: TEAL }]}>
-              <Text style={[styles.timeEntryText, { color: '#065F46' }]}>🟢 {t('active_since')} {fmtTime(jobStartAt)}</Text>
+              <Text style={[styles.timeEntryText, { color: '#065F46' }]}>🟢 {t('active_since')} {fmtTime(jobStartAt, locale)}</Text>
             </View>
           )}
 

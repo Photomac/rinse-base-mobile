@@ -13,6 +13,8 @@ import { writeThrough, uuid4 } from '../lib/outbox'
 import { queueIncidentNotify, flushIncidentNotifies } from '../lib/incidentNotify'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
+import { useMachineTranslation } from '../lib/machineTranslate'
+import { checklistPhotoNote } from '../lib/photoCaption'
 import { PhotoViewer, ViewerPhoto } from '../components/PhotoViewer'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -46,12 +48,14 @@ interface Props {
 }
 
 export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOutstanding = 0 }: Props) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const [serverPhotos, setServerPhotos] = useState<any[]>([])
   const [devicePhotos, setDevicePhotos] = useState<QueuedJobPhoto[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedType, setSelectedType] = useState('after')
-  const [caption, setCaption] = useState(preselectedItem?.title || '')
+  // null = the crew hasn't touched the note: it shows the checklist line in
+  // their language, and saves as the line's own text (lib/photoCaption).
+  const [caption, setCaption] = useState<string | null>(preselectedItem?.title ? null : '')
   const [visibleToClient, setVisibleToClient] = useState(true)
   const [pending, setPending] = useState<PendingStatus>({ count: 0, serverRejected: 0, lastServerError: null })
   // An upload pass is running: the banner says "uploading", not "waiting".
@@ -143,6 +147,11 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
     ...serverPhotos,
   ]
 
+  // The checklist line and the photo notes, in the crew's language. Display
+  // only: what is saved stays as written.
+  const tx = useMachineTranslation(lang, [preselectedItem?.title, ...photos.map((p: any) => p.caption)])
+  const shownTitle = tx(preselectedItem?.title)
+
   // Required-shot capture LEFT this screen 2026-08-24 — evidence is taken
   // inside its room on the Turnover checklist (JobDetailScreen), one home not
   // two. This screen is job-level photos only: before/after/general/damage.
@@ -214,15 +223,12 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
   // for the network — on one rural bar a single photo took up to 103 s.
   async function addPhotos(photos: { uri: string; takenAt: number | null }[]) {
     if (!photos.length) return
-    const note = caption.trim()
     // Canonical checklist link: this photo satisfies the preselected item as
     // long as the caption still names it (legacy caption-matching wouldn't
     // have counted an edited caption either). The caption itself stays as a
-    // dual-write until old bundles that match on it have aged out.
-    const checklistItemId =
-      preselectedItem?.jobItemId && note === (preselectedItem.title || '').trim()
-        ? preselectedItem.jobItemId
-        : null
+    // dual-write until old bundles that match on it have aged out, which is
+    // one reason it is saved as the line's English text, not the translation.
+    const { caption: note, checklistItemId } = checklistPhotoNote(caption, preselectedItem, shownTitle)
 
     // Damage: ask before queueing, so a flagged photo is queued already tied
     // to its report and the flag survives no signal and an app restart.
@@ -320,7 +326,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
   }
 
   function openPhotoOptions(photo: any) {
-    Alert.alert(t('photo_options'), photo.caption || undefined, [
+    Alert.alert(t('photo_options'), photo.caption ? tx(photo.caption) : undefined, [
       { text: t('cancel'), style: 'cancel' },
       {
         text: photo.caption ? t('photo_edit_note') : t('photo_add_note'),
@@ -449,7 +455,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
         {/* Caption */}
         <TextInput
           style={styles.captionInput}
-          value={caption}
+          value={caption ?? shownTitle}
           onChangeText={setCaption}
           placeholder={t('add_caption')}
           placeholderTextColor="#9CA3AF"
@@ -522,7 +528,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
                         </View>
                       )}
                       {photo.caption && (
-                        <Text style={styles.photoCaption} numberOfLines={1}>{photo.caption}</Text>
+                        <Text style={styles.photoCaption} numberOfLines={1}>{tx(photo.caption)}</Text>
                       )}
                       {photo.visible_to_client && (
                         <View style={styles.clientBadge}>
