@@ -920,7 +920,7 @@ export const translations = {
     no_jobs: 'Sin trabajos hoy', enjoy_day: 'Disfruta tu día libre',
     directions: 'Cómo llegar', call: 'Llamar', en_route: 'En camino', start_job: 'Iniciar trabajo',
     complete: 'Completar', completed: 'Completado', supplies_needed: 'Materiales necesarios',
-    lockbox: 'Caja de llaves', complete_confirm: '¿Marcar trabajo como completado?', turnover: 'Cambio de turno',
+    lockbox: 'Caja de llaves', complete_confirm: '¿Marcar trabajo como completado?', turnover: 'Entre huéspedes',
     // Schedule
     my_schedule: 'Mi horario', upcoming_jobs: 'trabajos próximos',
     no_jobs_day: 'Sin trabajos este día', nothing_scheduled: 'Nada programado',
