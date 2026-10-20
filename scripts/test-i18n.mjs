@@ -140,5 +140,21 @@ const usesTzFormatters = src => /import \{[^}]*\bfmt(Time|Date|DateTime)\b[^}]*\
 check('every lib/timezone fmtTime / fmtDate / fmtDateTime on a screen passes the app locale',
   offenders(/\bfmt(Time|Date|DateTime)\((?:[^(),]|\([^()]*\))+\)/, [], usesTzFormatters), [])
 
+// The Schedule tab is "Agenda" in Spanish, like Portuguese; "horario" is left
+// only where it means working hours ("Tu horario semanal") (2026-10-20).
+check('es: the Schedule tab and its heading say agenda', [T.es.schedule, T.es.my_schedule], ['Agenda', 'Mi agenda'])
+check('es: "horario" only for working hours',
+  Object.entries(T.es).filter(([, v]) => /horario/i.test(String(v)) && !/horario semanal/i.test(String(v))).map(([k]) => k), [])
+// A job's property line agrees with its numbers: "1 baño", "3 baños", "🛏 1 cama".
+check('property counts: one and many in every language',
+  ['en', 'es', 'pt'].map(L => [T[L].baths_short_one, T[L].baths_short, T[L].beds_total_short_one, T[L].beds_total_short]),
+  [['bath', 'bath', 'bed', 'beds'], ['baño', 'baños', 'cama', 'camas'], ['banh', 'banh', 'cama', 'camas']])
+{
+  const job = readFileSync(join(repo, 'src/screens/JobDetailScreen.tsx'), 'utf8')
+  check('the job screen picks the _one word when the count is 1',
+    [/Number\(propMeta\.bathrooms\) === 1 \? 'baths_short_one' : 'baths_short'/.test(job),
+     /Number\(propMeta\.beds\) === 1 \? 'beds_total_short_one' : 'beds_total_short'/.test(job)], [true, true])
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
