@@ -1,0 +1,12 @@
+{
+  "ios": {
+    "NSCameraUsageDescription": "O Rinsebase usa sua câmera para tirar fotos de antes e depois dos serviços de limpeza.",
+    "NSPhotoLibraryUsageDescription": "O Rinsebase acessa sua biblioteca de fotos para enviar fotos dos serviços de limpeza.",
+    "NSPhotoLibraryAddUsageDescription": "O Rinsebase salva as fotos dos serviços de limpeza na sua biblioteca de fotos.",
+    "NSMicrophoneUsageDescription": "O Rinsebase usa o microfone para alertas de áudio de emergência SOS.",
+    "NSLocationWhenInUseUsageDescription": "O Rinsebase usa sua localização para confirmar que você está no imóvel certo.",
+    "NSLocationAlwaysAndWhenInUseUsageDescription": "O Rinsebase usa sua localização para confirmar que você está no imóvel certo e para lembrar você de registrar a saída quando sair do local do serviço.",
+    "NSLocationAlwaysUsageDescription": "O Rinsebase usa sua localização para confirmar que você está no imóvel certo e para lembrar você de registrar a saída quando sair do local do serviço.",
+    "NSFaceIDUsageDescription": "Permita que o Rinsebase use o Face ID."
+  }
+}
