@@ -17,6 +17,9 @@ export function LoginScreen() {
   const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  // Show / Hide on the password box. One flag is enough: the sign-in password
+  // and the reset step's new password never render together.
+  const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
   const { t } = useLang()
 
@@ -88,7 +91,8 @@ export function LoginScreen() {
           <Text style={styles.label}>{t('email')}</Text>
           <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder={t('email_placeholder')} placeholderTextColor={TEXT_LIGHT} autoCapitalize="none" keyboardType="email-address" />
           <Text style={styles.label}>{t('password')}</Text>
-          <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder={t('password_placeholder')} placeholderTextColor={TEXT_LIGHT} secureTextEntry />
+          <PasswordField value={password} onChangeText={setPassword} placeholder={t('password_placeholder')}
+            shown={showPw} onToggle={() => setShowPw(s => !s)} />
           <TouchableOpacity style={[styles.button, loading && { opacity: 0.6 }]} onPress={handleLogin} disabled={loading}>
             {loading ? <ActivityIndicator color={SLATE_DARK} /> : <Text style={styles.buttonText}>{t('sign_in')} →</Text>}
           </TouchableOpacity>
@@ -123,7 +127,8 @@ export function LoginScreen() {
               hardcode it in the UI; a 6-cap truncated real codes on web once. */}
           <TextInput style={[styles.input, styles.codeInput]} value={code} onChangeText={setCode} placeholder="········" placeholderTextColor={TEXT_LIGHT} keyboardType="number-pad" maxLength={12} autoFocus />
           <Text style={styles.label}>{t('reset_new_password')}</Text>
-          <TextInput style={styles.input} value={newPassword} onChangeText={setNewPassword} placeholder={t('reset_password_hint')} placeholderTextColor={TEXT_LIGHT} secureTextEntry />
+          <PasswordField value={newPassword} onChangeText={setNewPassword} placeholder={t('reset_password_hint')}
+            shown={showPw} onToggle={() => setShowPw(s => !s)} />
           <TouchableOpacity style={[styles.button, loading && { opacity: 0.6 }]} onPress={verifyAndReset} disabled={loading}>
             {loading ? <ActivityIndicator color={SLATE_DARK} /> : <Text style={styles.buttonText}>{t('reset_submit')} →</Text>}
           </TouchableOpacity>
@@ -139,6 +144,30 @@ export function LoginScreen() {
   )
 }
 
+// Password box with a Show / Hide button inside its right edge. Autocapitalize
+// and autocorrect stay off: once secureTextEntry is lifted, the keyboard would
+// otherwise capitalise the first letter or "correct" the password as it shows.
+function PasswordField({ value, onChangeText, placeholder, shown, onToggle }: {
+  value: string
+  onChangeText: (v: string) => void
+  placeholder: string
+  shown: boolean
+  onToggle: () => void
+}) {
+  const { t } = useLang()
+  return (
+    <View style={styles.passwordWrap}>
+      <TextInput style={[styles.input, styles.passwordInput]} value={value} onChangeText={onChangeText}
+        placeholder={placeholder} placeholderTextColor={TEXT_LIGHT}
+        secureTextEntry={!shown} autoCapitalize="none" autoCorrect={false} spellCheck={false} />
+      <TouchableOpacity style={styles.showToggle} onPress={onToggle} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        accessibilityRole="button" accessibilityLabel={shown ? t('password_hide_label') : t('password_show_label')}>
+        <Text style={styles.showToggleText}>{shown ? t('password_hide') : t('password_show')}</Text>
+      </TouchableOpacity>
+    </View>
+  )
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: SURFACE, paddingHorizontal: 24, justifyContent: 'center' },
   logoSection: { alignItems: 'center', marginBottom: 40 },
@@ -150,6 +179,11 @@ const styles = StyleSheet.create({
   label: { color: TEXT_MUTED, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6, marginTop: 12 },
   input: { backgroundColor: SURFACE, borderRadius: 12, padding: 14, color: TEXT, fontSize: 15, borderWidth: 1, borderColor: BORDER },
   codeInput: { fontSize: 22, fontWeight: '800', letterSpacing: 8, textAlign: 'center' },
+  passwordWrap: { justifyContent: 'center' },
+  // Room for the longest label ("Mostrar") so typed text never runs under it.
+  passwordInput: { paddingRight: 92 },
+  showToggle: { position: 'absolute', right: 0, top: 0, bottom: 0, justifyContent: 'center', paddingHorizontal: 14 },
+  showToggleText: { color: TEXT_MUTED, fontSize: 13, fontWeight: '700' },
   button: { backgroundColor: GOLD, borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 24 },
   buttonText: { color: SLATE_DARK, fontSize: 16, fontWeight: '800' },
   linkText: { color: TEXT, fontSize: 13, fontWeight: '700', textAlign: 'center', marginTop: 16 },
