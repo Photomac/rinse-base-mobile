@@ -57,6 +57,10 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "locales": {
+      "es": "./locales/es.json",
+      "pt": "./locales/pt.json"
+    },
     "plugins": [
       "expo-secure-store",
       "expo-image-picker",
