@@ -30,7 +30,7 @@ function check(name, got, want) {
 const { kindParts, serviceName, saysTurnover } = await import(join(repo, 'src/lib/cleanKind.ts'))
 
 const EN = { turnover: 'Turnover', backToBack: 'Back-to-back' }
-const ES = { turnover: 'Cambio de turno', backToBack: 'Mismo día' }
+const ES = { turnover: 'Entre huéspedes', backToBack: 'Mismo día' }
 // Home's line, exactly as DashboardScreen prints it.
 const home = (time, job, labels = EN) => [time, ...kindParts(job, labels)].join(' · ')
 // Schedule's line under the address (empty = the line isn't rendered).
@@ -87,9 +87,9 @@ check('task: no service on the line',
 // Spanish.
 check('Spanish: the tag is the crew\'s word, the service the office\'s',
   [home('10:00 AM', hideaway, ES), home('11:00 AM', sage, ES)],
-  ['10:00 AM · 🏠 Cambio de turno · ↔ Mismo día', '11:00 AM · Property Prep--Arrival'])
+  ['10:00 AM · 🏠 Entre huéspedes · ↔ Mismo día', '11:00 AM · Property Prep--Arrival'])
 check('Spanish: a service named in Spanish that says the tag is left off too',
-  sched({ is_turnover: true, service_types: svc('Limpieza cambio de turno') }, ES), '🏠 Cambio de turno')
+  sched({ is_turnover: true, service_types: svc('Limpieza entre huéspedes') }, ES), '🏠 Entre huéspedes')
 
 // Robustness.
 check('names are trimmed; blank, missing or non-string read as none',
