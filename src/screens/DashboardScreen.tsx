@@ -186,7 +186,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       // until it is closed. The status filter keeps this empty for a crew with
       // nothing outstanding.
       cachedQuery(`dash:stranded:${user.id}`, supabase.from('jobs')
-        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
+        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, source_report_id, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
         .eq('tenant_id', user.tenant_id)
         .in('status', ['in_progress', 'en_route'])
         .lt('scheduled_start', todayStart.toISOString())

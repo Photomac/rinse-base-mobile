@@ -44,7 +44,7 @@ export function dashTodayRead(user: any, now: Date): CacheRead {
   return {
     key: `dash:today:${user.id}`,
     q: () => supabase.from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, started_at, is_turnover, route_order, window_minutes, job_type, internal_notes, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
+      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, started_at, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', from.toISOString())
       .lte('scheduled_start', to.toISOString())

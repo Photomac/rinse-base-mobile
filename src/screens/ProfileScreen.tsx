@@ -26,7 +26,11 @@ const ROLE_KEYS: Record<string, string> = {
   maintenance: 'role_maintenance',
 }
 
-export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpdate?: (url: string) => void }) {
+// onOpenMileage / onOpenTeam: the screen that isn't a tab for this person
+// (App.tsx). The office of a day-shift company has Team today in Mileage's tab
+// slot, so Mileage opens from here; an office on per-job tracking keeps the
+// Mileage tab and opens Team today from here.
+export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam }: { user: any; onAvatarUpdate?: (url: string) => void; onOpenMileage?: () => void; onOpenTeam?: () => void }) {
   const { lang, setLang, t } = useLang()
   const initials = user.full_name?.split(' ').map((n: string) => n[0]).join('').slice(0,2).toUpperCase() || '?'
   const [avatarUrl, setAvatarUrl] = React.useState(user.avatar_url || null)
@@ -258,6 +262,22 @@ export function ProfileScreen({ user, onAvatarUpdate }: { user: any; onAvatarUpd
           <Text style={styles.name}>{user.full_name}</Text>
           <View style={styles.roleBadge}><Text style={styles.roleText}>{t((ROLE_KEYS[user.role] || 'role_cleaner') as any)}</Text></View>
         </View>
+        {(onOpenTeam || onOpenMileage) && (
+          <View style={styles.card}>
+            {onOpenTeam && (
+              <TouchableOpacity style={styles.row} onPress={onOpenTeam}>
+                <Text style={styles.openRowText}>👥  {t('team_title')}</Text>
+                <Text style={styles.openRowChev}>›</Text>
+              </TouchableOpacity>
+            )}
+            {onOpenMileage && (
+              <TouchableOpacity style={styles.row} onPress={onOpenMileage}>
+                <Text style={styles.openRowText}>↗  {t('my_mileage')}</Text>
+                <Text style={styles.openRowChev}>›</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
         <View style={styles.card}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <Text style={styles.sectionTitle}>{t('contact_info')}</Text>
@@ -456,6 +476,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F8FAFC' },
   rowLabel: { fontSize: 13, color: '#94A3B8' },
   rowValue: { fontSize: 13, color: '#0F172A', fontWeight: '500' },
+  openRowText: { fontSize: 15, color: '#0F172A', fontWeight: '700' },
+  openRowChev: { fontSize: 20, color: '#CBD5E1', fontWeight: '600' },
   input: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 14, color: '#0F172A', backgroundColor: '#fff', marginTop: 4 },
   contactBtn: { flex: 1, paddingVertical: 11, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   langRow: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 8 },
