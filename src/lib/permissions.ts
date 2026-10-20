@@ -30,8 +30,8 @@ async function openAppSettings() {
 
 function showSettingsAlert(title: string, body: string) {
   Alert.alert(title, body, [
-    { text: 'Cancel', style: 'cancel' },
-    { text: 'Open Settings', onPress: openAppSettings },
+    { text: tStatic('cancel'), style: 'cancel' },
+    { text: tStatic('open_settings'), onPress: openAppSettings },
   ])
 }
 

@@ -20,7 +20,7 @@ import { uuid4 } from './outbox'
 import { savePunch } from './timeTracker'
 import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { getBackgroundLocationStatus } from './permissions'
-import { tStatic, ti } from './i18n'
+import { tStatic, ti, localeStatic } from './i18n'
 
 const ARRIVAL_TASK = 'arrival-geofence-task'
 const RADIUS_M = 150
@@ -300,7 +300,7 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
                 title: `⏱ ${tStatic('auto_clock_in_title')}`,
                 body: ti(tStatic('auto_clock_in_body'), {
                   property,
-                  time: fmtTime(arrival.at),
+                  time: fmtTime(arrival.at, localeStatic()),
                 }),
                 sound: 'default',
                 data: { type: 'auto_clock_in', jobId },

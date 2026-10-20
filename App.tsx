@@ -40,7 +40,7 @@ import { flushIncidentNotifies } from './src/lib/incidentNotify'
 import { flushSOSQueue, resumableSOS } from './src/lib/sosQueue'
 import * as Notifications from 'expo-notifications'
 import { LangProvider, useLang } from './src/contexts/LangContext'
-import { ti } from './src/lib/i18n'
+import { ti, tStatic, localeStatic } from './src/lib/i18n'
 import { initErrorReporting, setErrorContext } from './src/lib/errorReporter'
 import { ErrorBoundary } from './src/components/ErrorBoundary'
 
@@ -251,7 +251,7 @@ function AppInner() {
         prefetchDays(user, { force: true }).catch(() => {})
         if (throttled()) return
         Notifications.scheduleNotificationAsync({
-          content: { title: '✅ New job assigned', body: `You have a new job scheduled`, sound: true },
+          content: { title: `✅ ${tStatic('notif_job_assigned_title')}`, body: tStatic('notif_job_assigned_body'), sound: true },
           trigger: null,
         }).catch(console.warn)
       })
@@ -272,9 +272,9 @@ function AppInner() {
         if (!mine) return
         prefetchDays(user, { force: true }).catch(() => {})
         if (throttled()) return
-        const newTime = fmtTime(job.scheduled_start)
+        const newTime = fmtTime(job.scheduled_start, localeStatic())
         Notifications.scheduleNotificationAsync({
-          content: { title: '📅 Job rescheduled', body: `Your job has been moved to ${newTime}`, sound: true },
+          content: { title: `📅 ${tStatic('notif_job_rescheduled_title')}`, body: ti(tStatic('notif_job_rescheduled_body'), { time: newTime }), sound: true },
           trigger: null,
         }).catch(console.warn)
       })
@@ -467,7 +467,7 @@ function AppInner() {
       >
         <Tab.Screen
           name="Dashboard"
-          options={{ tabBarLabel: 'Home', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⊞</Text> }}
+          options={{ tabBarLabel: t('tab_home'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⊞</Text> }}
         >
           {({ navigation }: any) => (
             <DashboardScreen
@@ -487,7 +487,7 @@ function AppInner() {
 
         <Tab.Screen
           name="Schedule"
-          options={{ tabBarLabel: 'Schedule', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>📅</Text> }}
+          options={{ tabBarLabel: t('schedule'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>📅</Text> }}
         >
           {() => <ScheduleScreen key={user?.id} user={user} onJobPress={setSelectedJob} />}
         </Tab.Screen>
@@ -499,7 +499,7 @@ function AppInner() {
           <Tab.Screen
             name="OpenJobs"
             options={{
-              tabBarLabel: 'Open jobs',
+              tabBarLabel: t('open_jobs_tab'),
               tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>🙋</Text>,
               tabBarBadge: openJobsCount > 0 ? (openJobsCount > 9 ? '9+' : openJobsCount) : undefined,
               tabBarBadgeStyle: { backgroundColor: GOLD, color: SLATE_DARK, fontSize: 10, fontWeight: '800' },
@@ -519,7 +519,7 @@ function AppInner() {
         ) : (
           <Tab.Screen
             name="Mileage"
-            options={{ tabBarLabel: 'Mileage', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>↗</Text> }}
+            options={{ tabBarLabel: t('tab_mileage'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>↗</Text> }}
           >
             {() => <MileageScreen key={user?.id} user={user} />}
           </Tab.Screen>
@@ -528,7 +528,7 @@ function AppInner() {
         <Tab.Screen
           name="Chat"
           options={{
-            tabBarLabel: 'Chat',
+            tabBarLabel: t('tab_chat'),
             tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>💬</Text>,
             tabBarBadge: chatUnread > 0 ? (chatUnread > 9 ? '9+' : chatUnread) : undefined,
             tabBarBadgeStyle: { backgroundColor: '#EF4444', color: '#fff', fontSize: 10, fontWeight: '800' },
@@ -539,7 +539,7 @@ function AppInner() {
 
         <Tab.Screen
           name="Profile"
-          options={{ tabBarLabel: 'Profile', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>◉</Text> }}
+          options={{ tabBarLabel: t('profile'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>◉</Text> }}
         >
           {() => (
             <ProfileScreen

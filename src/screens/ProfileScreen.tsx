@@ -189,7 +189,7 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
       .update({ email: contactEmail.trim() || null, phone: contactPhone.trim() || null })
       .eq('id', user.id)
     setSavingContact(false)
-    if (error) { Alert.alert('Error', error.message); return }
+    if (error) { Alert.alert(t('error'), error.message); return }
     user.email = contactEmail.trim(); user.phone = contactPhone.trim()
     setEditingContact(false)
   }
@@ -232,14 +232,14 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
         'https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/avatars/' + fileName,
         { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'x-upsert': 'true' }, body: formData }
       )
-      if (!res.ok) throw new Error('Upload failed')
+      if (!res.ok) throw new Error(t('upload_failed'))
       const url = 'https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/public/avatars/' + fileName + '?t=' + Date.now()
       await supabase.from('users').update({ avatar_url: url }).eq('id', user.id)
       setAvatarUrl(url)
       onAvatarUpdate?.(url)
       Alert.alert(`✅ ${t('photo_updated')}`)
     } catch(e: any) {
-      Alert.alert('Error', e.message)
+      Alert.alert(t('error'), e.message)
     }
     setUploading(false)
   }
@@ -323,8 +323,8 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
             <Text style={styles.rowLabel}>{t('pay_type')}</Text>
             <Text style={styles.rowValue}>{user.pay_type === 'hourly' ? t('hourly') : user.pay_type === 'per_job' ? t('per_job') : t('mixed_pay')}</Text>
           </View>
-          {user.hourly_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('hourly_rate')}</Text><Text style={styles.rowValue}>${Number(user.hourly_rate).toFixed(2)}/hr</Text></View>}
-          {user.per_job_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('per_job_rate')}</Text><Text style={styles.rowValue}>${Number(user.per_job_rate).toFixed(2)}/job</Text></View>}
+          {user.hourly_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('hourly_rate')}</Text><Text style={styles.rowValue}>{ti(t('rate_per_hour'), { amt: '$' + Number(user.hourly_rate).toFixed(2) })}</Text></View>}
+          {user.per_job_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('per_job_rate')}</Text><Text style={styles.rowValue}>{ti(t('rate_per_job'), { amt: '$' + Number(user.per_job_rate).toFixed(2) })}</Text></View>}
         </View>
         ) : null}
         {/* Sync health — rendered only when something needs attention. Rejected
@@ -367,12 +367,12 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowLabel}>{t('to_start_date')}</Text>
-              <TextInput value={toStart} onChangeText={setToStart} placeholder="YYYY-MM-DD" autoCapitalize="none"
+              <TextInput value={toStart} onChangeText={setToStart} placeholder={t('date_placeholder')} autoCapitalize="none"
                 keyboardType="numbers-and-punctuation" style={styles.input} placeholderTextColor="#9E8E72" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowLabel}>{t('to_end_date')}</Text>
-              <TextInput value={toEnd} onChangeText={setToEnd} placeholder="YYYY-MM-DD" autoCapitalize="none"
+              <TextInput value={toEnd} onChangeText={setToEnd} placeholder={t('date_placeholder')} autoCapitalize="none"
                 keyboardType="numbers-and-punctuation" style={styles.input} placeholderTextColor="#9E8E72" />
             </View>
           </View>

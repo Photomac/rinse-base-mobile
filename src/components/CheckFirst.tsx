@@ -14,7 +14,7 @@
 import React from 'react'
 import { View, Text, TouchableOpacity, Modal, ScrollView, Image, ActivityIndicator, StyleSheet } from 'react-native'
 import { useLang } from '../contexts/LangContext'
-import { ti } from '../lib/i18n'
+import { ti, localeFor } from '../lib/i18n'
 import { fmtTime } from '../lib/timezone'
 import { activeLines, blocksThisClean, lineState, type CheckFirstLine, type CheckFirstTick } from '../lib/checkFirst'
 import { GOLD } from '../lib/theme'
@@ -61,7 +61,7 @@ interface LinesProps {
 }
 
 function CheckFirstLines({ view, started, canTick, busy, tx, nameOf, onTick, onPhoto }: LinesProps) {
-  const { t } = useLang()
+  const { t, lang } = useLang()
   const ticked = new Set(view.ticks.map(k => k.line_id))
   const photos = new Set(Object.keys(view.photos))
   return (
@@ -90,7 +90,7 @@ function CheckFirstLines({ view, started, canTick, busy, tx, nameOf, onTick, onP
               <View style={styles.meta}>
                 {line.photo_required && !done && !saving && <Text style={styles.metaText}>📷 {t('check_first_photo_needed')}</Text>}
                 {tick
-                  ? <Text style={[styles.metaText, styles.metaDone]}>✓ {ti(t('check_first_ticked_by'), { name: nameOf(tick), time: fmtTime(tick.ticked_at) })}</Text>
+                  ? <Text style={[styles.metaText, styles.metaDone]}>✓ {ti(t('check_first_ticked_by'), { name: nameOf(tick), time: fmtTime(tick.ticked_at, localeFor(lang)) })}</Text>
                   : <Text style={styles.metaText}>{t('check_first_not_yet')}</Text>}
                 {saving && <Text style={styles.metaText}>{t('check_first_photo_saving')}</Text>}
               </View>

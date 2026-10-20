@@ -380,8 +380,8 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
               onPress={() => {}}
               activeOpacity={0.85}
               accessibilityRole="button"
-              accessibilityLabel="Emergency SOS button"
-              accessibilityHint="Press and hold for 3 seconds to alert your owner and manager"
+              accessibilityLabel={t('sos_a11y_label')}
+              accessibilityHint={t('sos_a11y_hint')}
             >
               <Text style={styles.sosEmoji}>🆘</Text>
               <Text style={styles.sosButtonText}>SOS</Text>
@@ -448,8 +448,8 @@ export function SOSScreen({ user, onCancel, onSent }: Props) {
           {/* If this is a real life-threatening emergency, dial 911 directly. */}
           <TouchableOpacity onPress={call911} style={styles.call911Btn}
             accessibilityRole="button"
-            accessibilityLabel="Call 911"
-            accessibilityHint="Dials 911 from your phone for a life-threatening emergency">
+            accessibilityLabel={t('call_911_btn')}
+            accessibilityHint={t('call_911_a11y_hint')}>
             <Text style={styles.call911BtnText}>📞 {t('call_911_btn')}</Text>
             <Text style={styles.call911Sub}>{t('call_911_sub')}</Text>
           </TouchableOpacity>

@@ -795,7 +795,51 @@ export const translations = {
     team_not_changed: "It didn't change: the server kept the old time.",
     team_changed_meanwhile: 'This changed since you opened it, so it was reloaded. Check it and try again.',
     team_gone: 'This time entry no longer exists.',
-    team_office_only: 'Team today is for the office.'
+    team_office_only: 'Team today is for the office.',
+    // Strings that were hard-coded in English until 2026-10-20 (crew-app i18n sweep)
+    // Bottom tabs (Schedule, Open jobs and Profile use schedule / open_jobs_tab / profile)
+    tab_home: 'Home',
+    tab_mileage: 'Mileage',
+    tab_chat: 'Chat',
+    // Local pushes while the app is open (App.tsx)
+    notif_job_assigned_title: 'New job assigned',
+    notif_job_assigned_body: 'You have a new job scheduled',
+    notif_job_rescheduled_title: 'Job rescheduled',
+    notif_job_rescheduled_body: 'Your job has been moved to {time}',
+    // Crash screen (ErrorBoundary), permission alert, Android tracking notice
+    err_title: 'Something went wrong',
+    err_sub: 'Please try again.',
+    err_retry: 'Try again',
+    open_settings: 'Open Settings',
+    loc_fg_body: 'Tracking location for active job',
+    // Screen-reader labels on the SOS screen
+    sos_a11y_label: 'Emergency SOS button',
+    sos_a11y_hint: 'Press and hold for 3 seconds to alert your owner and manager',
+    call_911_a11y_hint: 'Dials 911 from your phone for a life-threatening emergency',
+    // Profile
+    rate_per_hour: '{amt}/hr',
+    rate_per_job: '{amt}/job',
+    date_placeholder: 'YYYY-MM-DD',
+    // Mileage
+    trip_tracking: 'Tracking your trip',
+    trip_time: 'Time',
+    trip_save_failed: 'Failed to save trip. Please try again.',
+    mileage_save_failed: 'Failed to save mileage. Please try again.',
+    // Notes the office and the server leave on a time entry (stored in English,
+    // shown translated by lib/pauseReason.ts). Crew pause reasons reuse
+    // waiting_laundry / going_another_job / supply_run / waiting_access / break_time / other.
+    pr_auto_forgot: 'Auto-closed: forgot to clock out',
+    pr_auto_new_day: 'Auto-closed: a new day was started',
+    pr_auto_next_shift: 'Auto-closed: another day shift started, ended at its start',
+    pr_auto_inside_shift: 'Auto-closed: inside another day shift, ended with it',
+    pr_manual_owner: 'Manual entry by owner',
+    pr_clocked_out_owner_open: 'Clocked out by owner (left open)',
+    pr_day_ended_by: 'Day ended by {who}',
+    pr_clocked_out_by: 'Clocked out by {who}',
+    pr_day_started_by: 'Day started by {who}',
+    pr_day_ended_office: 'Day ended by the office',
+    pr_clocked_out_office: 'Clocked out by the office',
+    pr_day_started_office: 'Day started by the office'
   },
   es: {
     // Tarjeta "Prepárate para hoy"
@@ -815,7 +859,7 @@ export const translations = {
     prep_access_title: 'Revisa el acceso',
     prep_access_sub: 'No hay código de caja de llaves ni instrucciones de entrada — llama a la oficina antes de ir',
     // Disponibles — tablero de limpiezas (claim_open_job)
-    open_jobs_tab: 'Disponibles',
+    open_jobs_tab: 'Abiertos',
     open_jobs_title: 'Disponibles',
     open_jobs_sub: 'Quien la tome primero se la queda',
     open_jobs_offline: 'Sin conexión — se muestra la última lista cargada. Para tomar una necesitas señal.',
@@ -895,7 +939,7 @@ export const translations = {
     no_jobs: 'Sin trabajos hoy', enjoy_day: 'Disfruta tu día libre',
     directions: 'Cómo llegar', call: 'Llamar', en_route: 'En camino', start_job: 'Iniciar trabajo',
     complete: 'Completar', completed: 'Completado', supplies_needed: 'Materiales necesarios',
-    lockbox: 'Caja de llaves', complete_confirm: 'Marcar trabajo como completado?', turnover: 'Cambio de turno',
+    lockbox: 'Caja de llaves', complete_confirm: '¿Marcar trabajo como completado?', turnover: 'Cambio de turno',
     // Schedule
     my_schedule: 'Mi horario', upcoming_jobs: 'trabajos próximos',
     no_jobs_day: 'Sin trabajos este día', nothing_scheduled: 'Nada programado',
@@ -989,7 +1033,7 @@ export const translations = {
     room_standards_hint: 'Trabaja según el estándar de abajo y luego confirma la habitación.',
     notes_placeholder: 'Problemas u observaciones...', job_photos: 'Fotos del trabajo',
     needs_return_visit: 'Tengo que volver para terminar', needs_return_visit_hint: 'Una pieza pedida o un arreglo mayor. La oficina agenda tu próxima visita.', needs_return_visit_ph: 'Qué falta y qué estás esperando',
-    complete_job_confirm: 'Completar trabajo?', checklist_incomplete: 'Lista incompleta',
+    complete_job_confirm: '¿Completar trabajo?', checklist_incomplete: 'Lista incompleta',
     checklist_incomplete_msg: 'Completa todos los elementos antes de terminar.',
     mark_done_anyway: 'Marcar como terminado igual', call_client: 'Llamar', call_dispatch: 'Llamar a oficina',
     supplies: 'Materiales', messages: 'Mensajes',
@@ -1023,7 +1067,7 @@ export const translations = {
     allow_camera_access: 'Permite acceso a la cámara',
     allow_photo_access: 'Permite acceso a las fotos',
     // Pause reasons
-    pause_title: 'Por que te vas?', pause_subtitle: 'Esto ayuda a calcular tus horas correctamente',
+    pause_title: '¿Por qué te vas?', pause_subtitle: 'Esto ayuda a calcular tus horas correctamente',
     pause_job: 'Pausar trabajo', waiting_laundry: 'Esperando lavandería', going_another_job: 'Ir a otro trabajo',
     supply_run: 'Buscar materiales', waiting_access: 'Esperando acceso', break_time: 'Descanso', other: 'Otro',
     // SOS
@@ -1081,7 +1125,7 @@ export const translations = {
     visible_to_client: 'Visible para el cliente', uploading: 'Subiendo foto...',
     photo_saved: 'Foto guardada exitosamente', upload_failed: 'Error al subir',
     no_photos: 'Sin fotos aún', no_photos_sub: 'Toma fotos antes y después del trabajo',
-    delete_photo: 'Eliminar foto?', delete_confirm: 'Esto no se puede deshacer.',
+    delete_photo: '¿Eliminar foto?', delete_confirm: 'Esto no se puede deshacer.',
     long_press_delete: 'Mantén presionada una foto para agregar una nota o eliminarla',
     before: 'Antes', after: 'Después', damage: 'Daño', other_photo: 'Otro',
     // Mileage
@@ -1135,7 +1179,7 @@ export const translations = {
     profile_title: 'Perfil', contact_info: 'Información de contacto', pay_structure: 'Estructura de pago',
     pay_type: 'Tipo de pago', hourly: 'Por hora', per_job: 'Por trabajo', mixed_pay: 'Por hora + cambio',
     hourly_rate: 'Tarifa por hora', per_job_rate: 'Tarifa por trabajo',
-    sign_out: 'Cerrar sesión', sign_out_confirm: 'Estás seguro?', phone: 'Teléfono', not_set: 'No configurado',
+    sign_out: 'Cerrar sesión', sign_out_confirm: '¿Estás seguro?', phone: 'Teléfono', not_set: 'No configurado',
     build_info: 'Versión', build_store: 'versión de tienda', build_unavailable: 'información no disponible',
     profile_photo: 'Foto de perfil', choose_photo_source: 'Selecciona una fuente',
     camera_btn: 'Cámara', photo_library: 'Galería',
@@ -1265,7 +1309,7 @@ export const translations = {
     ask_owner_setup: 'Pide al dueño o propietario que la configure en el portal del cliente.',
     supplies_helper: 'Toca Marcar bajo en lo que se esté acabando. Eso es todo lo necesario. Si repones desde la camioneta, usa Agregar conteo para anotar lo que dejaste y lo que usaste.',
     flagged_low: '{{n}} marcado como bajo',
-    low: 'Bajo', mark_low: 'Marcar bajo', par: 'Par',
+    low: 'Bajo', mark_low: 'Marcar bajo', par: 'Mínimo',
     linens: 'Ropa de cama', packed: 'Empacado', pack: 'Empacar', packed_tally: '{{n}}/{{m}} empacados', report: 'Reportar',
     linen_reported: 'Reportado', linen_report_hint: '¿Ropa de cama manchada, rota o faltante? Usa Reportar un problema → Ropa de cama en la pantalla del trabajo.',
     count_left: 'Quedan', count_left_short: 'Queda', used_short: 'Usado', add_counts: 'Agregar conteo',
@@ -1581,7 +1625,51 @@ export const translations = {
     team_not_changed: 'No cambió: el servidor mantuvo la hora anterior.',
     team_changed_meanwhile: 'Esto cambió desde que lo abriste, así que se recargó. Revísalo e inténtalo de nuevo.',
     team_gone: 'Este registro de tiempo ya no existe.',
-    team_office_only: 'Equipo hoy es para la oficina.'
+    team_office_only: 'Equipo hoy es para la oficina.',
+    // Strings that were hard-coded in English until 2026-10-20 (crew-app i18n sweep)
+    // Bottom tabs (Schedule, Open jobs and Profile use schedule / open_jobs_tab / profile)
+    tab_home: 'Inicio',
+    tab_mileage: 'Millas',
+    tab_chat: 'Chat',
+    // Local pushes while the app is open (App.tsx)
+    notif_job_assigned_title: 'Nuevo trabajo asignado',
+    notif_job_assigned_body: 'Tienes un trabajo nuevo en tu horario',
+    notif_job_rescheduled_title: 'Trabajo reprogramado',
+    notif_job_rescheduled_body: 'Tu trabajo se cambió a las {time}',
+    // Crash screen (ErrorBoundary), permission alert, Android tracking notice
+    err_title: 'Algo salió mal',
+    err_sub: 'Inténtalo de nuevo.',
+    err_retry: 'Reintentar',
+    open_settings: 'Abrir Ajustes',
+    loc_fg_body: 'Registrando tu ubicación durante el trabajo',
+    // Screen-reader labels on the SOS screen
+    sos_a11y_label: 'Botón de SOS de emergencia',
+    sos_a11y_hint: 'Mantén presionado 3 segundos para alertar a tu dueño y gerente',
+    call_911_a11y_hint: 'Marca al 911 desde tu teléfono en una emergencia que pone en peligro la vida',
+    // Profile
+    rate_per_hour: '{amt}/h',
+    rate_per_job: '{amt}/trabajo',
+    date_placeholder: 'AAAA-MM-DD',
+    // Mileage
+    trip_tracking: 'Registrando tu viaje',
+    trip_time: 'Tiempo',
+    trip_save_failed: 'No se pudo guardar el viaje. Inténtalo de nuevo.',
+    mileage_save_failed: 'No se pudieron guardar las millas. Inténtalo de nuevo.',
+    // Notes the office and the server leave on a time entry (stored in English,
+    // shown translated by lib/pauseReason.ts). Crew pause reasons reuse
+    // waiting_laundry / going_another_job / supply_run / waiting_access / break_time / other.
+    pr_auto_forgot: 'Cerrado automáticamente: no se marcó la salida',
+    pr_auto_new_day: 'Cerrado automáticamente: se inició un nuevo día',
+    pr_auto_next_shift: 'Cerrado automáticamente: empezó otro turno del día y este terminó a esa hora',
+    pr_auto_inside_shift: 'Cerrado automáticamente: estaba dentro de otro turno del día y terminó con él',
+    pr_manual_owner: 'Registro manual del dueño',
+    pr_clocked_out_owner_open: 'Salida marcada por el dueño (había quedado abierta)',
+    pr_day_ended_by: 'Día terminado por {who}',
+    pr_clocked_out_by: 'Salida marcada por {who}',
+    pr_day_started_by: 'Día iniciado por {who}',
+    pr_day_ended_office: 'Día terminado por la oficina',
+    pr_clocked_out_office: 'Salida marcada por la oficina',
+    pr_day_started_office: 'Día iniciado por la oficina'
   },
   pt: {
     // Cartão "Prepare-se para hoje"
@@ -1601,7 +1689,7 @@ export const translations = {
     prep_access_title: 'Verifique o acesso',
     prep_access_sub: 'Sem código do cofre de chaves nem instruções de entrada — ligue para o escritório antes de ir',
     // Disponíveis — quadro de limpezas (claim_open_job)
-    open_jobs_tab: 'Disponíveis',
+    open_jobs_tab: 'Abertos',
     open_jobs_title: 'Disponíveis',
     open_jobs_sub: 'Quem pegar primeiro fica com ela',
     open_jobs_offline: 'Sem conexão — mostrando a última lista carregada. Para pegar uma é preciso sinal.',
@@ -2367,7 +2455,51 @@ export const translations = {
     team_not_changed: 'Não mudou: o servidor manteve o horário anterior.',
     team_changed_meanwhile: 'Isso mudou desde que você abriu, então foi recarregado. Confira e tente de novo.',
     team_gone: 'Este registro de horas não existe mais.',
-    team_office_only: 'Equipe hoje é para o escritório.'
+    team_office_only: 'Equipe hoje é para o escritório.',
+    // Strings that were hard-coded in English until 2026-10-20 (crew-app i18n sweep)
+    // Bottom tabs (Schedule, Open jobs and Profile use schedule / open_jobs_tab / profile)
+    tab_home: 'Início',
+    tab_mileage: 'Milhas',
+    tab_chat: 'Chat',
+    // Local pushes while the app is open (App.tsx)
+    notif_job_assigned_title: 'Novo serviço para você',
+    notif_job_assigned_body: 'Você tem um novo serviço na agenda',
+    notif_job_rescheduled_title: 'Serviço remarcado',
+    notif_job_rescheduled_body: 'Seu serviço foi remarcado para as {time}',
+    // Crash screen (ErrorBoundary), permission alert, Android tracking notice
+    err_title: 'Algo deu errado',
+    err_sub: 'Tente de novo.',
+    err_retry: 'Tentar de novo',
+    open_settings: 'Abrir Ajustes',
+    loc_fg_body: 'Registrando sua localização durante o serviço',
+    // Screen-reader labels on the SOS screen
+    sos_a11y_label: 'Botão de SOS de emergência',
+    sos_a11y_hint: 'Toque e segure por 3 segundos para alertar o dono e o gerente',
+    call_911_a11y_hint: 'Liga para o 911 do seu celular em uma emergência com risco de vida',
+    // Profile
+    rate_per_hour: '{amt}/h',
+    rate_per_job: '{amt}/serviço',
+    date_placeholder: 'AAAA-MM-DD',
+    // Mileage
+    trip_tracking: 'Registrando sua viagem',
+    trip_time: 'Tempo',
+    trip_save_failed: 'Não foi possível salvar a viagem. Tente de novo.',
+    mileage_save_failed: 'Não foi possível salvar as milhas. Tente de novo.',
+    // Notes the office and the server leave on a time entry (stored in English,
+    // shown translated by lib/pauseReason.ts). Crew pause reasons reuse
+    // waiting_laundry / going_another_job / supply_run / waiting_access / break_time / other.
+    pr_auto_forgot: 'Fechado automaticamente: a saída não foi registrada',
+    pr_auto_new_day: 'Fechado automaticamente: um novo dia foi iniciado',
+    pr_auto_next_shift: 'Fechado automaticamente: outro turno do dia começou e este terminou nesse horário',
+    pr_auto_inside_shift: 'Fechado automaticamente: estava dentro de outro turno do dia e terminou com ele',
+    pr_manual_owner: 'Registro manual do dono',
+    pr_clocked_out_owner_open: 'Saída registrada pelo dono (tinha ficado aberta)',
+    pr_day_ended_by: 'Dia encerrado por {who}',
+    pr_clocked_out_by: 'Saída registrada por {who}',
+    pr_day_started_by: 'Dia iniciado por {who}',
+    pr_day_ended_office: 'Dia encerrado pelo escritório',
+    pr_clocked_out_office: 'Saída registrada pelo escritório',
+    pr_day_started_office: 'Dia iniciado pelo escritório'
   }
 }
 
@@ -2399,6 +2531,18 @@ export function localeFor(lang: Language): string {
 let cachedLang: Language = 'en'
 export function tStatic(key: TranslationKey): string {
   return t(cachedLang, key)
+}
+
+// localeFor() for the same lib code: times in a push or an Alert raised
+// outside React follow the app language too.
+export function localeStatic(): string {
+  return localeFor(cachedLang)
+}
+
+// Spanish and Portuguese write month and weekday names in lower case
+// ("miércoles, 21 de octubre"). A date that starts a heading takes a capital.
+export function capFirst(s: string): string {
+  return s ? s.charAt(0).toLocaleUpperCase() + s.slice(1) : s
 }
 
 export async function getLanguage(): Promise<Language> {
