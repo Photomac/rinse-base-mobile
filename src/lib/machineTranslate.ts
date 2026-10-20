@@ -18,7 +18,12 @@ import { supabase } from './supabase'
 import { tv } from './vocab'
 import type { Language } from './i18n'
 
-const PREFIX = 'mt:'
+// Bump with the server's PROMPT_VERSION when a prompt fix must reach phones that
+// already showed a sentence: this copy never expires and is read before the
+// server. 'mt:' held translate-crew-text's v1, which answered some Spanish in
+// voseo ("Verificá", "Revisá"); 'mt2:' fetches each sentence once more from the
+// tú/você prompt (web #1670-#1672, 2026-10-20). Old 'mt:' keys are left as is.
+const PREFIX = 'mt2:'
 const MAX_ITEMS = 80
 const MAX_CHARS = 600
 
