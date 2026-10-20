@@ -12,7 +12,7 @@
 // job_checklist_items with sort_order >= 20000 (src/lib/walkthrough.ts).
 //
 // Lines missed at an earlier inspection of this home and not marked OK since
-// (lib/carriedLines; the web migration 20261020123000_walkthrough_carried_lines)
+// (lib/carriedLines; the web migration 20261020131842_walkthrough_carried_lines)
 // come first, in a "Missed last time" block: the earlier words and photo, and
 // this visit's own answer buttons. In its section such a line is tagged and
 // answered only up there, and "Looks good" leaves it: it is the line that

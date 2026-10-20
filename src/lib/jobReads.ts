@@ -367,7 +367,7 @@ export const trashDaysRead = (addrId: string): CacheRead => ({
 
 /** The lines an inspector marked Not right at this job's home that no later
  *  inspection has marked OK (lib/carriedLines.ts; web migration
- *  20261020123000_walkthrough_carried_lines). On a clean: the crew card. On an
+ *  20261020131842_walkthrough_carried_lines). On a clean: the crew card. On an
  *  inspection: the "Missed last time" block, with this visit's own rows. */
 export const carriedLinesRead = (jobId: string): CacheRead => ({
   key: `wtcarry:${jobId}`,
