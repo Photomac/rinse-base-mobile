@@ -3,7 +3,8 @@
 // Exercises the REAL src/lib/pushTap.ts (pure apart from its injected io)
 // against the pushes the server sends — notify-crew-assigned
 // { type: 'job_assigned', jobId, tenantId } and send-job-reminders
-// { type: 'job_reminder', jobId, tenantId } (rinse-base-app #1687) — then
+// { type: 'job_reminder', jobId, tenantId } (rinse-base-app #1687) and
+// notify-home-prepped { type: 'home_prepped', jobId, tenantId } — then
 // checks App.tsx's wiring on its source text (src/ and App.tsx are copied next
 // to the scenario by the runner): the launching tap and the warm tap go
 // through one ledger, the Schedule fallback reaches the navigator, the job
@@ -45,7 +46,9 @@ async function main() {
   // ── which taps open a job ──
   ok('a day-before reminder opens its job', tappedJobId({ type: 'job_reminder', jobId: 'j1', tenantId: TENANT }, TENANT) === 'j1')
   ok('an assignment push opens its job', tappedJobId({ type: 'job_assigned', jobId: 'j2', tenantId: TENANT }, TENANT) === 'j2')
-  ok('exactly those two types', JOB_PUSH_TYPES.slice().sort().join() === 'job_assigned,job_reminder')
+  ok('a "home is prepped" push opens the clean it is for', tappedJobId({ type: 'home_prepped', jobId: 'j3', tenantId: TENANT }, TENANT) === 'j3')
+  ok('…and not another company\'s', tappedJobId({ type: 'home_prepped', jobId: 'j3', tenantId: 'ten-other' }, TENANT) === null)
+  ok('exactly those three types', JOB_PUSH_TYPES.slice().sort().join() === 'home_prepped,job_assigned,job_reminder')
   ok('any other type keeps doing nothing',
     tappedJobId({ type: 'chat_message', jobId: 'j1' }, TENANT) === null && tappedJobId({ type: 'sos', jobId: 'j1' }, TENANT) === null &&
     tappedJobId({ jobId: 'j1' }, TENANT) === null)
