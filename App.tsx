@@ -2,7 +2,8 @@ import { Sentry } from './src/lib/sentry' // first: initializes Sentry before an
 import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, ActivityIndicator, AppState, Image, Alert } from 'react-native'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { NavigationContainer } from '@react-navigation/native'
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { supabase, isSignedOut } from './src/lib/supabase'
 import { LoginScreen } from './src/screens/LoginScreen'
@@ -31,11 +32,12 @@ import { flushVideoQueue } from './src/lib/videoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
 import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
 import { USERS_READABLE_COLUMNS, fetchMyPay } from './src/lib/userPrivateDetails'
-import { clearDataCache } from './src/lib/dataCache'
+import { clearDataCache, readCacheEntry } from './src/lib/dataCache'
 import { clearCarriedPhotos } from './src/lib/carriedPhotoFiles'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
-import { flushOutbox, onOutboxDrained, onCompletePastRefusedPhotos } from './src/lib/outbox'
+import { flushOutbox, onOutboxDrained, onCompletePastRefusedPhotos, overlayPending } from './src/lib/outbox'
 import { prefetchDays, isDayChangePush } from './src/lib/offlinePrefetch'
+import { tappedJobId, onScreen, tapRouter, loadTappedJob, tapLedger, SCHEDULE_JOB_SELECT, type TapIO } from './src/lib/pushTap'
 import { flushIncidentNotifies } from './src/lib/incidentNotify'
 import { flushSOSQueue, resumableSOS } from './src/lib/sosQueue'
 import * as Notifications from 'expo-notifications'
@@ -47,6 +49,19 @@ import { ErrorBoundary } from './src/components/ErrorBoundary'
 const GOLD = '#D4A843'
 const SLATE_DARK = '#0F172A'
 const Tab = createBottomTabNavigator()
+// Lets a push tap switch tabs from outside the navigator (lib/pushTap).
+const navigationRef = createNavigationContainerRef<any>()
+// Taps already handled, kept across launches (lib/pushTap).
+const taps = tapLedger(AsyncStorage)
+
+// Where a tapped job push looks for its job (lib/pushTap): live, then the
+// saved copies, with queued writes laid over.
+const tapIO = (user: any): TapIO => ({
+  live: (jobId) => supabase.from('jobs').select(SCHEDULE_JOB_SELECT)
+    .eq('id', jobId).eq('tenant_id', user.tenant_id).maybeSingle(),
+  saved: (key) => readCacheEntry(key),
+  overlay: (rows) => overlayPending('jobs', rows),
+})
 
 // Capture uncaught mobile errors into admin_error_log (admin System Health).
 initErrorReporting()
@@ -123,7 +138,6 @@ function AppInner() {
   // miles): whichever of the two isn't a tab for this person.
   const [subScreen, setSubScreen] = useState<'mileage' | 'team' | null>(null)
   const [activeChannel, setActiveChannel] = useState<any>(null)
-  const navigationRef = useRef<any>(null)
   const lastAuthId = useRef<string | null>(null)
 
   useEffect(() => {
@@ -396,6 +410,54 @@ function AppInner() {
     return () => { received.remove(); tapped.remove() }
   }, [user])
 
+  // A tapped crew job push (job_assigned, job_reminder) opens its job, or the
+  // Schedule tab when the job can't be had; over a full screen it waits until
+  // the tabs are back (lib/pushTap). The tap that launched the app is waiting
+  // in getLastNotificationResponse(); the listener hands over each one while
+  // it runs (the two can repeat a tap: the ledger takes each once).
+  // useLastNotificationResponse() does the same, but throws on web.
+  const [lastResponse, setLastResponse] = useState<Notifications.NotificationResponse | null>(null)
+  useEffect(() => {
+    try { const r = Notifications.getLastNotificationResponse(); if (r) setLastResponse(r) } catch { /* web: no taps */ }
+    const sub = Notifications.addNotificationResponseReceivedListener(r => setLastResponse(r))
+    return () => sub.remove()
+  }, [])
+  const screenRef = useRef(onScreen({ selectedJob, activeChannel, showSOS, subScreen }))
+  screenRef.current = onScreen({ selectedJob, activeChannel, showSOS, subScreen })
+  const userRef = useRef(user)
+  userRef.current = user
+  // A tab asked for before the navigator is up (a cold start) waits for onReady.
+  const pendingTab = useRef<string | null>(null)
+  const tapRef = useRef<ReturnType<typeof tapRouter> | null>(null)
+  if (!tapRef.current) {
+    tapRef.current = tapRouter({
+      screen: () => screenRef.current,
+      load: (jobId) => loadTappedJob(jobId, userRef.current, tapIO(userRef.current)),
+      openJob: (job) => setSelectedJob(job),
+      openSchedule: () => {
+        pendingTab.current = 'Schedule'
+        if (navigationRef.isReady()) { pendingTab.current = null; navigationRef.navigate('Schedule') }
+      },
+    })
+  }
+
+  useEffect(() => {
+    if (!user || !lastResponse) return
+    if (lastResponse.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return
+    const jobId = tappedJobId(lastResponse.notification.request.content.data, user.tenant_id)
+    if (!jobId) return
+    taps.first(lastResponse.notification.request.identifier).then(first => {
+      if (!first) return
+      try { Notifications.clearLastNotificationResponse() } catch { /* not on this platform */ }
+      tapRef.current?.tap(jobId)
+    })
+  }, [lastResponse, user?.id])
+
+  // Back on the tabs: a tap that waited opens now.
+  useEffect(() => {
+    if (user) tapRef.current?.screenChanged()
+  }, [user?.id, selectedJob?.id, activeChannel, showSOS, subScreen])
+
   // An SOS this phone never got to the server (app killed in a dead zone, dead
   // battery) reopens its screen at launch, so the crew member sees it still
   // hasn't gone and the screen's fast retry takes over from the drain.
@@ -449,7 +511,10 @@ function AppInner() {
   const teamTab = teamTabReplacesMileage(user)
 
   return (
-    <NavigationContainer>
+    <NavigationContainer
+      ref={navigationRef}
+      onReady={() => { const tab = pendingTab.current; if (tab) { pendingTab.current = null; navigationRef.navigate(tab) } }}
+    >
       <Tab.Navigator
         screenOptions={{
           headerShown: false,
