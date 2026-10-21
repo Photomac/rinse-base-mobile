@@ -52,15 +52,28 @@ const topLevel = (list) => {
   }
   return cols
 }
-// a select list held in a string constant of the same file
-const constant = (text, name) => {
+// a select list held in a string constant of the same file, or of the app
+// module that file imports it from by name (App.tsx's pushed-job read takes
+// SCHEDULE_JOB_SELECT from src/lib/pushTap.ts)
+const literal = (text, name) => {
   const m = new RegExp(`const ${name}\\s*=\\s*(['\`])([^'\`]*)\\1`).exec(text)
   return m ? m[2] : null
 }
-const resolve = (text, list) => {
+const constant = (text, name, file) => {
+  const own = literal(text, name)
+  if (own !== null || !file) return own
+  const imp = new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'(\\.[^']+)'`).exec(text)
+  if (!imp) return null
+  const base = join(dirname(file), imp[1])
+  for (const p of [`${base}.ts`, `${base}.tsx`, base]) {
+    try { return literal(read(p), name) } catch { /* not this extension */ }
+  }
+  return null
+}
+const resolve = (text, list, file) => {
   let good = true
   const out = list.replace(/\$\{(\w+)\}/g, (_, n) => {
-    const v = constant(text, n)
+    const v = constant(text, n, file)
     if (v === null) good = false
     return v ?? ''
   })
@@ -101,7 +114,7 @@ for (const { file, text } of SRC) {
     const sel = /\.select\(\s*(?:(['`])([\s\S]*?)\1|([A-Za-z_]\w*))\s*[,)]/.exec(chain)
     if (/\.select\(\s*[^)\s]/.test(chain) && !sel) bad.push(`${where}: a select this test can't read`)
     if (sel) {
-      const list = sel[3] ? constant(text, sel[3]) : resolve(text, sel[2])
+      const list = sel[3] ? constant(text, sel[3], file) : resolve(text, sel[2], file)
       if (list === null) bad.push(`${where}: a select list this test can't resolve`)
       else {
         const cols = topLevel(list)
