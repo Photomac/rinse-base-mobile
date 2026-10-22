@@ -219,6 +219,71 @@ export function buildWeek(p: {
   }
 }
 
+// ── Payday ──────────────────────────────────────────────────────────────────
+// tenants.payroll_payday_offset_days: days after a pay period's last day that
+// the crew are paid (web Payroll sets it; 20261022210000_payroll_payday). The
+// periods are the web's (src/lib/payPeriod.ts payPeriodContaining): twice a
+// month the 1st–15th and the 16th to the month's end; otherwise tiled from the
+// anchor by the period's length; with no schedule, the Sunday week.
+
+export type PayPeriod = { startDs: string; endDs: string }
+
+export function payPeriodContaining(ymd: string, schedule?: PaySchedule | null): PayPeriod {
+  if (schedule?.cadence === 'semimonthly') {
+    const [y, m, d] = ymd.slice(0, 10).split('-').map(Number)
+    const day = (month: number, n: number) => new Date(Date.UTC(y, month, n)).toISOString().slice(0, 10)
+    return d <= 15 ? { startDs: day(m - 1, 1), endDs: day(m - 1, 15) } : { startDs: day(m - 1, 16), endDs: day(m, 0) }
+  }
+  const days = Number(schedule?.days) || 0
+  const anchor = schedule?.anchor ? String(schedule.anchor).slice(0, 10) : null
+  if (anchor && days > 0) {
+    const startDs = addDays(anchor, Math.floor(daysBetween(anchor, ymd) / days) * days)
+    return { startDs, endDs: addDays(startDs, days - 1) }
+  }
+  const startDs = addDays(ymd, -new Date(ymdUtc(ymd)).getUTCDay())
+  return { startDs, endDs: addDays(startDs, 6) }
+}
+
+export type Payday = PayPeriod & { payday: string; /** whole days from today: 0 today, 1 tomorrow, <0 past */ inDays: number }
+
+/** The paydays for the pay periods a week's days fall in (one, unless a period
+ *  ends mid-week: twice a month, or an odd length). None when no payday is set. */
+export function weekPaydays(days: string[], schedule: PaySchedule | null | undefined, offsetDays: number | null | undefined, todayYmd: string): Payday[] {
+  if (offsetDays == null) return []
+  const n = Number(offsetDays)
+  if (!Number.isInteger(n) || n < 0) return []
+  const out: Payday[] = []
+  for (const d of days) {
+    const p = payPeriodContaining(d, schedule)
+    if (out.some(x => x.startDs === p.startDs)) continue
+    const payday = addDays(p.endDs, n)
+    out.push({ ...p, payday, inDays: daysBetween(todayYmd, payday) })
+  }
+  return out
+}
+
+/** What's left of the week's schedule from now: the rest of today's span (from
+ *  now, or from its start if that's later) and every day still ahead. */
+export function stillScheduledMs(days: WeekDay[], nowMs: number): number {
+  let ms = 0
+  for (const d of days) {
+    if (!d.sched) continue
+    if (d.state === 'upcoming') ms += d.sched.ms
+    else if (d.isToday) ms += Math.max(0, d.sched.endMs - Math.max(nowMs, d.sched.startMs))
+  }
+  return ms
+}
+
+/** The pay still to come this week, for hourly crew only: today's clock so far
+ *  (not paid until it ends) plus what's left on the schedule, at their hourly
+ *  rate. An estimate: a clean paid by the property's rate card, or a schedule
+ *  that changes, comes out different. Null for any other pay type. */
+export function stillToComePay(p: { payType?: string | null; hourlyRate?: number | null; runningMs: number; scheduledMs: number }): number | null {
+  const rate = Number(p.hourlyRate)
+  if (p.payType !== 'hourly' || !(rate > 0)) return null
+  return Math.round(((p.runningMs + p.scheduledMs) / 3_600_000) * rate * 100) / 100
+}
+
 /** A day's minutes worked minus its scheduled minutes, for "33 min more than
  *  scheduled". Null unless both are known and the day's time has ended. */
 export function overUnderMinutes(d: WeekDay): number | null {

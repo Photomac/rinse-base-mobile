@@ -818,6 +818,14 @@ export const translations = {
     week_offline_none: "Offline, and this week isn't saved on this phone.",
     week_load_failed: "Couldn't load your week: {error}",
     week_pay_failed: "Couldn't load pay: {error}",
+    week_payday_in: 'Payday {day} · in {n} days',
+    week_payday_tomorrow: 'Payday {day} · tomorrow',
+    week_payday_today: 'Payday is today, {day}',
+    week_payday_was: 'Payday was {day}',
+    week_payday_for: '{line} (for {range})',
+    week_to_come_pay: 'Still to come this week: about {amt} for {dur}',
+    week_to_come_hours: 'Still to come this week: {dur} on your schedule',
+    week_to_come_note: "An estimate at your hourly rate, with today's time so far.",
     // Strings that were hard-coded in English until 2026-10-20 (crew-app i18n sweep)
     // Bottom tabs (Schedule, Open jobs and Profile use schedule / open_jobs_tab / profile)
     tab_home: 'Home',
@@ -1670,6 +1678,14 @@ export const translations = {
     week_offline_none: 'Sin conexión, y esta semana no está guardada en este teléfono.',
     week_load_failed: 'No se pudo cargar tu semana: {error}',
     week_pay_failed: 'No se pudo cargar el pago: {error}',
+    week_payday_in: 'Día de pago {day} · en {n} días',
+    week_payday_tomorrow: 'Día de pago {day} · mañana',
+    week_payday_today: 'Hoy es día de pago, {day}',
+    week_payday_was: 'El día de pago fue {day}',
+    week_payday_for: '{line} (por {range})',
+    week_to_come_pay: 'Falta esta semana: unos {amt} por {dur}',
+    week_to_come_hours: 'Falta esta semana: {dur} en tu agenda',
+    week_to_come_note: 'Un estimado con tu tarifa por hora, con lo que llevas hoy.',
     // Strings that were hard-coded in English until 2026-10-20 (crew-app i18n sweep)
     // Bottom tabs (Schedule, Open jobs and Profile use schedule / open_jobs_tab / profile)
     tab_home: 'Inicio',
@@ -2522,6 +2538,14 @@ export const translations = {
     week_offline_none: 'Sem conexão, e esta semana não está salva neste telefone.',
     week_load_failed: 'Não foi possível carregar sua semana: {error}',
     week_pay_failed: 'Não foi possível carregar o pagamento: {error}',
+    week_payday_in: 'Dia de pagamento {day} · em {n} dias',
+    week_payday_tomorrow: 'Dia de pagamento {day} · amanhã',
+    week_payday_today: 'Hoje é dia de pagamento, {day}',
+    week_payday_was: 'O dia de pagamento foi {day}',
+    week_payday_for: '{line} (referente a {range})',
+    week_to_come_pay: 'Ainda nesta semana: cerca de {amt} por {dur}',
+    week_to_come_hours: 'Ainda nesta semana: {dur} na sua agenda',
+    week_to_come_note: 'Uma estimativa pela sua taxa por hora, com o que você já fez hoje.',
     // Strings that were hard-coded in English until 2026-10-20 (crew-app i18n sweep)
     // Bottom tabs (Schedule, Open jobs and Profile use schedule / open_jobs_tab / profile)
     tab_home: 'Início',

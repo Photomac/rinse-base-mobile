@@ -21,10 +21,10 @@ import { cachedRead } from '../lib/dataCache'
 import { flushOutbox, onOutboxDrained, overlayPending } from '../lib/outbox'
 import { dayKey, fmtDate, fmtDatePart, fmtTime, todayKey, wallTimeInTz } from '../lib/timezone'
 import {
-  addDays, daysBetween, weekDays, weekStartFor, buildWeek, overUnderMinutes,
+  addDays, daysBetween, weekDays, weekStartFor, buildWeek, overUnderMinutes, weekPaydays, stillScheduledMs, stillToComePay,
   type DayBounds, type PaySchedule, type WeekDay,
 } from '../lib/myWeek'
-import { myWeekRead, myWeekScheduleRead, scheduleOf, type WeekData } from '../lib/myWeekReads'
+import { myWeekPaydayRead, myWeekRead, myWeekScheduleRead, scheduleOf, type WeekData } from '../lib/myWeekReads'
 
 /** Dollars, written the US way like every other amount in the app ($1,234.50). */
 const usDollars = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -44,6 +44,8 @@ export function MyWeekScreen({ user, onBack }: { user: any; onBack?: () => void 
   // 0 = this week, -1 = last week, ...
   const [offset, setOffset] = useState(0)
   const [week, setWeek] = useState<{ start: string; bounds: DayBounds[] } | null>(null)
+  // The pay schedule and the payday (days after a period ends; null = not set)
+  const [payInfo, setPayInfo] = useState<{ schedule: PaySchedule | null; paydayOffset: number | null }>({ schedule: null, paydayOffset: null })
   const [data, setData] = useState<WeekData | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -61,9 +63,14 @@ export function MyWeekScreen({ user, onBack }: { user: any; onBack?: () => void 
     const gen = ++loadGen.current
     flushOutbox().catch(() => {})
     try {
-      const s = await cachedRead(myWeekScheduleRead(user.tenant_id))
+      const [s, pd] = await Promise.all([
+        cachedRead(myWeekScheduleRead(user.tenant_id)),
+        // apart from the schedule: a failed payday read leaves no payday, not a wrong week
+        cachedRead(myWeekPaydayRead(user.tenant_id)),
+      ])
       if (gen !== loadGen.current) return
       const schedule: PaySchedule | null = s.error ? null : scheduleOf(s.data)
+      const paydayOffset: number | null = pd.error ? null : ((pd.data as any)?.payroll_payday_offset_days ?? null)
       const today = todayKey()
       const start = addDays(weekStartFor(today, schedule), 7 * offset)
       const bounds = boundsOf(start)
@@ -76,6 +83,7 @@ export function MyWeekScreen({ user, onBack }: { user: any; onBack?: () => void 
         : await Promise.resolve(r.q()).then((x: any) => ({ data: x.data, error: x.error, fromCache: false }))
       if (gen !== loadGen.current) return
       setWeek({ start, bounds })
+      setPayInfo({ schedule, paydayOffset })
       if (res.error?.offline) {
         // No signal and no saved copy of this week (only this week is kept).
         setData(null)
@@ -206,6 +214,30 @@ export function MyWeekScreen({ user, onBack }: { user: any; onBack?: () => void 
   }
 
   const totals = view?.totals
+
+  // ── Payday, and what's still to come this week ──
+  const paydays = week ? weekPaydays(weekDays(week.start), payInfo.schedule, payInfo.paydayOffset, todayKey()) : []
+  const dayName = (ymd: string) => capFirst(fmtDate(ymd, locale, { weekday: 'short' }))
+  function paydayLine(p: { payday: string; inDays: number; startDs: string; endDs: string }): string {
+    const day = dayName(p.payday)
+    const line = p.inDays < 0 ? ti(t('week_payday_was'), { day })
+      : p.inDays === 0 ? ti(t('week_payday_today'), { day })
+      : p.inDays === 1 ? ti(t('week_payday_tomorrow'), { day })
+      : ti(t('week_payday_in'), { day, n: String(p.inDays) })
+    // a week that crosses into the next pay period names each period
+    return paydays.length > 1
+      ? ti(t('week_payday_for'), { line, range: `${fmtDate(p.startDs, locale)} – ${fmtDate(p.endDs, locale)}` })
+      : line
+  }
+  const open = view?.days.find(d => d.open)?.open
+  const runningMs = offset === 0 && open ? Math.max(0, nowMs - Date.parse(open.clocked_in_at)) : 0
+  const leftMs = offset === 0 && view ? stillScheduledMs(view.days, nowMs) : 0
+  const toComePay = stillToComePay({ payType: user.pay_type, hourlyRate: user.hourly_rate, runningMs, scheduledMs: leftMs })
+  const toCome = offset !== 0 || !view || (runningMs + leftMs) <= 0 ? ''
+    : toComePay != null ? ti(t('week_to_come_pay'), { amt: money(toComePay), dur: hoursDec((runningMs + leftMs) / 60_000) })
+    : leftMs > 0 ? ti(t('week_to_come_hours'), { dur: hoursDec(leftMs / 60_000) })
+    : ''
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
@@ -257,6 +289,16 @@ export function MyWeekScreen({ user, onBack }: { user: any; onBack?: () => void 
             {nothingSaved && <View style={styles.offline}><Text style={styles.offlineText}>{t('week_offline_none')}</Text></View>}
             {!!loadError && <View style={styles.errorBox}><Text style={styles.errorText}>{loadError}</Text></View>}
             {!!data?.payError && <View style={styles.errorBox}><Text style={styles.errorText}>{ti(t('week_pay_failed'), { error: data.payError })}</Text></View>}
+
+            {view && (paydays.length > 0 || !!toCome) && (
+              <View style={styles.payCard}>
+                {paydays.map(p => (
+                  <Text key={p.startDs} style={[styles.payLine, p.inDays < 0 && styles.payLinePast]}>💵 {paydayLine(p)}</Text>
+                ))}
+                {!!toCome && <Text style={[styles.toCome, paydays.length > 0 && { marginTop: 6 }]}>{toCome}</Text>}
+                {toComePay != null && !!toCome && <Text style={styles.toComeNote}>{t('week_to_come_note')}</Text>}
+              </View>
+            )}
 
             {view && (
               <View style={styles.card}>
@@ -321,6 +363,11 @@ const styles = StyleSheet.create({
   statLabel: { color: 'rgba(255,255,255,0.6)', fontSize: 11, fontWeight: '600', marginTop: 2, textAlign: 'center' },
   scroll: { padding: 16, paddingBottom: 40 },
   card: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 12, overflow: 'hidden' },
+  payCard: { backgroundColor: '#FFFBEB', borderRadius: 14, borderWidth: 1, borderColor: '#FDE68A', paddingVertical: 12, paddingHorizontal: 14, marginBottom: 12 },
+  payLine: { fontSize: 15, fontWeight: '800', color: '#0F172A', lineHeight: 20 },
+  payLinePast: { color: '#64748B', fontWeight: '700' },
+  toCome: { fontSize: 14, fontWeight: '600', color: '#334155', lineHeight: 19 },
+  toComeNote: { fontSize: 11, color: '#92750F', marginTop: 3 },
   row: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 12, paddingHorizontal: 14, gap: 12 },
   rowBorder: { borderTopWidth: 1, borderTopColor: '#F1F5F9' },
   rowToday: { backgroundColor: '#FFFBEB' },
