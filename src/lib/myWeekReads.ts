@@ -36,7 +36,7 @@ export function myWeekScheduleRead(tenantId: string): CacheRead {
   }
 }
 
-/** The company's payday (tenants.payroll_payday_offset_days, 20261022210000_
+/** The company's payday (tenants.payroll_payday_offset_days, 20261022205544_
  *  payroll_payday). Its own read: until that migration is applied the column
  *  doesn't exist and this fails, and the week must still load. */
 export function myWeekPaydayRead(tenantId: string): CacheRead {

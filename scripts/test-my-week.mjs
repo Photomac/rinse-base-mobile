@@ -139,7 +139,7 @@ check('pay unreadable: no pay anywhere, hours from the clock', [noPay.totals.amo
 const notYet = W.buildWeek({ days: bounds, entries: [], jobs, payThrough: [{ amount: 0, minutes: 0 }], nowMs: at('2026-10-19', '07:00'), todayYmd: '2026-10-19' })
 check('Monday before clocking in: not started yet, $0 so far', [notYet.days[0].state, notYet.totals.amount], ['not_started', 0])
 
-// ── Payday (cut 2: tenants.payroll_payday_offset_days, web 20261022210000_payroll_payday) ──
+// ── Payday (cut 2: tenants.payroll_payday_offset_days, web 20261022205544_payroll_payday) ──
 check('CKS this week, paid 5 days after it ends: Fri Oct 30, in 8 days',
   W.weekPaydays(W.weekDays('2026-10-19'), CKS, 5, '2026-10-22'), [{ startDs: '2026-10-19', endDs: '2026-10-25', payday: '2026-10-30', inDays: 8 }])
 check('last week\'s payday is tomorrow', W.weekPaydays(W.weekDays('2026-10-12'), CKS, 5, '2026-10-22').map(p => [p.payday, p.inDays]), [['2026-10-23', 1]])

@@ -221,7 +221,7 @@ export function buildWeek(p: {
 
 // ── Payday ──────────────────────────────────────────────────────────────────
 // tenants.payroll_payday_offset_days: days after a pay period's last day that
-// the crew are paid (web Payroll sets it; 20261022210000_payroll_payday). The
+// the crew are paid (web Payroll sets it; 20261022205544_payroll_payday). The
 // periods are the web's (src/lib/payPeriod.ts payPeriodContaining): twice a
 // month the 1st–15th and the 16th to the month's end; otherwise tiled from the
 // anchor by the period's length; with no schedule, the Sunday week.
