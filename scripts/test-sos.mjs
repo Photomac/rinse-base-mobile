@@ -59,6 +59,10 @@ try {
   ], 'sosTracker.ts'))
   // outbox.ts imports ./timezone (dayKey) as-is: it has no imports of its own.
   writeFileSync(join(work, 'timezone.ts'), read('src/lib/timezone.ts'))
+  // outbox.ts asks netFetch whether the link is answering; the real module
+  // (no imports of its own). The SOS client doesn't fetch through it, so it
+  // has seen no traffic and says yes, as before.
+  writeFileSync(join(work, 'netFetch.ts'), read('src/lib/netFetch.ts'))
   for (const f of ['sos.mocks.ts', 'sos.supabase.ts', 'sosTracker.mocks.ts']) {
     writeFileSync(join(work, f), read(`src/lib/__tests__/${f}`))
   }

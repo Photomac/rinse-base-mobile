@@ -24,6 +24,14 @@
 //    the server for a certain 401 — which dataCache would not fall back on
 //    and the outbox would count toward parking somebody's pay.
 //
+// 4. IS THE LINK ANSWERING? On one bar with no data, requests go out and
+//    nothing comes back until the deadline. linkAnswering() says so early,
+//    without asking the network: a request has waited NET_TIMEOUTS.stall
+//    with no answer of any kind since it went out, or one failed a moment
+//    ago. Only an older failure is checked with a probe (the phone may be
+//    back on signal). The outbox uses it to queue a write at once instead of
+//    holding the button's spinner for the 30 s write deadline.
+//
 // Also: while the last round trip failed, the token-renewal request is held
 // for up to a few seconds and released the moment anything gets through.
 // Without the hold, auth-js's retry loop sleeps up to 12.8 s between
@@ -44,6 +52,11 @@ export const NET_TIMEOUTS = {
   refreshHold: 3_000,
   /** How long a reachability answer is trusted before probing again. */
   fresh: 1_500,
+  /** A request this long with nothing back since it went out: the link has
+   *  stopped answering (an answer usually takes well under a second). */
+  stall: 5_000,
+  /** A failed round trip this recent is taken as the link's state now. */
+  failFresh: 30_000,
 }
 
 let base = ''
@@ -105,6 +118,32 @@ export async function isReachable(): Promise<boolean> {
  *  will most likely time out, and shows its saved copy instead. */
 export function lastTripFailed(): boolean {
   return !!last && !last.ok
+}
+
+// Requests out and not yet answered, and when each went out. Only those with
+// a deadline: an upload may rightly take minutes.
+const inflight = new Map<object, number>()
+
+/** Has a request waited NET_TIMEOUTS.stall with nothing at all coming back
+ *  since it went out? One slow answer on a link that is answering others
+ *  doesn't count. */
+function stalled(): boolean {
+  const since = last ? last.at : -Infinity
+  const now = Date.now()
+  for (const sentAt of inflight.values()) {
+    if (now - sentAt >= NET_TIMEOUTS.stall && sentAt > since) return true
+  }
+  return false
+}
+
+/** Is the link answering? No when a request has stalled, or the last round
+ *  trip failed under NET_TIMEOUTS.failFresh ago; an older failure is checked
+ *  with isReachable(). Yes otherwise, without asking the network. */
+export async function linkAnswering(): Promise<boolean> {
+  if (stalled()) return false
+  if (!last || last.ok) return true
+  if (Date.now() - last.at < NET_TIMEOUTS.failFresh) return false
+  return isReachable()
 }
 
 function holdForSignal(maxMs: number): Promise<void> {
@@ -199,6 +238,8 @@ export async function netFetch(input: any, init: any = {}): Promise<Response> {
   const timer = deadline ? setTimeout(() => { timedOut = true; ac.abort() }, deadline) : null
   const callerSignal: AbortSignal | undefined = init?.signal ?? undefined
   const onCallerAbort = () => ac.abort()
+  const outKey = {}
+  if (deadline) inflight.set(outKey, Date.now())
   if (callerSignal) {
     if (callerSignal.aborted) ac.abort()
     else callerSignal.addEventListener?.('abort', onCallerAbort)
@@ -214,6 +255,7 @@ export async function netFetch(input: any, init: any = {}): Promise<Response> {
     if (timedOut) throw new TypeError(`Network request timed out after ${Math.round(deadline! / 1000)}s`)
     throw e
   } finally {
+    inflight.delete(outKey)
     if (timer) clearTimeout(timer)
     callerSignal?.removeEventListener?.('abort', onCallerAbort)
   }

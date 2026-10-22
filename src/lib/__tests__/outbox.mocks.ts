@@ -14,6 +14,11 @@ export const AsyncStorage = {
 
 export const net = {
   online: false,
+  /** What netFetch linkAnswering() says: false = the link has stopped
+   *  answering (one bar, no data), so writes queue without a live try. */
+  answering: true,
+  /** Every write sent, delivered or not (an offline try included). */
+  tries: 0,
   rejectTables: new Set<string>(),
   /** Reject only this op kind on rejectTables (unset = every op). */
   rejectOp: null as string | null,
@@ -52,6 +57,7 @@ const filterIn = (filters: string[], k: string) =>
   filters.find(f => f.startsWith(`${k}=in.(`))?.slice(k.length + 5, -1).split(',')
 
 function result(table: string, op: string, values: any, filters: string[], opts?: any) {
+  if (op !== 'select') net.tries++
   if (!net.online || (op === 'select' && net.readsOffline)) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
   if (net.rejectTables.has(table) && (!net.rejectOp || net.rejectOp === op)) {
     return { error: { message: 'violates row-level security' }, status: 403 }
@@ -166,3 +172,6 @@ export function onPhotoQueueChange(fn: (e: { uploadedJobId?: string }) => void) 
 }
 /** A photo for this clean became its job_photos row (photoQueue's event). */
 export function photoLanded(jobId: string) { photoListeners.forEach(fn => fn({ uploadedJobId: jobId })) }
+
+/** netFetch linkAnswering(), as the test sets it. */
+export async function linkAnswering(): Promise<boolean> { return net.answering }

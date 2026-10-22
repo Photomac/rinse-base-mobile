@@ -2,8 +2,8 @@
 // Runs the Supplies-save scenario test (src/lib/__tests__/inventoryLogSave.scenario.ts):
 // the REAL src/lib/inventoryLogSave.ts plan, turned into writes by the REAL
 // src/lib/inventoryLogOutbox.ts and sent through the REAL src/lib/outbox.ts,
-// whose three imports (AsyncStorage, supabase, errorReporter) are rewritten to
-// the test mocks, as scripts/test-outbox.mjs does.
+// whose imports (AsyncStorage, supabase, errorReporter, photoQueue, netFetch) are
+// rewritten to the test mocks, as scripts/test-outbox.mjs does.
 //
 // Usage: node scripts/test-inventory-log-save.mjs
 import { execSync } from 'node:child_process'
@@ -22,6 +22,7 @@ try {
     .replace(`from './supabase'`, `from './outbox.mocks'`)
     .replace(`from './errorReporter'`, `from './outbox.mocks'`)
     .replace(`from './photoQueue'`, `from './outbox.mocks'`)
+    .replace(`from './netFetch'`, `from './outbox.mocks'`)
   writeFileSync(join(work, 'outbox.ts'), outbox)
   cpSync(join(repo, 'src/lib/__tests__/outbox.mocks.ts'), join(work, 'outbox.mocks.ts'))
   // outbox.ts imports ./timezone (dayKey) as-is: it has no imports of its own.

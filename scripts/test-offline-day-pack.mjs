@@ -112,6 +112,23 @@ check('the walkthrough: every answer tells the card before it shows; only the fi
     const f = fnBody(walk, sig); return f.indexOf('card.edited()') > 0 && f.indexOf('card.edited()') < f.indexOf('patch(')
   }) && /card\.load\(job, \{ soon: !loaded\.current \}\)/.test(walk))
 
+// Complete on a link that has stopped answering: asked once, and each live
+// step fails open at once (as at its deadline) instead of waiting it out.
+const complete = detail.slice(detail.indexOf('async function completeJob('), detail.indexOf('async function completeJobNoPhotoCheck('))
+const askedAt = complete.indexOf('const answering = await linkAnswering()')
+check('Complete: asks once whether the link is answering, before the lead check, under the spinner',
+  askedAt > 0 && askedAt < complete.indexOf('canSignOffAsViewer(answering)') && /setSaving\(true\)\s*const answering = await linkAnswering\(\)\s*setSaving\(false\)/.test(complete))
+const lead = fnBody(detail, 'async function canSignOffAsViewer(')
+check('Complete: with no answer the lead lookup isn\'t sent (fails open, as on a lookup error)',
+  lead.indexOf('if (!answering) return true') > 0 && lead.indexOf('if (!answering) return true') < lead.indexOf(".from('job_assignments')"))
+check('Complete: with no answer, Check first uses the copy on screen, the uploads aren\'t waited for, the gate isn\'t asked',
+  /if \(!answering\) cf = checkFirst/.test(complete) &&
+  /if \(answering\) await Promise\.race\(\[sending/.test(complete) &&
+  /= answering\s*\? await supabase\.rpc\('job_completion_blockers'/.test(complete))
+const outbox = read('src/lib/outbox.ts')
+check('writeThrough: queues at once when the link isn\'t answering (no live try)',
+  /if \(pending\.length \|\| !\(await linkAnswering\(\)\)\) \{\s*await enqueue\(w\)/.test(outbox.slice(outbox.indexOf('export async function writeThrough('), outbox.indexOf('\n}\n', outbox.indexOf('export async function writeThrough(')))))
+
 const dash = read('src/screens/DashboardScreen.tsx')
 check('Home: the day read comes from dashTodayRead()', /cachedRead\(dashTodayRead\(/.test(dash) && !/dash:today/.test(dash))
 check('Home: rows go through homeDayRows() (today only)', /homeDayRows\(todayRes\.data/.test(dash))
@@ -149,6 +166,9 @@ const SCENARIOS = [
   'stopDetailsSavedRosterKeepsClockIn',
   'checkFirstOnAHangingLink',
   'checkFirstOnATrickle',
+  'punchOnAHangingLink',
+  'punchAfterAnOldFailureAsksFirst',
+  'slowAnswerOnAGoodLinkStaysLive',
   'timerOnAHangingLink',
   'timerLiveAnswerReplacesSaved',
   'timerLateAnswerNeverUndoesAPunch',
