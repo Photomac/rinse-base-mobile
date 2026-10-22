@@ -699,9 +699,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               })}
             </View>
 
-            {/* Monthly earnings */}
+            {/* Monthly earnings; tapping it opens My week (day by day, this week) */}
             {user.role !== 'owner' && (
-              <View style={styles.earningsCard}>
+              <TouchableOpacity style={styles.earningsCard} activeOpacity={0.85} onPress={() => onNavigate('week')}
+                accessibilityRole="button" accessibilityLabel={t('week_open')}>
                 <Text style={styles.earningsLabel}>💰 {t('my_earnings')}</Text>
                 <Text style={styles.earningsValue}>{monthStats.earnings == null ? '—' : `$${monthStats.earnings.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}</Text>
                 <View style={styles.earningsStats}>
@@ -714,7 +715,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     <Text style={styles.earningStatLabel}>{t('total_time')}</Text>
                   </View>
                 </View>
-              </View>
+                <Text style={styles.earningsLink}>{t('week_open')}</Text>
+              </TouchableOpacity>
             )}
           </>
         )}
@@ -801,4 +803,5 @@ const styles = StyleSheet.create({
   earningStat: { backgroundColor: 'rgba(255,255,255,0.07)', borderRadius: 10, padding: 10, flex: 1, alignItems: 'center' },
   earningStatValue: { color: '#fff', fontSize: 20, fontWeight: '800' },
   earningStatLabel: { color: 'rgba(255,255,255,0.45)', fontSize: 10, fontWeight: '600', textTransform: 'uppercase', marginTop: 2 },
+  earningsLink: { color: GOLD, fontSize: 13, fontWeight: '800', marginTop: 14, textAlign: 'right' },
 })
