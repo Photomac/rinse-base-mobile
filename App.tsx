@@ -13,6 +13,7 @@ import { OpenJobsScreen } from './src/screens/OpenJobsScreen'
 import { boardQuery, boardJobsFor } from './src/lib/openJobs'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { TeamTodayScreen } from './src/screens/TeamTodayScreen'
+import { MyWeekScreen } from './src/screens/MyWeekScreen'
 import { teamTabReplacesMileage, canSeeTeam } from './src/lib/teamDay'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
@@ -135,8 +136,9 @@ function AppInner() {
   const [activeTab, setActiveTab] = useState('Dashboard')
   const [showSOS, setShowSOS] = useState(false)
   // Mileage or Team today opened full screen from Profile (or Home's Log
-  // miles): whichever of the two isn't a tab for this person.
-  const [subScreen, setSubScreen] = useState<'mileage' | 'team' | null>(null)
+  // miles): whichever of the two isn't a tab for this person. My week opens
+  // from Home's earnings card.
+  const [subScreen, setSubScreen] = useState<'mileage' | 'team' | 'week' | null>(null)
   const [activeChannel, setActiveChannel] = useState<any>(null)
   const lastAuthId = useRef<string | null>(null)
 
@@ -495,6 +497,10 @@ function AppInner() {
     return <TeamTodayScreen user={user} onBack={() => setSubScreen(null)} />
   }
 
+  if (subScreen === 'week') {
+    return <MyWeekScreen user={user} onBack={() => setSubScreen(null)} />
+  }
+
   if (selectedJob) {
     return (
       <JobDetailScreen
@@ -542,6 +548,7 @@ function AppInner() {
               onNavigate={(screen: string) => {
                 // No Mileage tab for the office of a day-shift company: Log miles opens it full screen.
                 if (screen === 'mileage' && teamTab) { setSubScreen('mileage'); return }
+                if (screen === 'week') { setSubScreen('week'); return }
                 const tabMap: Record<string, string> = { dashboard: 'Dashboard', jobs: 'Schedule', schedule: 'Schedule', mileage: 'Mileage', profile: 'Profile' }
                 if (tabMap[screen]) navigation.navigate(tabMap[screen])
               }}

@@ -131,9 +131,9 @@ const offenders = (re, allow = [], only = () => true) => files.flatMap(f =>
   only(readFileSync(join(repo, f), 'utf8')) ? readFileSync(join(repo, f), 'utf8').split('\n').map((l, i) => [f, i + 1, l])
     .filter(([, , l]) => re.test(l) && !allow.some(a => l.includes(a)))
     .map(([f, n]) => `${f}:${n}`) : [])
-// The month's earnings are dollars, written the US way like every other
-// amount in the app ($12.50).
-check('no screen formats a date or time as en-US', offenders(/'en-US'/, ['monthStats.earnings.toLocaleString']), [])
+// The month's earnings and My week's pay are dollars, written the US way like
+// every other amount in the app ($12.50).
+check('no screen formats a date or time as en-US', offenders(/'en-US'/, ['monthStats.earnings.toLocaleString', 'const usDollars = (n: number) => n.toLocaleString']), [])
 // lib/timezone's formatters default to en-US. (Chat and Messages have local
 // helpers of the same names that already pass localeFor(lang).)
 const usesTzFormatters = src => /import \{[^}]*\bfmt(Time|Date|DateTime)\b[^}]*\} from '\.\.\/lib\/timezone'/.test(src)
