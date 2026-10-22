@@ -139,6 +139,44 @@ check('pay unreadable: no pay anywhere, hours from the clock', [noPay.totals.amo
 const notYet = W.buildWeek({ days: bounds, entries: [], jobs, payThrough: [{ amount: 0, minutes: 0 }], nowMs: at('2026-10-19', '07:00'), todayYmd: '2026-10-19' })
 check('Monday before clocking in: not started yet, $0 so far', [notYet.days[0].state, notYet.totals.amount], ['not_started', 0])
 
+// ── Payday (cut 2: tenants.payroll_payday_offset_days, web 20261022205544_payroll_payday) ──
+check('CKS this week, paid 5 days after it ends: Fri Oct 30, in 8 days',
+  W.weekPaydays(W.weekDays('2026-10-19'), CKS, 5, '2026-10-22'), [{ startDs: '2026-10-19', endDs: '2026-10-25', payday: '2026-10-30', inDays: 8 }])
+check('last week\'s payday is tomorrow', W.weekPaydays(W.weekDays('2026-10-12'), CKS, 5, '2026-10-22').map(p => [p.payday, p.inDays]), [['2026-10-23', 1]])
+check('a payday already past counts back', W.weekPaydays(W.weekDays('2026-10-05'), CKS, 5, '2026-10-22').map(p => p.inDays), [-6])
+check('no payday set: none', [W.weekPaydays(W.weekDays('2026-10-19'), CKS, null, '2026-10-22'), W.weekPaydays(W.weekDays('2026-10-19'), CKS, -1, '2026-10-22')], [[], []])
+const semi = { cadence: 'semimonthly' }
+check('twice a month: a Sunday week across the 15th has both halves\' paydays',
+  W.weekPaydays(W.weekDays(W.weekStartFor('2026-10-14', semi)), semi, 0, '2026-10-14').map(p => [p.startDs, p.endDs, p.payday]),
+  [['2026-10-01', '2026-10-15', '2026-10-15'], ['2026-10-16', '2026-10-31', '2026-10-31']])
+check('every 14 days from a Wednesday: a week sits in one period',
+  W.weekPaydays(W.weekDays('2026-10-21'), { days: 14, anchor: '2026-10-07' }, 3, '2026-10-22').map(p => [p.startDs, p.endDs, p.payday]),
+  [['2026-10-21', '2026-11-03', '2026-11-06']])
+
+// The phone's pay periods are the web's: run the web's own payPeriodContaining
+// (rinsebase-app src/lib/payPeriod.ts) over a grid when that repo is here.
+const WEB = process.env.RINSEBASE_WEB_REPO || '/Users/toddschaffer/app/rinsebase-app'
+if (existsSync(join(WEB, 'src/lib/payPeriod.ts'))) {
+  const P = await import(join(WEB, 'src/lib/payPeriod.ts'))
+  const schedules = [null, { days: 7, anchor: '2026-09-21' }, { days: 14, anchor: '2026-10-07' }, { days: 10, anchor: '2026-10-01' },
+    { cadence: 'semimonthly' }, { days: 7, anchor: '2026-09-21', cadence: 'semimonthly' }, { days: null, anchor: '2026-09-21' }]
+  let same = 0, diff = []
+  for (const s of schedules) for (let i = -400; i <= 400; i += 3) {
+    const ymd = W.addDays('2026-10-22', i)
+    const a = W.payPeriodContaining(ymd, s), b = P.payPeriodContaining(ymd, s)
+    if (a.startDs === b.startDs && a.endDs === b.endDs) same++; else diff.push([ymd, s, a, b])
+  }
+  check(`the web's payPeriodContaining agrees on every day and schedule (${same + diff.length} answers)`, diff.slice(0, 3), [])
+} else console.log('·  web repo not here: the pay-period parity check is skipped')
+
+const left = W.stillScheduledMs(wk.days, NOW)
+check('still on the schedule from Fri 10:46: the rest of Fri (to 1:00) + Sat 3 hr', left, (134 + 180) * 60_000)
+check('before today\'s schedule starts, all of it counts', W.stillScheduledMs(notYet.days, at('2026-10-19', '07:00')) >= 7 * 3_600_000, true)
+check('hourly: today\'s clock so far + what\'s left, at their rate', W.stillToComePay({ payType: 'hourly', hourlyRate: 27, runningMs: 181 * 60_000, scheduledMs: left }), 222.75)
+check('any other pay type, or no rate: no amount',
+  [W.stillToComePay({ payType: 'per_job', hourlyRate: 27, runningMs: 0, scheduledMs: left }), W.stillToComePay({ payType: 'hourly', hourlyRate: 0, runningMs: 0, scheduledMs: left }),
+   W.stillToComePay({ payType: 'hourly', hourlyRate: null, runningMs: 0, scheduledMs: left })], [null, null, null])
+
 // ── The reads ───────────────────────────────────────────────────────────────
 const reads = read('src/lib/myWeekReads.ts')
 const code = s => s.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
@@ -149,7 +187,10 @@ check('…only for the days up to today', /days\.slice\(0, payDays\)\.map/.test(
 check('their own clock entries only', /\.eq\('user_id', user\.id\)/.test(reads), true)
 check('jobs they\'re assigned, confirmed ones only', /job_assignments!inner\(user_id\)/.test(reads) && /\.eq\('job_assignments\.user_id', user\.id\)/.test(reads) && /\.in\('status', SCHEDULED_STATUSES\)/.test(reads), true)
 const selects = [...code(reads).matchAll(/\.select\('([^']+)'\)|WEEK_ENTRY_COLUMNS = '([^']+)'/g)].map(m => m[1] || m[2]).join(', ')
-check('no rate, price or pay column read', /rate|price|pay_|amount|wage/.test(selects.replace(/payroll_(period_days|anchor_date|cadence)/g, '')), false)
+check('no rate, price or pay column read', /rate|price|pay_|amount|wage/.test(selects.replace(/payroll_(period_days|anchor_date|cadence|payday_offset_days)/g, '')), false)
+check('the payday is its own read (a failure leaves no payday, never a wrong week)',
+  /key: `myweek:payday:\$\{tenantId\}`/.test(reads) && /\.select\('payroll_payday_offset_days'\)/.test(reads)
+  && !/payroll_payday_offset_days, |, payroll_payday_offset_days/.test(code(reads)), true)
 check('a network failure anywhere answers status 0 (the saved copy), whole', /r\.error && r\.status === 0/.test(reads) && /status: 0 \}/.test(reads), true)
 check('one saved copy per person, naming its week', /key: `myweek:week:\$\{user\.id\}`/.test(reads) && /weekStart,/.test(reads), true)
 
@@ -166,6 +207,11 @@ check('a failed read drops the "showing what was saved" banner', /\} else if \(r
 check('pay asked through today only, never a day ahead', /Math\.min\(7, Math\.max\(0, daysBetween\(start, today\) \+ 1\)\)/.test(screen), true)
 check('a queued Start / End on this phone shows as made', /overlayPending\('job_time_entries'/.test(screen), true)
 check('no week after this one', /setOffset\(o => Math\.min\(0, o \+ 1\)\)/.test(screen) && /disabled=\{offset === 0\}/.test(screen), true)
+check('a failed payday read means no payday', /const paydayOffset: number \| null = pd\.error \? null :/.test(screen), true)
+check('still to come: this week only, the estimate from the person\'s own pay type and rate (App.tsx\'s fetchMyPay), no new read',
+  /const runningMs = offset === 0 && open \?/.test(screen) && /const leftMs = offset === 0 && view \?/.test(screen)
+  && /stillToComePay\(\{ payType: user\.pay_type, hourlyRate: user\.hourly_rate,/.test(screen)
+  && !/user_private_details|hourly_rate'/.test(code(screen) + code(reads)), true)
 
 const app = read('App.tsx'), dash = read('src/screens/DashboardScreen.tsx')
 check('App opens My week full screen', /subScreen === 'week'/.test(app) && /<MyWeekScreen user=\{user\} onBack=\{\(\) => setSubScreen\(null\)\} \/>/.test(app) && /if \(screen === 'week'\) \{ setSubScreen\('week'\); return \}/.test(app), true)

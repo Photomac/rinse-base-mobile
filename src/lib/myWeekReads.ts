@@ -36,6 +36,19 @@ export function myWeekScheduleRead(tenantId: string): CacheRead {
   }
 }
 
+/** The company's payday (tenants.payroll_payday_offset_days, 20261022205544_
+ *  payroll_payday). Its own read: until that migration is applied the column
+ *  doesn't exist and this fails, and the week must still load. */
+export function myWeekPaydayRead(tenantId: string): CacheRead {
+  return {
+    key: `myweek:payday:${tenantId}`,
+    q: () => supabase.from('tenants')
+      .select('payroll_payday_offset_days')
+      .eq('id', tenantId)
+      .maybeSingle(),
+  }
+}
+
 export function scheduleOf(row: any): PaySchedule | null {
   if (!row) return null
   return { days: row.payroll_period_days ?? null, anchor: row.payroll_anchor_date ?? null, cadence: row.payroll_cadence ?? null }
