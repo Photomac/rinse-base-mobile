@@ -8,12 +8,19 @@
 // the first photo, and a heads-up for a report the owner can't open yet is
 // worse than a late one. Pending sends live here, on-device, and are retried by
 // the same drain that flushes the photo queue and the outbox.
+//
+// The same goes for an answer to a send-back (the office sent a report back
+// with a note, 2026-10-23): "Send it back" queues the new photos and the
+// answer, and the answer (answer_incident_send_back, which emails the office)
+// waits until every one of that report's photos has attached. Sent first, it
+// would close the send-back and the photos would then be refused.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { pendingIncidentPhotos } from './photoQueue'
 
 const KEY = 'incidentNotifyPending.v1'
+const ANSWERS_KEY = 'incidentSendBackAnswers.v1'
 // A report that never lands (rejected out of the outbox) must not keep a send
 // pending forever.
 const MAX_AGE_MS = 7 * 86_400_000
@@ -40,6 +47,53 @@ export async function queueIncidentNotify(n: Omit<PendingIncidentNotify, 'create
   const list = await read()
   if (!list.some(x => x.report_id === n.report_id)) list.push({ ...n, created_at: Date.now() })
   await write(list)
+}
+
+export interface PendingSendBackAnswer {
+  report_id: string
+  note: string | null
+  created_at: number
+}
+
+async function readAnswers(): Promise<PendingSendBackAnswer[]> {
+  try { const raw = await AsyncStorage.getItem(ANSWERS_KEY); return raw ? JSON.parse(raw) : [] } catch { return [] }
+}
+async function writeAnswers(list: PendingSendBackAnswer[]): Promise<void> {
+  try { await AsyncStorage.setItem(ANSWERS_KEY, JSON.stringify(list)) } catch { /* best effort */ }
+}
+
+/** Queue the answer to a send-back; sent once the report's photos are on it. */
+export async function queueSendBackAnswer(a: Omit<PendingSendBackAnswer, 'created_at'>): Promise<void> {
+  const list = (await readAnswers()).filter(x => x.report_id !== a.report_id)
+  list.push({ ...a, created_at: Date.now() })
+  await writeAnswers(list)
+}
+
+/** Reports whose answer is still waiting on this phone (the card hides them). */
+export async function pendingSendBackAnswerIds(): Promise<Set<string>> {
+  return new Set((await readAnswers()).map(a => a.report_id))
+}
+
+async function flushSendBackAnswers(): Promise<void> {
+  const list = await readAnswers()
+  if (!list.length) return
+  const keep: PendingSendBackAnswer[] = []
+  for (const a of list) {
+    if (Date.now() - a.created_at > MAX_AGE_MS) continue
+    if (await pendingIncidentPhotos(a.report_id) > 0) { keep.push(a); continue }
+    try {
+      const { error } = await supabase.rpc('answer_incident_send_back', { p_report_id: a.report_id, p_note: a.note })
+      // Answered, or nothing waiting any more (a replay): done. Refused as
+      // someone else's (42501): done, there is nothing this phone can do. Any
+      // other error, or no signal: try again on the next drain.
+      if (error && (error as any).code !== '42501') keep.push(a)
+    } catch {
+      keep.push(a)
+    }
+  }
+  const seen = new Set(list.map(x => `${x.report_id}@${x.created_at}`))
+  const added = (await readAnswers()).filter(x => !seen.has(`${x.report_id}@${x.created_at}`))
+  await writeAnswers([...keep.filter(k => !added.some(x => x.report_id === k.report_id)), ...added])
 }
 
 let running = false
@@ -84,6 +138,8 @@ export async function flushIncidentNotifies(): Promise<void> {
     const added = (await read()).filter(x => !seen.has(x.report_id))
     await write([...keep, ...added])
   } finally {
+    // Answers to send-backs, after the heads-ups (each waits for its photos).
+    try { await flushSendBackAnswers() } catch { /* next drain */ }
     running = false
   }
 }

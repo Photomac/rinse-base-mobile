@@ -21,6 +21,7 @@ import { prefetchDays, loadDayPack, onDayPackChange, stopsAhead, type DayPack } 
 import { writeThrough, overlayPending, flushOutbox, onOutboxDrained, uuid4, isQueued } from '../lib/outbox'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { PrepCard } from '../components/PrepCard'
+import { SentBackCard } from '../components/SentBackCard'
 import { JobClock } from '../components/JobClock'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
@@ -568,6 +569,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                 <Text style={styles.activeArrow}>→</Text>
               </TouchableOpacity>
             )}
+
+            {/* A report the office sent back with a note — renders nothing when none is waiting */}
+            <SentBackCard user={user} />
 
             {/* Get ready for today — renders nothing when there's nothing to prep */}
             <PrepCard user={user} jobs={todayJobs} onJobPress={onJobPress} />

@@ -68,6 +68,11 @@ export interface PendingPhoto {
   // job_damage_reports row (append_incident_report_photo) instead of becoming a
   // job_photos row. Absent on every entry queued before 2026-09-23.
   incident_report_id?: string | null
+  // What an incident photo is of ("Oven": a deep-clean slot), sent with the
+  // attach so the report stores it beside the url (photo_labels,
+  // 20261023200000_incident_send_back). Absent on unlabelled photos, whose
+  // attach is the two-argument call it always was.
+  incident_photo_label?: string | null
   // A damage photo flagged for an incident report from the Photos screen: it is
   // a job_photos row like any other photo AND is attached to that report. (A
   // photo taken inside the incident form is only attached.)
@@ -261,7 +266,7 @@ export async function discardCapturedPhoto(localUri: string): Promise<void> {
  *  It uploads like any job photo, then attaches to its report — which may
  *  itself still be waiting in the outbox; the attach simply retries. */
 export async function enqueueIncidentPhoto(p: {
-  localUri: string; tenant_id: string; job_id: string; user_id: string; incident_report_id: string
+  localUri: string; tenant_id: string; job_id: string; user_id: string; incident_report_id: string; label?: string | null
 }): Promise<void> {
   const id = `${p.job_id}_${Date.now()}_${Math.floor(Math.random() * 1e6)}`
   const entry: PendingPhoto = {
@@ -275,6 +280,7 @@ export async function enqueueIncidentPhoto(p: {
     caption: null,
     visible_to_client: false,
     incident_report_id: p.incident_report_id,
+    ...(p.label ? { incident_photo_label: p.label } : {}),
     created_at: Date.now(),
   }
   await mutateQueue(q => [...q, entry])
@@ -487,6 +493,7 @@ async function uploadOne(entry: PendingPhoto, sha256: Promise<string | null | un
     try {
       const { data, error, status } = await supabase.rpc('append_incident_report_photo', {
         p_report_id: entry.incident_report_id, p_url: urlData.publicUrl,
+        ...(entry.incident_photo_label ? { p_label: entry.incident_photo_label } : {}),
       })
       // A network failure here surfaces as status 0 on the RESPONSE (the error
       // object has no status — reading it there classed every miss as server).
