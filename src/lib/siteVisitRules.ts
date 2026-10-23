@@ -54,12 +54,16 @@ export function pruneSiteQueue(queue: SiteEventRow[], nowMs: number): SiteEventR
   return fresh.length > SITE_QUEUE_CAP ? fresh.slice(fresh.length - SITE_QUEUE_CAP) : fresh
 }
 
-/** After a send: 'sent', 'retry' (no answer: keep it and stop for now) or
- *  'drop' (a real refusal: the clean was taken off them, the switch is off,
- *  it's too old; a crossing is a record, not pay, so it isn't retried). */
+/** After a send: 'sent', 'retry' (no answer, or not signed in right now: keep
+ *  it and stop for now) or 'drop' (a real refusal: the clean was taken off
+ *  them or the switch is off, 403; it's too old, 400; the clean is gone, 409.
+ *  A crossing is a record, not pay, so a refusal isn't retried).
+ *  401 is not a refusal: a background wake after the session lapsed, or a
+ *  refresh race, answers 401 for a row that will go once signed in again. The
+ *  47 h prune still bounds what waits. */
 export function siteSendOutcome(res: { error: any; status?: number | null }): 'sent' | 'retry' | 'drop' {
   if (!res.error) return 'sent'
   if (!res.status) return 'retry'
-  if (res.status >= 500 || res.status === 408 || res.status === 429) return 'retry'
+  if (res.status >= 500 || res.status === 401 || res.status === 408 || res.status === 429) return 'retry'
   return 'drop'
 }

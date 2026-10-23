@@ -67,6 +67,7 @@ check('no answer (status 0): retry later', R.siteSendOutcome({ error: { message:
 check('no status at all: retry later', R.siteSendOutcome({ error: { message: 'x' } }), 'retry')
 check('server error: retry later', R.siteSendOutcome({ error: { message: 'x' }, status: 503 }), 'retry')
 check('rate limited: retry later', R.siteSendOutcome({ error: { message: 'x' }, status: 429 }), 'retry')
+check('session lapsed on a background wake (401, JWT expired): retry once signed in', R.siteSendOutcome({ error: { code: 'PGRST301' }, status: 401 }), 'retry')
 check('refused (taken off the clean, switch off: RLS 42501 → 403): drop', R.siteSendOutcome({ error: { code: '42501' }, status: 403 }), 'drop')
 check('refused as too old (22023 → 400): drop', R.siteSendOutcome({ error: { code: '22023' }, status: 400 }), 'drop')
 check('refused, the clean is gone (23503 → 409): drop', R.siteSendOutcome({ error: { code: '23503' }, status: 409 }), 'drop')
@@ -119,21 +120,23 @@ const rowKeys = (() => {
 check('the row sends id, tenant, clean, person, kind, time and the fix', rowKeys,
   ['accuracy_m', 'at', 'id', 'job_id', 'kind', 'lat', 'lng', 'tenant_id', 'user_id'])
 const webRepo = process.env.RINSEBASE_WEB_REPO || join(repo, '..', 'rinsebase-app')
+// The switch's migration and the table's.
+const MIG = /_(tenants_site_visits|job_site_events)\.sql$/
 let mig = null
 try {
   const names = execFileSync('git', ['-C', webRepo, 'ls-tree', '--name-only', 'origin/main', 'supabase/migrations/'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().split('\n')
-  const f = names.find(n => /_job_site_events\.sql$/.test(n))
-  if (f) mig = execFileSync('git', ['-C', webRepo, 'show', `origin/main:${f}`], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+  const fs = names.filter(n => MIG.test(n))
+  if (fs.length === 2) mig = fs.map(f => execFileSync('git', ['-C', webRepo, 'show', `origin/main:${f}`], { stdio: ['ignore', 'pipe', 'ignore'] }).toString()).join('\n')
 } catch { /* not on main yet */ }
 if (!mig) {
   try {
     const dir = join(webRepo, 'supabase/migrations')
-    const f = readdirSync(dir).find(n => /_job_site_events\.sql$/.test(n))
-    if (f) mig = readFileSync(join(dir, f), 'utf8')
+    const fs = readdirSync(dir).filter(n => MIG.test(n))
+    if (fs.length === 2) mig = fs.map(f => readFileSync(join(dir, f), 'utf8')).join('\n')
   } catch { /* no web repo here */ }
 }
 if (!mig) {
-  console.log('–  grant parity skipped: no job_site_events migration at', webRepo, '(set RINSEBASE_WEB_REPO)')
+  console.log('–  grant parity skipped: no tenants_site_visits + job_site_events migrations at', webRepo, '(set RINSEBASE_WEB_REPO)')
 } else {
   const g = mig.match(/grant insert \(([^)]*)\) on public\.job_site_events to authenticated/)
   const granted = g ? g[1].split(',').map(s => s.trim()).sort() : null
