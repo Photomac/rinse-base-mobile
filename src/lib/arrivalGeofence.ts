@@ -21,8 +21,8 @@ import { savePunch } from './timeTracker'
 import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti, localeStatic } from './i18n'
-import { siteVisitsOn, markSiteFences, siteFenceKind, onSiteCrossing, flushSiteEvents } from './siteVisits'
-import { SITE_FENCE_STATUSES } from './siteVisitRules'
+import { siteVisitsOn, officeLocation, markSiteFences, siteFenceKind, onSiteCrossing, flushSiteEvents } from './siteVisits'
+import { SITE_FENCE_STATUSES, OFFICE_FENCE } from './siteVisitRules'
 
 const ARRIVAL_TASK = 'arrival-geofence-task'
 const RADIUS_M = 150
@@ -78,7 +78,9 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 // (lib/siteVisits) they get enter AND exit fences on every clean of the day
 // that isn't cancelled, started and completed ones included (they leave a few
 // minutes after Complete), and each crossing is recorded, silently. With it
-// off they get none.
+// off they get none. On a day with any of those, the office (the company's
+// address) gets one too, so leaving it after the last home (the linens) is
+// recorded: MAX_REGIONS homes + the office stays under iOS's 20.
 export async function refreshArrivalGeofences(user: any) {
   try {
     if (!user?.id) return
@@ -114,6 +116,10 @@ export async function refreshArrivalGeofences(user: any) {
       }))
 
     if (regions.length === 0) { await stopArrivalGeofences(); return }
+    const office = site ? await officeLocation(user.tenant_id) : null
+    if (office) {
+      regions.push({ identifier: OFFICE_FENCE, latitude: office.lat, longitude: office.lng, radius: RADIUS_M, notifyOnEnter: true, notifyOnExit: true })
+    }
     // Before registering: the OS reports every fence the phone is already
     // inside as soon as it's registered, and the handler must know what kind
     // of fence it is by then.
@@ -189,7 +195,12 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
   const fence = await siteFenceKind(jobId)
   if (fence !== 'other') {
     if (fence === 'site' && (eventType === Location.GeofencingEventType.Enter || eventType === Location.GeofencingEventType.Exit)) {
-      await onSiteCrossing(jobId, eventType === Location.GeofencingEventType.Enter ? 'enter' : 'exit')
+      // The fence's own centre, for timing a leave from the trail (lib/siteVisits).
+      const r: any = region
+      const centre = r.latitude != null && r.longitude != null
+        ? { lat: Number(r.latitude), lng: Number(r.longitude), radius: Number(r.radius) || RADIUS_M }
+        : null
+      await onSiteCrossing(jobId, eventType === Location.GeofencingEventType.Enter ? 'enter' : 'exit', centre)
     }
     return
   }

@@ -104,9 +104,11 @@ const fnBody = (src, name) => {
 const start = fnBody(dash, 'handleStartDay'), end = fnBody(dash, 'handleEndDay')
 check('Start my day takes a quick GPS fix', /await quickGpsStamp\(\)/.test(start), true)
 check('…written as the shift\'s clock-in stamp', /clock_in_lat: stamp\?\.lat \?\? null, clock_in_lng: stamp\?\.lng \?\? null/.test(start), true)
-check('…keeping the tap as the start, not when the fix came back',
-  start.indexOf('const startedAt = new Date().toISOString()') > -1
-  && start.indexOf('const startedAt = new Date().toISOString()') < start.indexOf('quickGpsStamp()')
+check('…keeping the tap (or the arrival they picked, test-site-visits) as the start, not when the fix came back',
+  start.indexOf('const tappedAt = new Date().toISOString()') > -1
+  && start.indexOf('const tappedAt = new Date().toISOString()') < start.indexOf('quickGpsStamp()')
+  && start.indexOf('const startedAt = fromArrival ?? tappedAt') > -1
+  && start.indexOf('const startedAt = fromArrival ?? tappedAt') < start.indexOf('quickGpsStamp()')
   && /clocked_in_at: startedAt/.test(start), true)
 check('End my day takes a quick GPS fix while the open shift is read', /const stampP = quickGpsStamp\(\)/.test(end) && end.indexOf('stampP = quickGpsStamp()') < end.indexOf('readOpenShift()'), true)
 check('…written as the clock-out stamp', /clock_out_lat: stamp\?\.lat \?\? null, clock_out_lng: stamp\?\.lng \?\? null/.test(end), true)
