@@ -28,6 +28,10 @@ const SYSTEM_NOTES: Record<string, TranslationKey> = {
   'Auto-closed: a new day was started': 'pr_auto_new_day',
   'Auto-closed: another day shift started, ended at its start': 'pr_auto_next_shift',
   'Auto-closed: inside another day shift, ended with it': 'pr_auto_inside_shift',
+  // The company's own close time (Payroll's "Close open days at", rinsebase-app
+  // 20261023163649_day_shift_close_time).
+  'Auto-closed: ended at the last clean of the day': 'pr_auto_last_clean',
+  'Auto-closed: no clean finished, ended at the closing time': 'pr_auto_closing_time',
   'Manual entry by owner': 'pr_manual_owner',
   'Clocked out by owner (left open)': 'pr_clocked_out_owner_open',
 }

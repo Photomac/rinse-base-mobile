@@ -190,7 +190,8 @@ export function buildWeek(p: {
       workedMs: workedMs(entries, p.nowMs),
       pay: pays ? pays[i] ?? null : null,
       sched,
-      notes: Array.from(new Set(entries.map(e => (e.pause_reason || '').trim()).filter(r => /^Auto-closed/i.test(r)))),
+      // each " · " part: a day the office started reads "Day started by … · Auto-closed: …"
+      notes: Array.from(new Set(entries.flatMap(e => (e.pause_reason || '').split(' · ').map(r => r.trim())).filter(r => /^Auto-closed/i.test(r)))),
       state,
     }
   })

@@ -10,7 +10,8 @@
 //   • Spanish questions and exclamations open with ¿ and ¡;
 //   • lib/pauseReason.ts shows the English values the office stores (crew
 //     reasons, auto-close and end-day notes) in the crew's language, and
-//     leaves anything else as written;
+//     leaves anything else as written; the company close time's two notes
+//     are the ones the web migration writes (when that repo is on this machine);
 //   • lib/photoCaption.ts saves a checklist photo under the line's English
 //     text when the crew left the note naming the line, in either language;
 // and, in the screens, that the tab labels go through t() and that times and
@@ -20,7 +21,8 @@
 // AsyncStorage, so it is copied with that one import stubbed out.
 //
 // Usage: node scripts/test-i18n.mjs
-import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync } from 'node:fs'
+//   From a worktree: RINSEBASE_WEB_REPO=/path/to/rinsebase-app node scripts/test-i18n.mjs
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, readdirSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,6 +89,23 @@ check('… and in Portuguese', pauseReasonLabel('Supply run', pt), T.pt.supply_r
 check('… and stays itself in English', pauseReasonLabel('Supply run', enT), 'Supply run')
 check('every crew reason has its label', PAUSE_REASONS.map(r => pauseReasonLabel(r.value, es)), PAUSE_REASONS.map(r => T.es[r.key]))
 check('the nightly auto-close note', pauseReasonLabel('Auto-closed: forgot to clock out', es), T.es.pr_auto_forgot)
+// The company's own close time (rinsebase-app 20261023163649_day_shift_close_time)
+const CLOSE_NOTES = ['Auto-closed: ended at the last clean of the day', 'Auto-closed: no clean finished, ended at the closing time']
+check('the close-time notes read in Spanish and Portuguese, and stay themselves in English', [
+  CLOSE_NOTES.map(n => pauseReasonLabel(n, es)), CLOSE_NOTES.map(n => pauseReasonLabel(n, pt)), CLOSE_NOTES.map(n => pauseReasonLabel(n, enT)),
+], [[T.es.pr_auto_last_clean, T.es.pr_auto_closing_time], [T.pt.pr_auto_last_clean, T.pt.pr_auto_closing_time], CLOSE_NOTES])
+check('… after a note already there', pauseReasonLabel(`Day started by the office · ${CLOSE_NOTES[0]}`, es), `Día iniciado por la oficina · ${T.es.pr_auto_last_clean}`)
+// The web half, when that repo is on this machine: the function writes exactly these.
+const WEB = process.env.RINSEBASE_WEB_REPO || join(repo, '..', 'rinsebase-app')
+const migDir = join(WEB, 'supabase/migrations')
+const closeMig = existsSync(migDir) ? readdirSync(migDir).find(f => /_day_shift_close_time\.sql$/.test(f)) : null
+if (closeMig) {
+  const sql = readFileSync(join(migDir, closeMig), 'utf8')
+  const written = [...sql.matchAll(/then '(Auto-closed: [^']+)'|else '(Auto-closed: [^']+)'/g)].map(m => m[1] || m[2])
+  check('web: the close function writes exactly the notes translated here', written, CLOSE_NOTES)
+} else {
+  console.log(`–  web half skipped (no *_day_shift_close_time.sql under ${migDir})`)
+}
 check('the older Payroll close-out is a fixed note, not a name',
   pauseReasonLabel('Clocked out by owner (left open)', es), T.es.pr_clocked_out_owner_open)
 check('the office ended the day (lib/endDay)', pauseReasonLabel('Day ended by Maria Lopez', es), 'Día terminado por Maria Lopez')

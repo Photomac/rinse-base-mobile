@@ -115,6 +115,10 @@ check('Mon: its pay and paid minutes', d('2026-10-19').pay, { amount: 203.85, mi
 check('Tue: the slip is one day, first in to last out, 2 entries', [d('2026-10-20').firstInMs, d('2026-10-20').lastOutMs, d('2026-10-20').entries.length], [at('2026-10-20', '07:30'), at('2026-10-20', '14:05'), 2])
 check('Wed: a day that ran past midnight belongs to the day it started', d('2026-10-21').lastOutMs, at('2026-10-22', '00:10'))
 check('Wed: the nightly close says so', d('2026-10-21').notes, ['Auto-closed: forgot to clock out'])
+const noted = reason => W.buildWeek({ days: bounds, entries: [shift('2026-10-19', '09:00', '15:10', { pause_reason: reason })], jobs: [], payThrough: [], nowMs: NOW, todayYmd: '2026-10-23' }).days[0].notes
+check('a day the office started still shows its auto-close, that part only (the company close time)',
+  noted('Day started by the office · Auto-closed: ended at the last clean of the day'), ['Auto-closed: ended at the last clean of the day'])
+check('… and a day the office ended shows none', noted('Day ended by Maria Lopez'), [])
 check('Thu: on the schedule, no time, no pay', [d('2026-10-22').entries.length, d('2026-10-22').pay], [0, { amount: 0, minutes: 0 }])
 check('Fri: on the clock since 7:45, 3 hr 1 min so far', [d('2026-10-23').open?.id, Math.floor(d('2026-10-23').workedMs / 60_000)], ['e5', 181])
 check('Sat (ahead): pay unknown', d('2026-10-24').pay, null)
