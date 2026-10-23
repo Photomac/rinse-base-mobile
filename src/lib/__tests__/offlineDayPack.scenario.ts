@@ -1397,6 +1397,117 @@ const scenarios: Record<string, () => Promise<void>> = {
       acks.map(x => `${fmt(x.at)} [${x.v.join('|')}]`).join(' → '))
   },
 
+  // ── Shots still uploading (lib/roomShots) ──────────────────────────────
+  // Celebrity Clean, 2026-10-23: "they take a photo and it disappears". Every
+  // job_photos change on a clean reloads its checklist card, and the card
+  // built the rooms from the server's rows alone: a shot still uploading went
+  // back to "Take photo", and the crew took it again.
+  async roomShotsKeepTheQueue() {
+    setClock(MORNING); seedServer(); seedSession()
+    const c = load(); scaleDeadlines(c)
+    const shot = async () => {
+      const o = open(c, JOBS.red, 'A2')
+      await o.done
+      return o.log.shows.at(-1)?.v?.rooms?.evidence?.find((e: any) => e.id === 'rq1')
+    }
+    const show = (e: any) => JSON.stringify({ url: e?.photo_url, fallback: e?.photo_fallback })
+
+    let e = await shot()
+    ok('nothing taken: the room asks for the shot', !!e && e.photo_url === null, show(e))
+
+    queuePhotos(queuedShot('q1', 'rq1', Date.now()))
+    e = await shot()
+    ok('a shot still uploading stays in its room, from its file on the phone (today\'s folder)',
+      e?.photo_url === localShot('q1') && e?.photo_fallback === storedShot('q1'), show(e))
+
+    // A retake of a stored shot, still uploading: the newer one shows.
+    server.tables.job_photos.push(photoRow('p-old', 'J-red', { photo_requirement_id: 'rq1', photo_url: storedShot('old') }))
+    e = await shot()
+    ok('a retake still uploading replaces the stored shot', e?.photo_url === localShot('q1'), show(e))
+    queuePhotos()
+    e = await shot()
+    ok('with nothing on the phone the stored shot shows', e?.photo_url === storedShot('old') && e?.photo_fallback === null, show(e))
+    server.tables.job_photos = []
+
+    // Two shots of one area on the phone: the newer one.
+    queuePhotos(queuedShot('q2', 'rq1', Date.now() - 60_000), queuedShot('q3', 'rq1', Date.now()), queuedShot('q4', 'rq1', Date.now() - 30_000))
+    e = await shot()
+    ok('two shots of one area still uploading: the newer one', e?.photo_url === localShot('q3'), show(e))
+
+    // It lands while the card's reads are out, and the shots read predates its
+    // row: its file is gone, so its stored copy.
+    queuePhotos(queuedShot('q5', 'rq1', Date.now()))
+    server.slow.job_photos = 150
+    const o = open(c, JOBS.red, 'A2')
+    await sleep(40)
+    queuePhotos()
+    await o.done
+    e = o.log.shows.at(-1)?.v?.rooms?.evidence?.find((x: any) => x.id === 'rq1')
+    ok('a shot that lands while the reads are out still shows (its stored copy)',
+      e?.photo_url === storedShot('q5') && e?.photo_fallback === null, show(e))
+    server.slow = {}
+
+    // What the room leaves out: a shot the server refused three times (the
+    // Complete stops waiting on it too), one whose row is saved, one taken
+    // inside the incident form, another clean's.
+    queuePhotos(
+      queuedShot('r1', 'rq1', Date.now(), { lastErrorKind: 'server', refusals: 3 }),
+      queuedShot('r2', 'rq1', Date.now(), { row_saved: true }),
+      queuedShot('r3', 'rq1', Date.now(), { incident_report_id: 'ir-1' }),
+      queuedShot('r4', 'rq1', Date.now(), { job_id: 'J-chapel' }),
+    )
+    e = await shot()
+    ok('refused three times, row saved, incident-only, another clean: none show', e?.photo_url === null, show(e))
+    queuePhotos(queuedShot('r5', 'rq1', Date.now(), { lastErrorKind: 'server', refusals: 1 }))
+    e = await shot()
+    ok('refused once (a hiccup reads as a refusal too): it still shows', e?.photo_url === localShot('r5'), show(e))
+
+    // Offline, from the saved copy: the shot still shows.
+    queuePhotos(queuedShot('q6', 'rq1', Date.now()))
+    server.mode = 'offline'
+    e = await shot()
+    ok('offline (the saved copy): a shot on the phone shows', e?.photo_url === localShot('q6'), show(e))
+    server.mode = 'online'
+    queuePhotos()
+  },
+
+  // The counter on the Photos button counts a shot still uploading, as its
+  // room does.
+  async photoCountCountsShotsOnThePhone() {
+    setClock(MORNING); seedServer(); seedSession()
+    server.rpc.job_required_photo_ids = () => [{ requirement_id: 'rq1' }]
+    const c = load(); scaleDeadlines(c)
+    const k = counting(c)
+    await k.load(JOBS.red, CREW, { soon: true })
+    ok('nothing taken: 0/1', countStr(k.log.at(-1)?.c) === '0/1 owed=rq1', countStr(k.log.at(-1)?.c))
+    queuePhotos(queuedShot('q1', 'rq1', Date.now()))
+    await k.load(JOBS.red, CREW)
+    ok('a shot still uploading counts: 1/1', countStr(k.log.at(-1)?.c) === '1/1 owed=rq1', countStr(k.log.at(-1)?.c))
+
+    // It lands while the reads are out, and the shots read predates its row.
+    server.slow.job_photos = 150
+    const loading = k.load(JOBS.red, CREW)
+    await sleep(40)
+    queuePhotos()
+    await loading
+    ok('a shot that lands while the reads are out still counts', countStr(k.log.at(-1)?.c) === '1/1 owed=rq1', countStr(k.log.at(-1)?.c))
+    server.slow = {}
+
+    queuePhotos(queuedShot('r1', 'rq1', Date.now(), { lastErrorKind: 'server', refusals: 3 }), queuedShot('r2', 'rq1', Date.now(), { job_id: 'J-chapel' }))
+    await k.load(JOBS.red, CREW)
+    ok('refused three times, or another clean\'s: not counted', countStr(k.log.at(-1)?.c) === '0/1 owed=rq1', countStr(k.log.at(-1)?.c))
+
+    // Offline, a reload keeps the reads on screen: the new shot still counts.
+    queuePhotos()
+    await k.load(JOBS.red, CREW)
+    server.mode = 'offline'
+    queuePhotos(queuedShot('q2', 'rq1', Date.now()))
+    await k.load(JOBS.red, CREW)
+    ok('offline: a shot just taken counts', countStr(k.log.at(-1)?.c) === '1/1 owed=rq1', countStr(k.log.at(-1)?.c))
+    server.mode = 'online'
+    queuePhotos()
+  },
+
   // ── The required-shot counter (lib/requiredPhotoCount) ──────────────────
   // Its reads were uncached and in two rounds (the company's switch, then
   // the requirements, the shots and the owed list): offline the counter was
@@ -1749,6 +1860,17 @@ function photoRow(id: string, job: string, extra: any = {}) {
   return { id, job_id: job, caption: null, checklist_item_id: null, photo_requirement_id: null, check_first_line_id: null,
     photo_url: `https://example.com/${id}.jpg`, created_at: new Date().toISOString(), ...extra }
 }
+/** The phone's photo queue (lib/photoQueue), as stored. */
+const PHOTO_QUEUE = 'rinsebase.photoQueue.v1'
+function queuePhotos(...entries: any[]) { store.set(PHOTO_QUEUE, JSON.stringify(entries)) }
+/** A required shot waiting to upload, saved by an install whose folder has since moved. */
+function queuedShot(id: string, req: string, createdAt: number, extra: any = {}) {
+  return { id, localUri: `file:///old-install/pending_photos/${id}.jpg`, fileName: `${T}/${extra.job_id ?? 'J-red'}/${id}.jpg`,
+    tenant_id: T, job_id: 'J-red', user_id: U, photo_type: 'after', caption: 'Kitchen wide', photo_requirement_id: req,
+    visible_to_client: true, created_at: createdAt, taken_at: createdAt, ...extra }
+}
+const localShot = (id: string) => `file:///harness/pending_photos/${id}.jpg`
+const storedShot = (id: string) => `https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/public/job-photos/${T}/J-red/${id}.jpg`
 function logRow(id: string, job: string, inv: string, name: string, extra: any = {}) {
   return { id, job_id: job, inventory_id: inv, item_name: name, qty_used: 0, qty_remaining: null, needs_restock: false,
     notes: null, incident_id: null, restocked_at: null, client_notified_at: null, created_at: new Date().toISOString(),
