@@ -21,6 +21,8 @@ import { savePunch } from './timeTracker'
 import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti, localeStatic } from './i18n'
+import { siteVisitsOn, markSiteFences, siteFenceKind, onSiteCrossing, flushSiteEvents } from './siteVisits'
+import { SITE_FENCE_STATUSES } from './siteVisitRules'
 
 const ARRIVAL_TASK = 'arrival-geofence-task'
 const RADIUS_M = 150
@@ -65,15 +67,25 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-// Register one enter-only region per still-active assigned job today.
-// Call on Dashboard load / refresh. Fails quiet on every path — arrival
-// prompts are an enhancement; manual clock-in must never depend on them.
+// Register one region per assigned job today. Call on Dashboard load /
+// refresh. Fails quiet on every path — fences are an enhancement; a manual
+// clock-in or Start must never depend on them.
+//
+// Per-job companies: enter-only fences on cleans not started yet, for the
+// arrival clock-in prompt / auto punch below.
+// Day-shift companies have no per-job clock, so prompting them to "clock in"
+// per property would be wrong. With the company's arrive/leave switch on
+// (lib/siteVisits) they get enter AND exit fences on every clean of the day
+// that isn't cancelled, started and completed ones included (they leave a few
+// minutes after Complete), and each crossing is recorded, silently. With it
+// off they get none.
 export async function refreshArrivalGeofences(user: any) {
   try {
     if (!user?.id) return
-    // Daily-shift crews have no per-job clock — prompting them to "clock in"
-    // per property would be wrong. (Phase 3 may log bare arrival events.)
-    if (user._timeMode === 'daily') { await stopArrivalGeofences(); return }
+    const site = user._timeMode === 'daily'
+    // Crossings recorded in a dead zone go up now.
+    if (site) flushSiteEvents().catch(() => {})
+    if (site && !(await siteVisitsOn(user.tenant_id))) { await stopArrivalGeofences(); return }
     // Geofencing needs "Always"; the clock-in moment owns that escalation.
     if ((await getBackgroundLocationStatus()) !== 'granted') return
 
@@ -84,7 +96,7 @@ export async function refreshArrivalGeofences(user: any) {
       .from('jobs')
       .select('id, scheduled_start, job_assignments!inner(user_id), client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision)')
       .eq('job_assignments.user_id', user.id)
-      .in('status', ['pending_approval', 'scheduled', 'en_route'])
+      .in('status', site ? SITE_FENCE_STATUSES : ['pending_approval', 'scheduled', 'en_route'])
       .gte('scheduled_start', dayStart.toISOString())
       .lte('scheduled_start', dayEnd.toISOString())
       .order('scheduled_start')
@@ -98,10 +110,14 @@ export async function refreshArrivalGeofences(user: any) {
         longitude: Number(j.client_addresses.lng),
         radius: RADIUS_M,
         notifyOnEnter: true,
-        notifyOnExit: false,
+        notifyOnExit: site,
       }))
 
     if (regions.length === 0) { await stopArrivalGeofences(); return }
+    // Before registering: the OS reports every fence the phone is already
+    // inside as soon as it's registered, and the handler must know what kind
+    // of fence it is by then.
+    await markSiteFences(site ? regions.map(r => r.identifier as string) : null)
     // Registering re-fires Enter for every region the phone is already inside:
     // expo-location starts each region over as "unknown" and asks the OS for
     // its state (iOS requestStateForRegion, Android INITIAL_TRIGGER_ENTER).
@@ -116,7 +132,7 @@ export async function refreshArrivalGeofences(user: any) {
 }
 
 const regionKey = (r: any) =>
-  `${r.identifier}@${Number(r.latitude).toFixed(6)},${Number(r.longitude).toFixed(6)}/${Number(r.radius)}`
+  `${r.identifier}@${Number(r.latitude).toFixed(6)},${Number(r.longitude).toFixed(6)}/${Number(r.radius)}${r.notifyOnExit ? '+exit' : ''}`
 
 // Is exactly this set already being monitored? Any doubt reads as "no", which
 // registers again — the behaviour before this check existed.
@@ -133,6 +149,7 @@ async function sameRegionsRegistered(regions: Location.LocationRegion[]): Promis
 const inFlight = new Set<string>()
 
 export async function stopArrivalGeofences() {
+  await markSiteFences(null)
   try {
     if (await TaskManager.isTaskRegisteredAsync(ARRIVAL_TASK)) {
       await Location.stopGeofencingAsync(ARRIVAL_TASK)
@@ -163,8 +180,20 @@ export async function clearPendingArrival(jobId: string) {
 TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
   if (error || !data) return
   const { eventType, region } = data as { eventType: Location.GeofencingEventType; region: Location.LocationRegion }
-  if (eventType !== Location.GeofencingEventType.Enter || !region?.identifier) return
+  if (!region?.identifier) return
   const jobId = region.identifier
+
+  // Day-shift arrive/leave fences: record the crossing (lib/siteVisits) and
+  // nothing else: no prompt, no time entry, no status change. A fence left
+  // over from an earlier day records nothing.
+  const fence = await siteFenceKind(jobId)
+  if (fence !== 'other') {
+    if (fence === 'site' && (eventType === Location.GeofencingEventType.Enter || eventType === Location.GeofencingEventType.Exit)) {
+      await onSiteCrossing(jobId, eventType === Location.GeofencingEventType.Enter ? 'enter' : 'exit')
+    }
+    return
+  }
+  if (eventType !== Location.GeofencingEventType.Enter) return
 
   // One run per job at a time. The OS can deliver several Enters for the same
   // region within milliseconds (one per registration — see
