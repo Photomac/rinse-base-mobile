@@ -1,4 +1,5 @@
-// "My week": a crew member's own week, opened from Home's earnings card.
+// "My week": a crew member's own week, opened from Home's earnings card, or
+// the Pay tab in Mileage's slot at a day-shift company (lib/teamDay).
 //
 // CKS Perfections asked on 2026-10-08 with Homebase screenshots: each day's
 // pay, hours and clock-in/out times ("$203.85 for 7 hr 33 min, 7:57 AM –
@@ -37,7 +38,7 @@ function boundsOf(start: string): DayBounds[] {
   }))
 }
 
-export function MyWeekScreen({ user, onBack }: { user: any; onBack?: () => void }) {
+export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigation?: any; onBack?: () => void }) {
   const { t, lang } = useLang()
   const locale = localeFor(lang)
 
@@ -124,6 +125,9 @@ export function MyWeekScreen({ user, onBack }: { user: any; onBack?: () => void 
     return () => sub.remove()
   }, [load])
   useEffect(() => onOutboxDrained(() => { load() }), [load])
+  // As a tab it stays mounted: re-read each time it's opened (a clock-out
+  // made on the job screen since).
+  useEffect(() => navigation?.addListener?.('focus', () => { load() }), [navigation, load])
 
   // A running clock ticks.
   useEffect(() => {

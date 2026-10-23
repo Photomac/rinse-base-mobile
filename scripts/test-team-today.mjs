@@ -232,6 +232,12 @@ check('Team takes Mileage\'s tab for a day-shift office only', [
   T.teamTabReplacesMileage({ role: 'owner', _timeMode: 'daily' }), T.teamTabReplacesMileage({ role: 'manager', _timeMode: 'daily' }),
   T.teamTabReplacesMileage({ role: 'owner', _timeMode: 'per_job' }), T.teamTabReplacesMileage({ role: 'cleaner', _timeMode: 'daily' })],
   [true, true, false, false])
+check('My week takes it for a day-shift company\'s crew (every non-office role)',
+  roles.map(role => T.weekTabReplacesMileage({ role, _timeMode: 'daily' })), [false, false, false, true, true, true, true, true, true, true])
+check('…never at a per-job company (crew keep Mileage)',
+  roles.map(role => T.weekTabReplacesMileage({ role, _timeMode: 'per_job' })).concat(T.weekTabReplacesMileage({ role: 'cleaner' })), Array(roles.length + 1).fill(false))
+check('the slot is Team, My week or Mileage, never two',
+  ['daily', 'per_job', null].flatMap(_timeMode => roles.map(role => [T.teamTabReplacesMileage({ role, _timeMode }), T.weekTabReplacesMileage({ role, _timeMode })].filter(Boolean).length)).filter(n => n > 1), [])
 
 // ── The screens ─────────────────────────────────────────────────────────────
 const read = p => readFileSync(join(repo, p), 'utf8')
@@ -261,8 +267,10 @@ check('23505 on Start their day says who is already on the clock', /error\?\.cod
 check('fix buttons only for the owner; Start their day only today, day-shift', /canFix && dailyMode && isToday/.test(screen) && /\{canFix && \(/.test(screen), true)
 check('crew can\'t open it from Profile, and the Team tab follows teamTabReplacesMileage',
   [/onOpenTeam=\{!teamTab && canSeeTeam\(user\.role\)/.test(app), /const teamTab = teamTabReplacesMileage\(user\)/.test(app), /\{teamTab \? \(/.test(app)], [true, true, true])
-check('Mileage is still reachable for a day-shift office (Profile + Home\'s Log miles)',
-  [/onOpenMileage=\{teamTab \?/.test(app), /screen === 'mileage' && teamTab/.test(app), /onOpenMileage &&/.test(profile)], [true, true, true])
+check('Mileage is still reachable at a day-shift company, office and crew (Profile + Home\'s Log miles)',
+  [/const mileageAside = teamTab \|\| weekTab/.test(app), /onOpenMileage=\{mileageAside \?/.test(app), /screen === 'mileage' && mileageAside/.test(app), /onOpenMileage &&/.test(profile)], [true, true, true, true])
+check('the Mileage tab is only there when neither Team nor My week took its slot',
+  /\{teamTab \? \([\s\S]*?name="Team"[\s\S]*?\) : weekTab \? \([\s\S]*?name="Week"[\s\S]*?\) : \([\s\S]*?name="Mileage"/.test(app), true)
 
 const i18n = read('src/lib/i18n.ts')
 const block = lang => { const a = i18n.indexOf(`\n  ${lang}: {`); const rest = i18n.slice(a + 5); const b = rest.search(/\n  [a-z]{2}: \{|\n\}\n/); return rest.slice(0, b) }

@@ -214,14 +214,19 @@ check('still to come: this week only, the estimate from the person\'s own pay ty
   && !/user_private_details|hourly_rate'/.test(code(screen) + code(reads)), true)
 
 const app = read('App.tsx'), dash = read('src/screens/DashboardScreen.tsx')
-check('App opens My week full screen', /subScreen === 'week'/.test(app) && /<MyWeekScreen user=\{user\} onBack=\{\(\) => setSubScreen\(null\)\} \/>/.test(app) && /if \(screen === 'week'\) \{ setSubScreen\('week'\); return \}/.test(app), true)
-check('Home\'s earnings card opens it', /onPress=\{\(\) => onNavigate\('week'\)\}/.test(dash) && /\{t\('week_open'\)\}/.test(dash), true)
+check('App opens My week full screen where it isn\'t a tab', /subScreen === 'week'/.test(app) && /<MyWeekScreen user=\{user\} onBack=\{\(\) => setSubScreen\(null\)\} \/>/.test(app) && /if \(screen === 'week' && !weekTab\) \{ setSubScreen\('week'\); return \}/.test(app), true)
+check('…and as the Pay tab at a day-shift company (no back button, the tab\'s navigation)',
+  /const weekTab = weekTabReplacesMileage\(user\)/.test(app) && /name="Week"[\s\S]{0,200}tabBarLabel: t\('tab_pay'\)/.test(app)
+  && /<MyWeekScreen key=\{user\?\.id\} user=\{user\} navigation=\{navigation\} \/>/.test(app), true)
+check('Home\'s earnings card opens it (the Pay tab where there is one)', /onPress=\{\(\) => onNavigate\('week'\)\}/.test(dash) && /\{t\('week_open'\)\}/.test(dash) && /week: 'Week'/.test(app), true)
+check('as a tab it re-reads each time it\'s opened', /navigation\?\.addListener\?\.\('focus', \(\) => \{ load\(\) \}\)/.test(screen), true)
 
 // ── Strings ─────────────────────────────────────────────────────────────────
 const i18n = read('src/lib/i18n.ts')
 const block = lang => { const a = i18n.indexOf(`\n  ${lang}: {`); const rest = i18n.slice(a + 5); const b = rest.search(/\n  [a-z]{2}: \{|\n\}\n/); return rest.slice(0, b) }
 const used = new Set([...screen.matchAll(/\bt\('([a-z0-9_]+)'\)/g), ...dash.matchAll(/\bt\('(week_[a-z0-9_]+)'\)/g)].map(m => m[1]))
 for (const k of ['week_more', 'week_less', 'week_load_failed']) used.add(k) // picked by a ternary, or read through tRef
+used.add('tab_pay') // the tab's label, in App.tsx
 for (const lang of ['en', 'es', 'pt']) {
   const b = block(lang)
   const missing = [...used].filter(k => !new RegExp(`\\n\\s+${k}:`).test(b))
