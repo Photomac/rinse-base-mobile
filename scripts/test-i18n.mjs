@@ -89,7 +89,7 @@ check('… and in Portuguese', pauseReasonLabel('Supply run', pt), T.pt.supply_r
 check('… and stays itself in English', pauseReasonLabel('Supply run', enT), 'Supply run')
 check('every crew reason has its label', PAUSE_REASONS.map(r => pauseReasonLabel(r.value, es)), PAUSE_REASONS.map(r => T.es[r.key]))
 check('the nightly auto-close note', pauseReasonLabel('Auto-closed: forgot to clock out', es), T.es.pr_auto_forgot)
-// The company's own close time (rinsebase-app 20261023163649_day_shift_close_time)
+// The company's own close time (rinsebase-app 20261023170814_day_shift_close_time)
 const CLOSE_NOTES = ['Auto-closed: ended at the last clean of the day', 'Auto-closed: no clean finished, ended at the closing time']
 check('the close-time notes read in Spanish and Portuguese, and stay themselves in English', [
   CLOSE_NOTES.map(n => pauseReasonLabel(n, es)), CLOSE_NOTES.map(n => pauseReasonLabel(n, pt)), CLOSE_NOTES.map(n => pauseReasonLabel(n, enT)),
