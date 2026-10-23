@@ -15,6 +15,7 @@ import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { byCrewDayOrder } from './jobOrder'
 import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
+import { noteTrail } from './siteVisits'
 
 const LOCATION_TASK = 'crew-location-task'
 const PING_INTERVAL = 5 * 60 * 1000 // 5 minutes
@@ -462,6 +463,11 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
       return
     }
 
+    // Every position in the batch, each with the time it was taken, for
+    // timing a leave from a home (lib/siteVisits; only while the day-shift
+    // arrive/leave fences are up). Never in the way of the map.
+    noteTrail(locations).catch(() => {})
+
     // Update crew location
     await supabase.from('crew_locations').upsert({
       tenant_id: user.tenant_id,
@@ -504,6 +510,7 @@ async function pingLocation(user: any) {
     const loc = await Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced,
     })
+    noteTrail([loc]).catch(() => {})
 
     const jobId = activeJob?.id || null
     const status = activeJob ? 'active' : 'idle'
