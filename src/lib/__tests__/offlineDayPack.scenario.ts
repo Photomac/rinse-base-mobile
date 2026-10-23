@@ -118,7 +118,7 @@ function seedServer() {
   server.tables = {
     jobs,
     client_addresses: Object.values(ADDR).map(addressRow),
-    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true }],
+    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true, crew_supply_counts: true }],
     job_assignments: jobs.flatMap(j => j.crew.map((c: any) => ({ job_id: j.id, user_id: c.user_id, is_lead: c.is_lead, users: { id: c.user_id, full_name: NAMES[c.user_id] } }))),
     address_checklist_templates: [
       { id: 'tp1', address_id: 'A2', room: 'Kitchen', title: 'Wipe counters', sort_order: 1, requires_photo: false },
@@ -147,7 +147,7 @@ function seedServer() {
       { id: 'inv-tp', address_id: 'A2', item_name: 'Toilet paper', category: 'Bathroom', par_level: 6, unit: 'roll', room_id: null, sort_order: 2 },
     ],
     job_inventory_log: [
-      { id: 'lg1', job_id: 'J-prev', inventory_id: 'inv-tp', item_name: 'Toilet paper', qty_used: 4, qty_remaining: 1, needs_restock: true, notes: null, incident_id: null, restocked_at: null, client_notified_at: null, created_at: at('2026-10-10T00:00:00Z'), jobs: { address_id: 'A2' } },
+      { id: 'lg1', job_id: 'J-prev', inventory_id: 'inv-tp', item_name: 'Toilet paper', qty_used: 4, qty_remaining: 1, needs_restock: true, notes: null, incident_id: null, restocked_at: null, client_notified_at: null, created_at: at('2026-10-10T00:00:00Z'), jobs: { address_id: 'A2' }, address_inventory: { address_id: 'A2' } },
     ],
     turnover_linen_extras: [{ job_id: 'J-red', inventory_id: 'inv-towel', extra_qty: 2 }],
     // Check first at Red Rock Casita (rinse-base-app 20261015130534): two lines,
@@ -213,7 +213,8 @@ function project(row: any, select: string): any {
       for (const [k, v] of Object.entries(row)) if (v === null || typeof v !== 'object') out[k] = v
       continue
     }
-    const m = /^(?:(\w+):)?(\w+)(?:!\w+)?(?:\(([\s\S]*)\))?$/.exec(item)
+    // alias:table!hint!inner(cols): a hint, !inner, or both
+    const m = /^(?:(\w+):)?(\w+)(?:!\w+)*(?:\(([\s\S]*)\))?$/.exec(item)
     if (!m) throw new Error(`mock: can't read select item ${item}`)
     const [, alias, name, inner] = m
     if (inner !== undefined) {
@@ -497,6 +498,8 @@ const scenarios: Record<string, () => Promise<void>> = {
       // Its Supplies screen (JobInventoryScreen)
       invItems: R.inventoryItemsRead(addrId), invLog: R.inventoryLogRead(job.id),
       invRooms: R.inventoryRoomsRead(addrId), invExtras: R.linenExtrasRead(job.id),
+      // …what's already flagged low at the home, and the company's counts switch
+      invOpen: R.openRestockRead(addrId), scten: R.supplyCountsTenantRead(T),
       // Its Check first card and the local check before Complete
       cften: R.checkFirstTenantRead(T), cflines: R.checkFirstLinesRead(addrId),
       cfticks: R.checkFirstTicksRead(job.id), cfphotos: R.checkFirstPhotosRead(job.id), cfstart: R.checkFirstStartRead(job.id),
@@ -520,6 +523,9 @@ const scenarios: Record<string, () => Promise<void>> = {
     ok('the next arrival', (got.nextarr.data || []).some((r: any) => r.guest_name === 'Rivera'))
     ok('"Stop 1 of 2"', (got.route.data || []).length === 2, ids(got.route.data || []))
     ok('supplies, with the office\'s extra linen', (got.invItems.data || []).length === 2 && got.invExtras.data?.[0]?.extra_qty === 2)
+    ok('supplies: what an earlier visit flagged low here (toilet paper), and the counts switch',
+      (got.invOpen.data || []).map((r: any) => `${r.job_id}:${r.inventory_id}`).join('|') === 'J-prev:inv-tp' && got.scten.data?.crew_supply_counts === true,
+      JSON.stringify(got.invOpen.data))
     ok('Check first: the lines in the office\'s order, not the archived one, the tick and who made it, the company\'s switch',
       (got.cflines.data || []).map((l: any) => l.body).join('|') === 'Water all the plants|Spa photo' &&
       got.cfticks.data?.[0]?.line_id === 'cf1' && got.cfticks.data?.[0]?.users?.full_name === 'Nichole' &&

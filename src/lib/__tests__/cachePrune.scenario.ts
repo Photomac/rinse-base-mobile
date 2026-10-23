@@ -88,7 +88,7 @@ const STOP_KEYS = (J: string) => [
 ]
 const PROPERTY_KEYS = (A: string) => [
   `tmpl:${A}`, `rooms:${A}`, `addrmode:${A}`, `preq:${A}`, `propmeta:${A}`,
-  `inv:items:${A}`, `inv:rooms:${A}`, `wttrash:${A}`, `nextarr:addr:${A}`, `cflines:${A}`,
+  `inv:items:${A}`, `inv:rooms:${A}`, `inv:open:${A}`, `wttrash:${A}`, `nextarr:addr:${A}`, `cflines:${A}`,
 ]
 // Per user / per company / per day, and the phone's other stores: never touched.
 const OTHER_KEYS = [
@@ -176,6 +176,8 @@ const scenarios: Record<string, () => Promise<void>> = {
       inventoryLogRead: () => R.inventoryLogRead(J),
       inventoryRoomsRead: () => R.inventoryRoomsRead(A),
       linenExtrasRead: () => R.linenExtrasRead(J),
+      openRestockRead: () => R.openRestockRead(A),
+      supplyCountsTenantRead: () => R.supplyCountsTenantRead(T),
       walkthroughLinesRead: () => R.walkthroughLinesRead(J),
       walkthroughPhotosRead: () => R.walkthroughPhotosRead(J),
       trashDaysRead: () => R.trashDaysRead(A),

@@ -25,7 +25,8 @@
 // The reads are the shared builders in lib/jobReads, the ones the day pack
 // saves (scripts/test-offline-day-pack.mjs checks this file too).
 import { readSoon, type SoonRead } from './dataCache'
-import { inventoryItemsRead, inventoryLogRead, inventoryRoomsRead, linenExtrasRead } from './jobReads'
+import { inventoryItemsRead, inventoryLogRead, inventoryRoomsRead, linenExtrasRead, openRestockRead, supplyCountsTenantRead } from './jobReads'
+import { openFlagsByItem, crewCountsFrom, type ItemFlag } from './restockView'
 import { overlayPending } from './outbox'
 import { readLogRows, type InventoryLine, type LogRowRead, type SavedLogRow } from './inventoryLogSave'
 import { lastTripFailed } from './netFetch'
@@ -43,13 +44,17 @@ export interface SuppliesView {
   lines: Record<string, InventoryLine>
   /** What the database holds per line: the baseline the save diffs against. */
   saved: Record<string, SavedLogRow>
+  /** inventory_id → flagged low here on an earlier visit, not restocked yet. */
+  open: Record<string, ItemFlag>
+  /** The company lets the crew add counts (tenants.crew_supply_counts). */
+  crewCounts: boolean
   /** Showing the phone's saved copy, not live data. */
   offline: boolean
 }
 
 const list = (x: any): any[] => (Array.isArray(x) ? x : [])
 
-async function viewOf(job: any, [inv, log, rooms, extras]: { data: any; fromCache: boolean }[]): Promise<SuppliesView> {
+async function viewOf(job: any, [inv, log, rooms, extras, open, counts]: { data: any; error?: any; fromCache: boolean }[]): Promise<SuppliesView> {
   // A save still waiting in the outbox shows as saved, not as the old rows.
   const logRows = await overlayPending('job_inventory_log', list(log.data), v => v.job_id === job.id)
   const { lines, saved } = readLogRows(logRows as LogRowRead[])
@@ -58,6 +63,8 @@ async function viewOf(job: any, [inv, log, rooms, extras]: { data: any; fromCach
     rooms: list(rooms.data),
     extras: Object.fromEntries(list(extras.data).map((x: any) => [x.inventory_id, x.extra_qty])),
     lines, saved,
+    open: openFlagsByItem(open.data, job.id),
+    crewCounts: crewCountsFrom(counts.data, counts.error),
     offline: inv.fromCache || log.fromCache,
   }
 }
@@ -72,7 +79,7 @@ export function rebaseLines(live: Record<string, InventoryLine>, current: Record
 
 /** Read the screen. `fresh` resolves to the view once late live answers are
  *  in, or to null when nothing newer came. */
-export async function readSupplies(job: any, addrId: string, wait: number):
+export async function readSupplies(job: any, addrId: string, wait: number, tenantId: string = job?.tenant_id):
   Promise<{ first: SuppliesView; fresh: Promise<SuppliesView | null> }> {
   const reads: SoonRead[] = await Promise.all([
     readSoon(inventoryItemsRead(addrId), wait),
@@ -83,6 +90,11 @@ export async function readSupplies(job: any, addrId: string, wait: number):
     // this the phone would say "6/6 packed" on a turnover the office says
     // needs four more, and the crew would leave short.
     readSoon(linenExtrasRead(job.id), wait),
+    // What's already flagged low at the home on earlier visits, and whether
+    // the crew may add counts (lib/restockView).
+    readSoon(openRestockRead(addrId), wait),
+    // The company: the signed-in person's (a job row may not carry it), the key the day pack saves.
+    readSoon(supplyCountsTenantRead(tenantId), wait),
   ])
   const first = await viewOf(job, reads)
   const fresh = reads.some(r => r.late)
@@ -107,12 +119,12 @@ export function suppliesCard(ui: { show: (v: SuppliesView, late: boolean) => voi
   return {
     /** The crew is saving the list. */
     saving() { saves++ },
-    async load(job: any, addrId: string): Promise<void> {
+    async load(job: any, addrId: string, tenantId: string = job?.tenant_id): Promise<void> {
       const seq = ++loads
       const savesAtStart = saves
       ui.setLoading(true)
       try {
-        const { first, fresh } = await readSupplies(job, addrId, lastTripFailed() ? 0 : SUPPLIES_WAIT.ms)
+        const { first, fresh } = await readSupplies(job, addrId, lastTripFailed() ? 0 : SUPPLIES_WAIT.ms, tenantId)
         if (seq !== loads) return
         ui.show(first, false)
         ui.setLoading(false)

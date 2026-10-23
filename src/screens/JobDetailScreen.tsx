@@ -1954,7 +1954,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 <Text style={styles.actionChipLabel} numberOfLines={1}>{t('staging_photos')} ({stagingPhotos.length})</Text>
               </TouchableOpacity>
             )}
-            {!isTask && (
+            {/* Cleans and inspections: the home's supplies, and what's
+                already flagged low there (CKS, 2026-10-22: "visible to
+                cleaners AND inspectors while they're standing in the home"). */}
+            {(!isTask || isInspection) && (
               <TouchableOpacity style={styles.actionChip} onPress={() => setShowInventory(true)}>
                 <Text style={styles.actionChipIcon}>📦</Text>
                 <Text style={styles.actionChipLabel} numberOfLines={1}>{t('supplies')}</Text>
