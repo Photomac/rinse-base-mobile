@@ -14,7 +14,7 @@ import { boardQuery, boardJobsFor } from './src/lib/openJobs'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { TeamTodayScreen } from './src/screens/TeamTodayScreen'
 import { MyWeekScreen } from './src/screens/MyWeekScreen'
-import { teamTabReplacesMileage, canSeeTeam } from './src/lib/teamDay'
+import { teamTabReplacesMileage, weekTabReplacesMileage, canSeeTeam } from './src/lib/teamDay'
 import { ProfileScreen } from './src/screens/ProfileScreen'
 import { JobDetailScreen } from './src/screens/JobDetailScreen'
 import { SOSScreen } from './src/screens/SOSScreen'
@@ -137,7 +137,7 @@ function AppInner() {
   const [showSOS, setShowSOS] = useState(false)
   // Mileage or Team today opened full screen from Profile (or Home's Log
   // miles): whichever of the two isn't a tab for this person. My week opens
-  // from Home's earnings card.
+  // from Home's earnings card when it isn't their tab.
   const [subScreen, setSubScreen] = useState<'mileage' | 'team' | 'week' | null>(null)
   const [activeChannel, setActiveChannel] = useState<any>(null)
   const lastAuthId = useRef<string | null>(null)
@@ -513,8 +513,11 @@ function AppInner() {
   }
 
   // The office of a day-shift company gets the day's clock roster in Mileage's
-  // slot; Mileage moves under Profile (lib/teamDay). Crew never see Team.
+  // slot, and its crew get My week there; either way Mileage moves under
+  // Profile (lib/teamDay). Crew never see Team.
   const teamTab = teamTabReplacesMileage(user)
+  const weekTab = weekTabReplacesMileage(user)
+  const mileageAside = teamTab || weekTab
 
   return (
     <NavigationContainer
@@ -546,10 +549,11 @@ function AppInner() {
               user={user}
               onJobPress={setSelectedJob}
               onNavigate={(screen: string) => {
-                // No Mileage tab for the office of a day-shift company: Log miles opens it full screen.
-                if (screen === 'mileage' && teamTab) { setSubScreen('mileage'); return }
-                if (screen === 'week') { setSubScreen('week'); return }
-                const tabMap: Record<string, string> = { dashboard: 'Dashboard', jobs: 'Schedule', schedule: 'Schedule', mileage: 'Mileage', profile: 'Profile' }
+                // No Mileage tab at a day-shift company: Log miles opens it full screen.
+                if (screen === 'mileage' && mileageAside) { setSubScreen('mileage'); return }
+                // The earnings card goes to the Pay tab where there is one.
+                if (screen === 'week' && !weekTab) { setSubScreen('week'); return }
+                const tabMap: Record<string, string> = { dashboard: 'Dashboard', jobs: 'Schedule', schedule: 'Schedule', mileage: 'Mileage', week: 'Week', profile: 'Profile' }
                 if (tabMap[screen]) navigation.navigate(tabMap[screen])
               }}
               onSOS={() => setShowSOS(true)}
@@ -588,6 +592,13 @@ function AppInner() {
           >
             {({ navigation }: any) => <TeamTodayScreen key={user?.id} user={user} navigation={navigation} />}
           </Tab.Screen>
+        ) : weekTab ? (
+          <Tab.Screen
+            name="Week"
+            options={{ tabBarLabel: t('tab_pay'), tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>💰</Text> }}
+          >
+            {({ navigation }: any) => <MyWeekScreen key={user?.id} user={user} navigation={navigation} />}
+          </Tab.Screen>
         ) : (
           <Tab.Screen
             name="Mileage"
@@ -617,7 +628,7 @@ function AppInner() {
             <ProfileScreen
               key={user?.id}
               user={user}
-              onOpenMileage={teamTab ? () => setSubScreen('mileage') : undefined}
+              onOpenMileage={mileageAside ? () => setSubScreen('mileage') : undefined}
               onOpenTeam={!teamTab && canSeeTeam(user.role) ? () => setSubScreen('team') : undefined}
             />
           )}

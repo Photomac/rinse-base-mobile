@@ -830,6 +830,7 @@ export const translations = {
     // Bottom tabs (Schedule, Open jobs and Profile use schedule / open_jobs_tab / profile)
     tab_home: 'Home',
     tab_mileage: 'Mileage',
+    tab_pay: 'Pay',
     tab_chat: 'Chat',
     // Local pushes while the app is open (App.tsx)
     notif_job_assigned_title: 'New job assigned',
@@ -1690,6 +1691,7 @@ export const translations = {
     // Bottom tabs (Schedule, Open jobs and Profile use schedule / open_jobs_tab / profile)
     tab_home: 'Inicio',
     tab_mileage: 'Millas',
+    tab_pay: 'Pago',
     tab_chat: 'Chat',
     // Local pushes while the app is open (App.tsx)
     notif_job_assigned_title: 'Nuevo trabajo asignado',
@@ -2550,6 +2552,7 @@ export const translations = {
     // Bottom tabs (Schedule, Open jobs and Profile use schedule / open_jobs_tab / profile)
     tab_home: 'Início',
     tab_mileage: 'Milhas',
+    tab_pay: 'Pagamento',
     tab_chat: 'Chat',
     // Local pushes while the app is open (App.tsx)
     notif_job_assigned_title: 'Novo serviço para você',

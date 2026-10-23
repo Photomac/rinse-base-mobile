@@ -76,6 +76,15 @@ export function teamTabReplacesMileage(user: { role?: string | null; _timeMode?:
   return canSeeTeam(user.role) && user._timeMode === 'daily'
 }
 
+/** The crew of a day-shift company get My week ("Pay") in that slot instead:
+ *  their driving is paid on the clock, and their own hours and pay are what
+ *  they ask the office about every week (CKS, Catherine + Nichole, 2026-10-22).
+ *  Mileage moves under Profile for them too. A per-job company's crew keep
+ *  Mileage and open My week from Home's earnings card. */
+export function weekTabReplacesMileage(user: { role?: string | null; _timeMode?: string | null }): boolean {
+  return !canSeeTeam(user.role) && user._timeMode === 'daily'
+}
+
 export type RosterRow = {
   personId: string
   name: string
