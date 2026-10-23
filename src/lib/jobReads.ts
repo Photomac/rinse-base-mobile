@@ -345,6 +345,29 @@ export const linenExtrasRead = (jobId: string): CacheRead => ({
     .eq('job_id', jobId),
 })
 
+/** What's flagged low at this home and not restocked yet, on any visit:
+ *  the Supplies screen's "already flagged low here" (lib/restockView).
+ *  Filtered through the property's catalog, which every signed-in user of
+ *  the company reads (crew can't see every clean in jobs). */
+export const openRestockRead = (addrId: string): CacheRead => ({
+  key: `inv:open:${addrId}`,
+  q: () => supabase.from('job_inventory_log')
+    .select('id, job_id, inventory_id, item_name, notes, created_at, address_inventory!job_inventory_log_inventory_id_fkey!inner(address_id)')
+    .eq('needs_restock', true)
+    .eq('address_inventory.address_id', addrId)
+    .order('created_at', { ascending: false })
+    .limit(100),
+})
+
+/** The company's switch (tenants.crew_supply_counts): may the crew add
+ *  counts, or only Mark low. Its own read, so a database without the column
+ *  fails this one alone and the screen keeps its counts. */
+export const supplyCountsTenantRead = (tenantId: string): CacheRead => ({
+  key: `scten:${tenantId}`,
+  q: () => supabase.from('tenants')
+    .select('crew_supply_counts').eq('id', tenantId).maybeSingle(),
+})
+
 // ── The inspection walkthrough (WalkthroughChecklist) ───────────────────────
 
 export const walkthroughLinesRead = (jobId: string): CacheRead => ({
@@ -463,7 +486,8 @@ export function cacheKeyOwner(key: string): { job: string } | { property: string
   const [kind, a, b] = key.split(':')
   const job = (id?: string) => (id ? { job: id } : null)
   const property = (id?: string) => (id ? { property: id } : null)
-  if (kind === 'inv') return a === 'log' || a === 'extras' ? job(b) : a === 'items' || a === 'rooms' ? property(b) : null
+  // inv:open:<property> is what's flagged low at the home (openRestockRead)
+  if (kind === 'inv') return a === 'log' || a === 'extras' ? job(b) : a === 'items' || a === 'rooms' || a === 'open' ? property(b) : null
   if (kind === 'nextarr') return a === 'addr' ? property(b) : a === 'ten' ? null : job(a)
   if (JOB_KEYS.has(kind)) return job(a)
   if (PROPERTY_KEYS.has(kind)) return property(a)
@@ -524,9 +548,11 @@ export function jobPackReads(job: any, user: any): PackRead[] {
   // What the last inspection here found and no inspection has cleared since
   // (the crew card at the top of the clean).
   if (!isTask && addrId) reads.push(carriedLinesRead(job.id))
-  // The Supplies screen (cleans only).
-  if (!isTask && addrId) {
-    reads.push(inventoryItemsRead(addrId), inventoryLogRead(job.id), inventoryRoomsRead(addrId), linenExtrasRead(job.id))
+  // The Supplies screen (cleans and inspections), with what's already
+  // flagged low at the home and the company's counts switch.
+  if ((!isTask || job.job_type === 'inspection') && addrId) {
+    reads.push(inventoryItemsRead(addrId), inventoryLogRead(job.id), inventoryRoomsRead(addrId), linenExtrasRead(job.id),
+      openRestockRead(addrId), supplyCountsTenantRead(user.tenant_id))
   }
   // loadCheckFirst (cleans only): the clean's ticks, line photos and start are
   // read only at a property that has lines.

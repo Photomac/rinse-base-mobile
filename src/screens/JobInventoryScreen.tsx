@@ -9,7 +9,10 @@ import { suppliesCard, rebaseLines, type SuppliesView } from '../lib/suppliesCar
 import { inventorySaveWrites } from '../lib/inventoryLogOutbox'
 import { useLang } from '../contexts/LangContext'
 import { tv } from '../lib/vocab'
-import { ti } from '../lib/i18n'
+import { ti, localeFor } from '../lib/i18n'
+import { fmtDate } from '../lib/timezone'
+// What's already flagged low at the home, and who sees counts.
+import { countsAllowed, type ItemFlag } from '../lib/restockView'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const NAVY = SLATE_DARK
@@ -71,9 +74,15 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   // Lines the crew changed since the list loaded: a live answer that comes in
   // after the saved copy keeps them (lib/suppliesCard rebaseLines).
   const editedRef = useRef<Set<string>>(new Set())
+  // inventory_id → flagged low here on an earlier visit and not restocked yet.
+  const [open, setOpen] = useState<Record<string, ItemFlag>>({})
+  // The company lets the crew add counts (tenants.crew_supply_counts); the
+  // office always sees them. Off: Mark low only (CKS, 2026-10-22).
+  const [crewCounts, setCrewCounts] = useState(true)
+  const countsOk = countsAllowed(user?.role, crewCounts)
   const [card] = useState(() => suppliesCard({ show, setLoading }))
 
-  useEffect(() => { card.load(job, addrId).catch(() => {}) }, [])
+  useEffect(() => { card.load(job, addrId, tenantId).catch(() => {}) }, [])
 
   // `late`: the live answer, after the saved copy showed. Everything but the
   // lines is replaced; the lines the crew changed since are kept, the rest
@@ -83,6 +92,8 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
     setItems(v.items as Item[])
     setRooms(v.rooms)
     setExtras(v.extras)
+    setOpen(v.open)
+    setCrewCounts(v.crewCounts)
     savedRef.current = v.saved
     if (late) {
       setLog(prev => rebaseLines(v.lines, prev, editedRef.current))
@@ -131,7 +142,10 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   // asks one question on arrival — is it low? — and the counts sit behind
   // "+ Add counts" for the crews that do restock from the van. A row that
   // already HAS counts opens expanded, so nothing a crew typed goes hidden.
+  // With the crew's counts switched off they don't show at all, whatever the
+  // row holds: the save writes only lines that changed, so its numbers stay.
   function countsShown(id: string, row: { qty_used: number; qty_remaining: string }) {
+    if (!countsOk) return false
     const has = row.qty_remaining !== '' || row.qty_used > 0
     return expanded[id] ?? has
   }
@@ -207,6 +221,9 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
     if (row.qty_remaining === '' || item.par_level == null) return false
     return Number(row.qty_remaining) < item.par_level
   }
+  // Consumables flagged low on an earlier visit and not restocked yet, in
+  // catalog order (linen losses are filed as incidents, not here).
+  const openItems = items.filter(i => i.category !== 'Linens' && open[i.id])
   const lowCount = items.reduce((n, item) => {
     const row = log[item.id]
     if (!row) return n
@@ -238,7 +255,22 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
               <Text style={styles.lowBannerText}>📡 {t('offline_cached')}</Text>
             </View>
           )}
-          <Text style={styles.helper}>{t('supplies_helper')}</Text>
+          {/* No mention of Add counts where the crew don't have it */}
+          <Text style={styles.helper}>{t(countsOk ? 'supplies_helper' : 'supplies_helper_low_only')}</Text>
+          {/* The home's restocking info: what's already low here (CKS: "what
+              the home needs ... while they're standing in the home"). */}
+          {openItems.length > 0 && (
+            <View style={styles.openCard}>
+              <Text style={styles.openTitle}>🛒 {t('restock_open_title')}</Text>
+              {openItems.map(i => (
+                <Text key={`open-${i.id}`} style={styles.openLine}>
+                  <Text style={{ fontWeight: '700' }}>{tv(lang, i.item_name)}</Text>
+                  {' · '}{ti(t('restock_open_since'), { date: fmtDate(open[i.id].since, localeFor(lang)) })}
+                </Text>
+              ))}
+              <Text style={styles.openHint}>{t('restock_open_hint')}</Text>
+            </View>
+          )}
           {lowCount > 0 && (
             <View style={styles.lowBanner}>
               <Text style={styles.lowBannerText}>{ti(t('flagged_low'), { n: String(lowCount) })}</Text>
@@ -324,6 +356,13 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                         <Text style={styles.itemMeta}>{t('par')}: {item.par_level}{item.unit ? ' ' + tv(lang, item.unit) : ''}</Text>
                       )}
                     </View>
+                    {open[item.id] && (
+                      <Text style={styles.openItem}>
+                        ⚠ {ti(t('restock_open_since'), { date: fmtDate(open[item.id].since, localeFor(lang)) })}
+                        {open[item.id].visits > 1 ? ` · ${ti(t('restock_open_visits'), { n: String(open[item.id].visits) })}` : ''}
+                        {open[item.id].note ? ` · ${open[item.id].note}` : ''}
+                      </Text>
+                    )}
                     <View style={styles.itemControls}>
                       {showCounts && (<>
                       {/* Cycle count — primary action */}
@@ -349,7 +388,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                         </View>
                       </View>
                       </>)}
-                      {!showCounts && (
+                      {!showCounts && countsOk && (
                         <TouchableOpacity onPress={() => setExpanded(prev => ({ ...prev, [item.id]: true }))} style={styles.addCountsBtn}>
                           <Text style={styles.addCounts}>+ {t('add_counts')}</Text>
                         </TouchableOpacity>
@@ -423,6 +462,12 @@ const styles = StyleSheet.create({
     borderRadius: 10, padding: 10, marginBottom: 12,
   },
   lowBannerText: { color: '#92400E', fontSize: 13, fontWeight: '700' },
+  // Already flagged low at the home (lib/restockView)
+  openCard: { backgroundColor: '#FFFBEB', borderColor: '#FCD34D', borderWidth: 1, borderRadius: 12, padding: 12, marginBottom: 12 },
+  openTitle: { color: '#92400E', fontSize: 13, fontWeight: '800', marginBottom: 6 },
+  openLine: { color: '#78350F', fontSize: 13, lineHeight: 19 },
+  openHint: { color: '#92400E', fontSize: 11, marginTop: 6, lineHeight: 15 },
+  openItem: { fontSize: 11, color: '#92400E', fontWeight: '600', marginTop: 2, marginBottom: 4 },
 
   categoryCard: {
     backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#E2E8F0',
