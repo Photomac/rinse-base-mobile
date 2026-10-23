@@ -70,7 +70,7 @@ export interface PendingPhoto {
   incident_report_id?: string | null
   // What an incident photo is of ("Oven": a deep-clean slot), sent with the
   // attach so the report stores it beside the url (photo_labels,
-  // 20261023200000_incident_send_back). Absent on unlabelled photos, whose
+  // 20261023213710_incident_send_back). Absent on unlabelled photos, whose
   // attach is the two-argument call it always was.
   incident_photo_label?: string | null
   // A damage photo flagged for an incident report from the Photos screen: it is
