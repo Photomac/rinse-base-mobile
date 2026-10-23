@@ -1,6 +1,7 @@
 // src/components/IncidentReportCard.tsx
 // Property Incident Report — crew files damage, missing-item, maintenance,
-// pest, safety, and lost & found reports from JobDetailScreen. Mirrors the web
+// deep-clean, pest, safety, and lost & found reports from JobDetailScreen
+// (cleans and inspections). Mirrors the web
 // DamageReportTab: writes a job_damage_reports row with status:'reported', then
 // heads-up the cleaning company ONLY (notify-damage-report recipients:'owner').
 // It's owner-controlled: the manager reviews it in the web Issues view and
@@ -24,6 +25,7 @@ import { useLang } from '../contexts/LangContext'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { TranslationKey } from '../lib/i18n'
 import { CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT } from '../lib/theme'
+import { DEEP_CLEAN_ITEMS, DEEP_CLEAN_OTHER_MAX, isDeepClean, deepCleanTitle, deepCleanReady } from '../lib/deepClean'
 
 const RED = '#EF4444'
 
@@ -31,6 +33,7 @@ const REPORT_TYPES: { id: string; labelKey: TranslationKey; icon: string; color:
   { id: 'damage',      labelKey: 'ir_type_damage',      icon: '💥', color: '#EF4444' },
   { id: 'missing',     labelKey: 'ir_type_missing',     icon: '🔍', color: '#F59E0B' },
   { id: 'maintenance', labelKey: 'ir_type_maintenance', icon: '🔧', color: '#3B82F6' },
+  { id: 'deep_clean',  labelKey: 'ir_type_deep_clean',  icon: '🧽', color: '#0D9488' },
   { id: 'pest',        labelKey: 'ir_type_pest',        icon: '🐜', color: '#A16207' },
   { id: 'safety',      labelKey: 'ir_type_safety',      icon: '⚠️', color: '#7C3AED' },
   { id: 'linen',       labelKey: 'ir_type_linen',       icon: '🧺', color: '#0E7490' },
@@ -81,6 +84,10 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   const [linenQty, setLinenQty] = useState(1)
   const [linenCond, setLinenCond] = useState('stained')
   const [roomId, setRoomId] = useState('')
+  // Deep clean: the regulars tapped, and Other's few words (lib/deepClean).
+  const [deepItems, setDeepItems] = useState<string[]>([])
+  const [deepOtherOn, setDeepOtherOn] = useState(false)
+  const [deepOther, setDeepOther] = useState('')
 
   useEffect(() => {
     if (presetKey > 0) { setOpen(true); setRoomId(presetRoom?.id || '') }
@@ -97,7 +104,10 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   // severity rating and uses the found-item wording.
   const isLF = reportType === 'lost_found'
   const isLinen = reportType === 'linen'
-  const unrated = isLF || isLinen
+  // A needed deep clean is a tap-list, not a rating: it goes to the host as a
+  // proposal, never as damage.
+  const isDeep = isDeepClean(reportType)
+  const unrated = isLF || isLinen || isDeep
   const addressId = job.client_addresses?.id || job.address_id || null
 
   // The property's linen list, loaded once the form opens.
@@ -113,12 +123,15 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   // A picked linen item files under a composed title ("2× King sheet set —
   // Stained"); with no linen list on the property the crew describes it freely.
   const linenTitle = linenItem ? `${linenQty}× ${linenItem.item_name} — ${linenCondEn}` : title.trim()
-  const canSubmit = isLinen ? (!!linenItem || !!title.trim()) : !!title.trim()
+  const deepTitle = deepCleanTitle(deepItems, deepOtherOn ? deepOther : '')
+  const canSubmit = isDeep ? deepCleanReady(deepItems, deepOtherOn, deepOther)
+    : isLinen ? (!!linenItem || !!title.trim()) : !!title.trim()
 
   function reset() {
     setReportType('damage'); setSeverity('minor')
     setTitle(''); setDescription(''); setPhotoUrls([]); setOpen(false)
     setLinenItemId(''); setLinenQty(1); setLinenCond('stained'); setRoomId('')
+    setDeepItems([]); setDeepOtherOn(false); setDeepOther('')
   }
 
   // Discard the form: its photos were never queued, so delete their files.
@@ -146,10 +159,10 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   }
 
   async function save() {
-    if (!canSubmit) { Alert.alert(t(isLF ? 'lf_need_item' : 'ir_need_title')); return }
+    if (!canSubmit) { Alert.alert(t(isLF ? 'lf_need_item' : isDeep ? 'ir_deep_need' : 'ir_need_title')); return }
     setSaving(true)
     try {
-      const finalTitle = isLinen ? linenTitle : title.trim()
+      const finalTitle = isDeep ? deepTitle : isLinen ? linenTitle : title.trim()
       // Unrated types never carry a severity the crew picked before switching type.
       const sev = unrated ? 'minor' : severity
       // supabase-js returns { error } instead of throwing — check it, or a failed
@@ -337,7 +350,42 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
         </>
       )}
 
-      {isLinen && linenItem ? (
+      {isDeep && (
+        <>
+          {/* Two lines: the longer Spanish and Portuguese names ("Ventiladores
+              de techo") are cut at one, where the type chips' are. */}
+          <Text style={styles.label}>{t('ir_deep_label')} *</Text>
+          <View style={styles.typeGrid}>
+            {DEEP_CLEAN_ITEMS.map(i => {
+              const sel = deepItems.includes(i.id)
+              return (
+                <TouchableOpacity key={i.id} style={[styles.typeBtn, sel && { borderColor: type.color, backgroundColor: type.color + '15' }]}
+                  onPress={() => setDeepItems(p => sel ? p.filter(x => x !== i.id) : [...p, i.id])}>
+                  <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={2}>{sel ? '✓ ' : ''}{t(i.labelKey)}</Text>
+                </TouchableOpacity>
+              )
+            })}
+            <TouchableOpacity style={[styles.typeBtn, deepOtherOn && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => setDeepOtherOn(o => !o)}>
+              <Text style={[styles.typeLabel, deepOtherOn && { color: type.color, fontWeight: '700' }]} numberOfLines={2}>{deepOtherOn ? '✓ ' : ''}{t('ir_deep_other')}</Text>
+            </TouchableOpacity>
+          </View>
+          {deepOtherOn && (
+            <TextInput
+              style={styles.input}
+              value={deepOther}
+              onChangeText={setDeepOther}
+              maxLength={DEEP_CLEAN_OTHER_MAX}
+              autoFocus
+              placeholder={t('ir_deep_other_placeholder')}
+              placeholderTextColor={TEXT_LIGHT}
+            />
+          )}
+        </>
+      )}
+
+      {isDeep ? (
+        deepTitle ? <Text style={[styles.sub, { marginBottom: 10 }]}>{t('ir_linen_filed_as')}: <Text style={{ color: TEXT, fontWeight: '700' }}>{deepTitle}</Text></Text> : null
+      ) : isLinen && linenItem ? (
         <Text style={[styles.sub, { marginBottom: 10 }]}>{t('ir_linen_filed_as')}: <Text style={{ color: TEXT, fontWeight: '700' }}>{linenTitle}</Text></Text>
       ) : (
         <>
@@ -356,7 +404,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
         style={[styles.input, styles.noteInput]}
         value={description}
         onChangeText={setDescription}
-        placeholder={t(isLF ? 'lf_note_placeholder' : 'ir_details_placeholder')}
+        placeholder={t(isLF ? 'lf_note_placeholder' : isDeep ? 'ir_deep_details_placeholder' : 'ir_details_placeholder')}
         placeholderTextColor={TEXT_LIGHT}
         multiline
         numberOfLines={2}
@@ -387,7 +435,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
           onPress={save}
           disabled={!canSubmit || saving}
         >
-          <Text style={styles.saveBtnText}>{saving ? t('lf_saving') : t(isLF ? 'lf_save' : isLinen ? 'ir_linen_save' : 'ir_save')}</Text>
+          <Text style={styles.saveBtnText}>{saving ? t('lf_saving') : t(isLF ? 'lf_save' : isLinen ? 'ir_linen_save' : isDeep ? 'ir_deep_save' : 'ir_save')}</Text>
         </TouchableOpacity>
       </View>
     </View>

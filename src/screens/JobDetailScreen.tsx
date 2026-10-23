@@ -2387,7 +2387,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         {/* Property incident report — damage / missing / maintenance / pest /
             safety / lost & found (manager reviews before the host is told) */}
         <View onLayout={e => { incidentY.current = e.nativeEvent.layout.y }}>
-          {isStarted && !isTask && <IncidentReportCard job={job} user={user} rooms={roomsMeta} presetRoom={incidentRoom} presetKey={incidentKey} />}
+          {/* Cleans and inspections: inspectors report what they find on the
+              visit, a needed deep clean above all (CKS, 2026-10-22). */}
+          {isStarted && (!isTask || isInspection) && <IncidentReportCard job={job} user={user} rooms={roomsMeta} presetRoom={incidentRoom} presetKey={incidentKey} />}
         </View>
 
         {/* Notes */}
