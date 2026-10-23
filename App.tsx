@@ -455,6 +455,21 @@ function AppInner() {
     })
   }, [lastResponse, user?.id])
 
+  // A report the office sent back (notify-incident-send-back, data.type
+  // 'incident_sent_back', no job to open) opens Home, where its "Sent back to
+  // you" card is. The job tap above returns early for it.
+  useEffect(() => {
+    if (!user || !lastResponse) return
+    if (lastResponse.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return
+    if ((lastResponse.notification.request.content.data as any)?.type !== 'incident_sent_back') return
+    taps.first(lastResponse.notification.request.identifier).then(first => {
+      if (!first) return
+      try { Notifications.clearLastNotificationResponse() } catch { /* not on this platform */ }
+      if (navigationRef.isReady()) navigationRef.navigate('Dashboard')
+      else pendingTab.current = 'Dashboard'
+    })
+  }, [lastResponse, user?.id])
+
   // Back on the tabs: a tap that waited opens now.
   useEffect(() => {
     if (user) tapRef.current?.screenChanged()

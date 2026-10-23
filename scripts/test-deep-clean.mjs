@@ -13,7 +13,13 @@
 //     severity), saves the composed English title, clears its taps on reset,
 //     and shows each chip in the crew's language;
 //   • inspectors get the card too (JobDetailScreen: cleans and inspections);
-//   • every string it uses is in English, Spanish and Portuguese.
+//   • every string it uses is in English, Spanish and Portuguese;
+//   • a photo of each thing tapped (CKS 2026-10-23): one slot per item and
+//     Other, the web's slots, read-back and missing rule over the same grid;
+//     the card won't save without a photo in every slot and queues each with
+//     its English label; the photo queue sends the label (only when there is
+//     one); the "Sent back to you" card on Home answers a send-back, its
+//     answer waiting for its photos; a send-back push tap opens Home.
 //
 // Usage: node scripts/test-deep-clean.mjs
 //   From a worktree, point the parity check at the web repo:
@@ -63,6 +69,23 @@ if (existsSync(webLib)) {
     }
   }
   check(`same title and readiness as the web over ${n} tap sets`, diff.slice(0, 3), [])
+  // the photo slots: the same slots, read-back and missing rule as the web
+  const slotKeys = s => s.map(x => [x.key, x.label])
+  let sn = 0, sdiff = []
+  for (let mask = 0; mask < 1 << ids.length; mask++) {
+    const picked = ids.filter((_, k) => mask & (1 << k))
+    for (const o of others) for (const on of [false, true]) {
+      sn++
+      const mine = slotKeys(D.deepCleanSlots(picked, on, o))
+      const theirs = slotKeys(W.deepCleanSlots(picked, on, o))
+      const title = D.deepCleanTitle(picked, on ? o : '')
+      const back = [slotKeys(D.deepCleanSlotsFromTitle(title)), slotKeys(W.deepCleanSlotsFromTitle(title))]
+      if (JSON.stringify(mine) !== JSON.stringify(theirs) || JSON.stringify(back[0]) !== JSON.stringify(back[1])) sdiff.push({ picked, o, on })
+    }
+  }
+  check(`same photo slots and read-back as the web over ${sn} tap sets`, sdiff.slice(0, 3), [])
+  check('same missing rule as the web', slotKeys(D.deepCleanMissing(D.deepCleanSlotsFromTitle('Deep clean: Oven, Grill, porch lights'), { u: 'Grill' })),
+    slotKeys(W.deepCleanMissing(W.deepCleanSlotsFromTitle('Deep clean: Oven, Grill, porch lights'), { u: 'Grill' })))
   const webTab = readFileSync(join(WEB, 'src/components/DamageReportTab.tsx'), 'utf8')
   const webRow = /\{ id: 'deep_clean',[^}]*icon: '([^']+)', color: '([^']+)' \}/.exec(webTab)
   const myRow = /\{ id: 'deep_clean',[^}]*icon: '([^']+)', color: '([^']+)' \}/.exec(read('src/components/IncidentReportCard.tsx'))
@@ -92,11 +115,66 @@ check("chips in the crew's language; Other's box capped like the title", [
 const detail = read('src/screens/JobDetailScreen.tsx')
 check('inspectors get the card: cleans and inspections', /\{isStarted && \(!isTask \|\| isInspection\) && <IncidentReportCard /.test(detail), true)
 
+// ── A photo of each ──────────────────────────────────────────────────────────
+check('slots: tapped items in list order (with their chip key), then Other', D.deepCleanSlots(['fans', 'oven'], true, ' rugs '),
+  [{ key: 'oven', label: 'Oven', labelKey: 'ir_deep_oven' }, { key: 'fans', label: 'Ceiling fans', labelKey: 'ir_deep_fans' }, { key: 'other', label: 'rugs' }])
+check('ready only with a photo in every slot', [
+  D.deepCleanPhotosReady(D.deepCleanSlots(['oven'], false, ''), { oven: ['x'] }),
+  D.deepCleanPhotosReady(D.deepCleanSlots(['oven', 'grill'], false, ''), { oven: ['x'] }),
+], [true, false])
+check('the card: saves only with a photo in every slot; queues each with its English label', [
+  /canSubmit = isDeep \? deepCleanReady\(deepItems, deepOtherOn, deepOther\) && deepPhotosOk/.test(card),
+  /incident_report_id: reportId, label: sl\.label \}\)/.test(card),
+  /for \(const sl of deepSlots\)/.test(card),
+], [true, true, true])
+check('the card: no plain photo row for a deep clean; untapping drops its photos; reset and cancel clear them', [
+  /\{!isDeep && \(\s*<TouchableOpacity style=\{styles\.photoBtn\}/.test(card), /if \(sel\) dropSlot\(i\.id\)/.test(card),
+  /if \(deepOtherOn\) dropSlot\('other'\)/.test(card), /setDeepPhotos\(\{\}\)/.test(card),
+  /Object\.values\(deepPhotos\)\.flat\(\)\.forEach\(u => \{ discardCapturedPhoto\(u\) \}\)/.test(card),
+], [true, true, true, true, true])
+check("the card: Save says which photo is missing (still tappable for a deep clean with its taps done)", [
+  /ti\(t\('ir_deep_photo_need'\), \{ items:/.test(card),
+  /disabled=\{\(!canSubmit && !\(isDeep && deepCleanReady\(deepItems, deepOtherOn, deepOther\)\)\) \|\| saving\}/.test(card),
+], [true, true])
+const queue = read('src/lib/photoQueue.ts')
+check('the photo queue keeps the label and sends it only when there is one (old photos stay the two-argument call)', [
+  /\.\.\.\(p\.label \? \{ incident_photo_label: p\.label \} : \{\}\)/.test(queue),
+  /\.\.\.\(entry\.incident_photo_label \? \{ p_label: entry\.incident_photo_label \} : \{\}\)/.test(queue),
+], [true, true])
+const notify = read('src/lib/incidentNotify.ts')
+check('the answer waits for that report\'s photos (a refused one gives way after 3), and a refusal as someone else\'s lets it go', [
+  /if \(await photosAheadOfAnswer\(a\.report_id\) > 0\) \{ keep\.push\(a\); continue \}/.test(notify),
+  // a photo the server keeps refusing gives way (as for a queued Complete), so the answer is never held for good
+  /\.filter\(p => !\(p\.lastErrorKind === 'server' && refusalsOf\(p\) >= REFUSALS_BEFORE_COMPLETE_GOES\)\)/.test(queue),
+  /supabase\.rpc\('answer_incident_send_back', \{ p_report_id: a\.report_id, p_note: a\.note \}\)/.test(notify),
+  /if \(error && \(error as any\)\.code !== '42501'\) keep\.push\(a\)/.test(notify),
+  /try \{ await flushSendBackAnswers\(\) \} catch/.test(notify),
+], [true, true, true, true, true])
+const sbc = read('src/components/SentBackCard.tsx')
+const dash = read('src/screens/DashboardScreen.tsx')
+const app = read('App.tsx')
+check('Sent back to you: on Home, only what was sent to me and still open, minus answers waiting on this phone', [
+  /<SentBackCard user=\{user\} \/>/.test(dash),
+  /\.eq\('sent_to', user\.id\)\.is\('answered_at', null\)/.test(sbc),
+  /!r\.report\.host_notified_at && \['reported', 'reviewed'\]\.includes\(r\.report\.status\) && !answered\.has\(r\.report\.id\)/.test(sbc),
+], [true, true, true])
+check('Sent back to you: a slot per thing the request names, photos labelled, then the answer', [
+  /const slots = deep \? deepCleanSlotsFromTitle\(w\.report\.title\) : \[ANY_PHOTO\]/.test(sbc),
+  /incident_report_id: w\.report\.id, label: deep \? sl\.label : null/.test(sbc),
+  /await queueSendBackAnswer\(\{ report_id: w\.report\.id, note: note\.trim\(\) \|\| null \}\)/.test(sbc),
+  /if \(!all\.length && !note\.trim\(\)\) \{ Alert\.alert\(t\('sb_need_something'\)\); return \}/.test(sbc),
+], [true, true, true, true])
+check('a send-back push tap opens Home (its own effect, once per tap)', [
+  /type !== 'incident_sent_back'\) return\s*\n\s*taps\.first\(lastResponse\.notification\.request\.identifier\)[\s\S]{0,300}navigationRef\.navigate\('Dashboard'\)/.test(app),
+  /else pendingTab\.current = 'Dashboard'/.test(app),
+], [true, true])
+
 // ── Strings ──────────────────────────────────────────────────────────────────
 const i18n = read('src/lib/i18n.ts')
 const block = lang => { const a = i18n.indexOf(`\n  ${lang}: {`); const rest = i18n.slice(a + 5); const b = rest.search(/\n  [a-z]{2}: \{|\n\}\n/); return rest.slice(0, b) }
 const used = new Set([
   ...[...card.matchAll(/'(ir_deep_[a-z_]+|ir_type_deep_clean)'/g)].map(m => m[1]),
+  ...[...sbc.matchAll(/'(sb_[a-z_]+|ir_deep_[a-z_]+)'/g)].map(m => m[1]),
   ...D.DEEP_CLEAN_ITEMS.map(i => i.labelKey),
 ])
 for (const lang of ['en', 'es', 'pt']) {
