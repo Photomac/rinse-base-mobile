@@ -15,7 +15,7 @@
 // (lib/teamDay canFixTeamTime). Crew never get here (App.tsx). Pay never shows:
 // nothing on this screen reads a rate or an amount.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator, Modal, AppState } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator, Modal, AppState, Linking } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
@@ -34,6 +34,7 @@ import {
 } from '../lib/endDay'
 import { teamPeopleRead, teamEntriesRead, teamCleansRead, readEntryNow, readOpenShiftNow } from '../lib/teamReads'
 import { TeamTimeForm, problemText, type TimeChip } from '../components/TeamTimeForm'
+import { fmtMiles, stampMapUrl, stampOf, stampPlace, type StampHome } from '../lib/stampPlace'
 
 const LONG_OPEN_MS = 10 * 3_600_000
 
@@ -51,6 +52,7 @@ function cleanFromRow(j: any): TeamClean {
     completed_at: j.completed_at, completed_by_user_id: j.completed_by_user_id,
     crew: ((j.job_assignments ?? []) as any[]).map(x => x.user_id).filter(Boolean),
     label: a?.nickname || a?.street || '',
+    lat: a?.lat ?? null, lng: a?.lng ?? null, precision: a?.geocode_precision ?? null,
   }
 }
 
@@ -487,6 +489,31 @@ export function TeamTodayScreen({ user, navigation, onBack }: { user: any; navig
   const sheetName = sheetRow?.name || sheetNotIn?.name || ''
   const startable = canFix && dailyMode && isToday && !!sheetNotIn
 
+  // Where the phone was when a day (or a clean's clock) started or ended, next
+  // to the homes on that person's list that day: "📍 Started at SILEX". Only
+  // the day on screen's cleans are here, so a punch from another day is shown
+  // as a map link without a name. Office punches carry no stamp: nothing shows.
+  function stampLine(e: TeamEntry, end: boolean) {
+    const at = end ? e.clocked_out_at : e.clocked_in_at
+    const s = end ? stampOf(e.clock_out_lat, e.clock_out_lng) : stampOf(e.clock_in_lat, e.clock_in_lng)
+    if (!s || !at) return null
+    const homes: StampHome[] = dayKey(at) === ymd
+      ? cleans.filter(c => c.crew.includes(e.user_id) || c.completed_by_user_id === e.user_id)
+        .map(c => ({ name: c.label, lat: c.lat, lng: c.lng, precision: c.precision }))
+      : []
+    const place = stampPlace(s.lat, s.lng, homes)
+    const name = (place && place.kind !== 'none' && place.name) || t('arrival_generic_property')
+    const text = place?.kind === 'at' ? ti(t(end ? 'team_stamp_end_at' : 'team_stamp_start_at'), { place: name })
+      : place?.kind === 'near' ? ti(t(end ? 'team_stamp_end_near' : 'team_stamp_start_near'), { dist: fmtMiles(place.miles), place: name })
+      : t(end ? 'team_stamp_end_map' : 'team_stamp_start_map')
+    return (
+      <Text key={end ? 'out' : 'in'} onPress={() => Linking.openURL(stampMapUrl(s.lat, s.lng)).catch(() => {})}
+        style={[styles.entryMeta, place?.kind === 'at' ? { color: '#047857' } : place?.kind === 'near' ? { color: '#B45309' } : null]}>
+        📍 {text}
+      </Text>
+    )
+  }
+
   function entryCard(e: TeamEntry) {
     const s = Date.parse(e.clocked_in_at)
     const end = e.clocked_out_at ? Date.parse(e.clocked_out_at) : null
@@ -503,6 +530,8 @@ export function TeamTodayScreen({ user, navigation, onBack }: { user: any; navig
           {' · '}
           {open ? ti(t('team_so_far'), { dur: dur(Math.max(0, nowMs - s), true) }) : dur((end as number) - s, false)}
         </Text>
+        {stampLine(e, false)}
+        {!open && stampLine(e, true)}
         {!!e.edited_by && <Text style={styles.entryMeta}>{ti(t('team_edited_by'), { name: nameOf(e.edited_by) })}</Text>}
         {!!e.pause_reason && <Text style={styles.entryMeta} numberOfLines={3}>{pauseReasonLabel(e.pause_reason, t)}</Text>}
         {canFix && (
