@@ -24,8 +24,10 @@ import * as Updates from 'expo-updates'
 import * as Application from 'expo-application'
 import { Platform } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import * as Location from 'expo-location'
 import { supabase } from './supabase'
 import { uuid4 } from './outbox'
+import { locationSettingFrom, preciseFrom, shouldReportLocation } from './locationSettingRules'
 
 const INSTALL_KEY = 'rb_install_id'
 
@@ -58,6 +60,36 @@ export async function reportClientVersion(): Promise<void> {
       p_channel: Updates.channel ?? null,
       p_embedded: Updates.isEmbeddedLaunch ?? null,
     })
+  } catch {
+    /* ignore */
+  }
+  // On the row that call keeps: whose location the office can rely on.
+  await reportLocationSetting(true)
+}
+
+const LOCATION_SENT_KEY = 'rb_location_setting_sent'
+
+/** This phone's location setting (lib/locationSettingRules) on its install row
+ *  (record_location_setting, rinsebase-app 20261023210300), for the Team page.
+ *  On launch, and on each return to the app (they may have just changed it
+ *  in Settings); sent when it changed, or twice a day. Never throws, never
+ *  asks for anything: it only reads what the phone already says. */
+export async function reportLocationSetting(force = false): Promise<void> {
+  try {
+    const [servicesOn, fg, bg] = await Promise.all([
+      Location.hasServicesEnabledAsync().catch(() => true),
+      Location.getForegroundPermissionsAsync(),
+      Location.getBackgroundPermissionsAsync().catch(() => null),
+    ])
+    const setting = locationSettingFrom({ servicesOn, fg: fg?.status, bg: bg?.status })
+    const precise = setting === 'off' || setting === 'not_asked' ? null : preciseFrom(Platform.OS, fg as any)
+    const key = `${setting}|${precise}`
+    const last = JSON.parse((await AsyncStorage.getItem(LOCATION_SENT_KEY)) || 'null')
+    if (!force && !shouldReportLocation(last, key, Date.now())) return
+    const { error } = await supabase.rpc('record_location_setting', {
+      p_install_id: await installId(), p_setting: setting, p_precise: precise,
+    })
+    if (!error) await AsyncStorage.setItem(LOCATION_SENT_KEY, JSON.stringify({ key, at: Date.now() }))
   } catch {
     /* ignore */
   }

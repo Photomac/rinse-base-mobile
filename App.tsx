@@ -20,7 +20,7 @@ import { JobDetailScreen } from './src/screens/JobDetailScreen'
 import { SOSScreen } from './src/screens/SOSScreen'
 import { ChatListScreen, ChatScreen } from './src/screens/ChatScreens'
 import { registerPushToken } from './src/lib/notifications'
-import { reportClientVersion } from './src/lib/clientVersion'
+import { reportClientVersion, reportLocationSetting } from './src/lib/clientVersion'
 import { startLocationTracking, stopLocationTracking } from './src/lib/locationTracker'
 // Side-effect import also registers the SOS ping TaskManager task at bundle
 // eval, so a headless OS relaunch mid-emergency finds the handler.
@@ -378,7 +378,11 @@ function AppInner() {
     }
     drain(true)
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') drain(true)
+      if (state === 'active') {
+        drain(true)
+        // Back from Settings, maybe with location changed: the Team page shows it.
+        reportLocationSetting().catch(() => {})
+      }
     })
     // Also retry while the app simply stays open: a crew driving back into
     // coverage with the app on screen never backgrounds it, so the foreground
