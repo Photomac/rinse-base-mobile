@@ -39,6 +39,11 @@ export type TeamEntry = {
   edited_by?: string | null
   original_clocked_in_at?: string | null
   original_clocked_out_at?: string | null
+  /** where the phone was at the punch (lib/stampPlace); none on office punches */
+  clock_in_lat?: number | string | null
+  clock_in_lng?: number | string | null
+  clock_out_lat?: number | string | null
+  clock_out_lng?: number | string | null
 }
 
 export type TeamClean = {
@@ -53,6 +58,10 @@ export type TeamClean = {
   crew: string[]
   /** where: the property's nickname or street */
   label: string
+  /** the property's map pin and client_addresses.geocode_precision */
+  lat?: number | string | null
+  lng?: number | string | null
+  precision?: string | null
 }
 
 /** Owners, managers and dispatchers see the roster. Crew never do. */

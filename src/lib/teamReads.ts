@@ -13,7 +13,7 @@ import type { CacheRead } from './dataCache'
 
 const HOUR = 3_600_000
 
-export const TEAM_ENTRY_COLUMNS = 'id, user_id, job_id, entry_type, clocked_in_at, clocked_out_at, duration_minutes, pause_reason, edited_at, edited_by, original_clocked_in_at, original_clocked_out_at'
+export const TEAM_ENTRY_COLUMNS = 'id, user_id, job_id, entry_type, clocked_in_at, clocked_out_at, duration_minutes, pause_reason, edited_at, edited_by, original_clocked_in_at, original_clocked_out_at, clock_in_lat, clock_in_lng, clock_out_lat, clock_out_lng'
 
 /** Everyone in the company, active or not (an inactive person's past hours
  *  still need a name). */
@@ -46,12 +46,12 @@ export function teamEntriesRead(tenantId: string, dayStartMs: number, dayEndMs: 
   }
 }
 
-/** The day's cleans (not cancelled), where, who's on them and who completed them. */
+/** The day's cleans (not cancelled), where (name and map pin), who's on them and who completed them. */
 export function teamCleansRead(tenantId: string, dayStartMs: number, dayEndMs: number): CacheRead {
   return {
     key: `team:cleans:${tenantId}`,
     q: () => supabase.from('jobs')
-      .select('id, status, job_type, scheduled_start, scheduled_end, completed_at, completed_by_user_id, client_addresses!jobs_address_id_fkey(nickname, street), job_assignments!job_assignments_job_id_fkey(user_id)')
+      .select('id, status, job_type, scheduled_start, scheduled_end, completed_at, completed_by_user_id, client_addresses!jobs_address_id_fkey(nickname, street, lat, lng, geocode_precision), job_assignments!job_assignments_job_id_fkey(user_id)')
       .eq('tenant_id', tenantId)
       .gte('scheduled_start', new Date(dayStartMs).toISOString())
       .lt('scheduled_start', new Date(dayEndMs).toISOString())

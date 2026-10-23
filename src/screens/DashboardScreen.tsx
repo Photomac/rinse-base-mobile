@@ -13,7 +13,7 @@ import { crewGroups, listItems } from '../lib/crewGroups'
 import { ti, localeFor, capFirst } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
-import { refreshArrivalGeofences } from '../lib/arrivalGeofence'
+import { refreshArrivalGeofences, quickGpsStamp } from '../lib/arrivalGeofence'
 import { cachedQuery, cachedRead, readSoon, writeCacheEntry, cacheEpoch } from '../lib/dataCache'
 import { lastTripFailed } from '../lib/netFetch'
 import { dashTodayRead, dashShiftRead, homeDayRows } from '../lib/jobReads'
@@ -343,6 +343,11 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     setShiftBusy(true)
     const epoch = cacheEpoch()
     try {
+      // The start is the tap. Where they were is a best-effort GPS fix for the
+      // office (Time logs, Payroll, Team today: "📍 Started at SILEX"); it
+      // waits at most 2.5 s and never holds up the start (no fix, no stamp).
+      const startedAt = new Date().toISOString()
+      const stamp = await quickGpsStamp()
       // Client-minted id: offline the punch queues in the outbox (a shift IS the
       // day's pay) and replays idempotently when signal returns. The server
       // allows one open shift per person (job_time_entries_one_open_shift), so
@@ -351,7 +356,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       const entry = {
         id: uuid4(),
         tenant_id: user.tenant_id, user_id: user.id, job_id: null,
-        entry_type: 'shift', clocked_in_at: new Date().toISOString(),
+        entry_type: 'shift', clocked_in_at: startedAt,
+        clock_in_lat: stamp?.lat ?? null, clock_in_lng: stamp?.lng ?? null,
       }
       const { error, queued } = await writeThrough({
         table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
@@ -395,6 +401,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         shiftOps.current++
         setShiftBusy(true)
         const epoch = cacheEpoch()
+        // The end is the tap; the GPS fix that stamps it comes back while the
+        // open shift is read, and is left off if it doesn't come in 2.5 s.
+        const out = new Date()
+        const stampP = quickGpsStamp()
         try {
           // End the shift the server has open NOW. The one on screen can be
           // stale (ended or restarted on the web, or a start that lost to one
@@ -416,12 +426,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           }
           // No answer = no signal: end the one on screen. The outbox replays it,
           // pointed at the right row if its start lost to another.
-          const out = new Date()
+          const stamp = await stampP
           const { error } = await writeThrough({
             table: 'job_time_entries', op: 'update', match: { id: target.id },
             values: {
               clocked_out_at: out.toISOString(),
               duration_minutes: Math.max(0, Math.round((out.getTime() - new Date(target.clocked_in_at).getTime()) / 60000)),
+              clock_out_lat: stamp?.lat ?? null, clock_out_lng: stamp?.lng ?? null,
             },
           })
           if (error) { Alert.alert(t('error'), error.message); return }
