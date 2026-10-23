@@ -286,6 +286,18 @@ export async function enqueueIncidentPhoto(p: {
   await mutateQueue(q => [...q, entry])
 }
 
+/** Photos a send-back's answer waits for (lib/incidentNotify): this report's
+ *  still to attach, less any the server keeps refusing. Those give way after
+ *  as many refusals as a queued Complete's do (an office that sent the report
+ *  back to someone else, or on to the host, refuses them for good), so the
+ *  answer still goes and the server decides; the photo itself stays queued. */
+export async function photosAheadOfAnswer(reportId: string): Promise<number> {
+  return (await readQueue())
+    .filter(p => p.incident_report_id === reportId)
+    .filter(p => !(p.lastErrorKind === 'server' && refusalsOf(p) >= REFUSALS_BEFORE_COMPLETE_GOES))
+    .length
+}
+
 /** Photos for this incident report still waiting to upload or attach. */
 export async function pendingIncidentPhotos(reportId: string): Promise<number> {
   return (await readQueue()).filter(p => p.incident_report_id === reportId).length

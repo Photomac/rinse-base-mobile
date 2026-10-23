@@ -17,7 +17,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
-import { pendingIncidentPhotos } from './photoQueue'
+import { pendingIncidentPhotos, photosAheadOfAnswer } from './photoQueue'
 
 const KEY = 'incidentNotifyPending.v1'
 const ANSWERS_KEY = 'incidentSendBackAnswers.v1'
@@ -80,7 +80,8 @@ async function flushSendBackAnswers(): Promise<void> {
   const keep: PendingSendBackAnswer[] = []
   for (const a of list) {
     if (Date.now() - a.created_at > MAX_AGE_MS) continue
-    if (await pendingIncidentPhotos(a.report_id) > 0) { keep.push(a); continue }
+    // Its photos first; one the server keeps refusing gives way (photosAheadOfAnswer).
+    if (await photosAheadOfAnswer(a.report_id) > 0) { keep.push(a); continue }
     try {
       const { error } = await supabase.rpc('answer_incident_send_back', { p_report_id: a.report_id, p_note: a.note })
       // Answered, or nothing waiting any more (a replay): done. Refused as

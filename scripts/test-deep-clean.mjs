@@ -142,12 +142,14 @@ check('the photo queue keeps the label and sends it only when there is one (old 
   /\.\.\.\(entry\.incident_photo_label \? \{ p_label: entry\.incident_photo_label \} : \{\}\)/.test(queue),
 ], [true, true])
 const notify = read('src/lib/incidentNotify.ts')
-check('the answer waits for that report\'s photos, and a refusal as someone else\'s lets it go', [
-  /if \(await pendingIncidentPhotos\(a\.report_id\) > 0\) \{ keep\.push\(a\); continue \}/.test(notify),
+check('the answer waits for that report\'s photos (a refused one gives way after 3), and a refusal as someone else\'s lets it go', [
+  /if \(await photosAheadOfAnswer\(a\.report_id\) > 0\) \{ keep\.push\(a\); continue \}/.test(notify),
+  // a photo the server keeps refusing gives way (as for a queued Complete), so the answer is never held for good
+  /\.filter\(p => !\(p\.lastErrorKind === 'server' && refusalsOf\(p\) >= REFUSALS_BEFORE_COMPLETE_GOES\)\)/.test(queue),
   /supabase\.rpc\('answer_incident_send_back', \{ p_report_id: a\.report_id, p_note: a\.note \}\)/.test(notify),
   /if \(error && \(error as any\)\.code !== '42501'\) keep\.push\(a\)/.test(notify),
   /try \{ await flushSendBackAnswers\(\) \} catch/.test(notify),
-], [true, true, true, true])
+], [true, true, true, true, true])
 const sbc = read('src/components/SentBackCard.tsx')
 const dash = read('src/screens/DashboardScreen.tsx')
 const app = read('App.tsx')
