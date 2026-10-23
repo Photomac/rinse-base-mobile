@@ -712,6 +712,37 @@ export async function photosAheadOfComplete(jobId: string): Promise<PhotosAheadO
   }
 }
 
+/** A required shot (photo_requirement_id) still on the phone. */
+export interface QueuedShot {
+  /** The file on the phone. It is deleted once the shot's row is saved. */
+  localUri: string
+  /** Where the file is, or will be, in storage: its row's photo_url. */
+  storedUrl: string
+  created_at: number
+}
+
+/** This clean's required shots still on their way to the server, the newest
+ *  per requirement (requirement id → shot). The rooms on a stop's screen lay
+ *  these over the server's shots (lib/roomShots). A shot the server has
+ *  refused REFUSALS_BEFORE_COMPLETE_GOES times is left out: the Complete
+ *  stops waiting on it too, so the room asks for it again. */
+export async function queuedShots(jobId: string): Promise<Map<string, QueuedShot>> {
+  const shots = new Map<string, QueuedShot>()
+  for (const p of await readQueue()) {
+    if (p.job_id !== jobId || !p.photo_requirement_id || p.row_saved) continue
+    if (p.incident_report_id && !p.also_job_photo) continue
+    if (p.lastErrorKind === 'server' && refusalsOf(p) >= REFUSALS_BEFORE_COMPLETE_GOES) continue
+    const newer = shots.get(p.photo_requirement_id)
+    if (newer && newer.created_at >= p.created_at) continue
+    shots.set(p.photo_requirement_id, {
+      localUri: resolveLocal(p.localUri),
+      storedUrl: supabase.storage.from('job-photos').getPublicUrl(p.fileName).data.publicUrl,
+      created_at: p.created_at,
+    })
+  }
+  return shots
+}
+
 /** Jobs with anything still in the queue (lib/cachePrune keeps their offline copy). */
 export async function queuedPhotoJobIds(): Promise<string[]> {
   return [...new Set((await readQueue()).map(p => p.job_id).filter(Boolean))]

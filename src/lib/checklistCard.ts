@@ -35,6 +35,7 @@ import {
   addressModeRead, tenantModeRead, photoRequirementsRead, requirementShotsRead, itemPhotosRead,
 } from './jobReads'
 import { overlayPending } from './outbox'
+import { queuedNow, roomShots, type Queued } from './roomShots'
 import { isWalkthroughJob } from './walkthrough'
 import { lastTripFailed } from './netFetch'
 import { reportClientError } from './errorReporter'
@@ -70,7 +71,7 @@ type Parts = { tmpl: any; rows: any; rooms: any; signoffs: any; addrMode: any; t
 // who deliberately cleared every checklist must not have crews working an
 // invented list they can't see or edit.
 async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
-  seed: () => Promise<{ data: any }>): Promise<ChecklistView> {
+  seed: () => Promise<{ data: any }>, queuedBefore: Queued): Promise<ChecklistView> {
   const tmpl = list(p.tmpl)
   // Queued offline ticks overlay the saved/live rows (rows are already scoped
   // to this job, matching the ops' job_id filter).
@@ -107,15 +108,15 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
       for (const r of signRows) if (r.room_id) signoffs[r.room_id] = r.completed_at
       const addrMode = list(p.addrMode)[0]?.checklist_execution_mode
       const tenMode = list(p.tenMode)[0]?.checklist_execution_mode
-      // Newest first, so the first hit per requirement is the latest shot: a
-      // retake replaces the thumbnail.
-      const latestShot: Record<string, string> = {}
-      for (const s of list(p.shots)) if (!latestShot[s.photo_requirement_id]) latestShot[s.photo_requirement_id] = s.photo_url
+      // The latest shot per requirement, the ones still on the phone over the
+      // server's (lib/roomShots): a reload never puts "Take photo" back on a
+      // shot that is uploading.
+      const shots = roomShots(list(p.shots), queuedBefore, await queuedNow(job.id))
       view.rooms = {
         meta: list(p.rooms),
         signoffs,
         mode: addrMode || tenMode || 'detailed',
-        evidence: list(p.reqs).map(rq => ({ ...rq, photo_url: latestShot[rq.id] || null })),
+        evidence: list(p.reqs).map(rq => ({ ...rq, photo_url: shots[rq.id]?.uri ?? null, photo_fallback: shots[rq.id]?.fallback ?? null })),
       }
     } catch { /* the flat grouping */ }
   }
@@ -150,6 +151,8 @@ export async function readChecklist(job: any, user: any, addressId: string | nul
   const waitNow = () => (lastTripFailed() ? 0 : CHECKLIST_WAIT.ms)
   const wait = waitNow()
   const a = addressId
+  // The shots on the phone as the reads go out (lib/roomShots).
+  const queuedBefore = a ? await queuedNow(job.id) : new Map()
   const reads = await Promise.all([
     a ? readSoon(checklistTemplateRead(a), wait) : NONE,
     readSoon(checklistRowsRead(job.id), wait),
@@ -166,13 +169,13 @@ export async function readChecklist(job: any, user: any, addressId: string | nul
     tenMode: r[5].data, reqs: r[6].data, shots: r[7].data, photos: r[8].data,
   })
   // The seed is read only for a job with no rows and no template.
-  const first = await viewOf(parts(reads), job, !!a, defaults, () => readSoon(tenantSeedRead(user.tenant_id), waitNow()))
+  const first = await viewOf(parts(reads), job, !!a, defaults, () => readSoon(tenantSeedRead(user.tenant_id), waitNow()), queuedBefore)
   const fresh = reads.some(r => r.late)
     ? (async () => {
         try {
           const settled = await Promise.all(reads.map(r => r.late ?? r))
           if (!reads.some((r, i) => r.late && !settled[i].fromCache)) return null
-          return await viewOf(parts(settled), job, !!a, defaults, () => cachedRead(tenantSeedRead(user.tenant_id)))
+          return await viewOf(parts(settled), job, !!a, defaults, () => cachedRead(tenantSeedRead(user.tenant_id)), queuedBefore)
         } catch { return null }
       })()
     : Promise.resolve(null)

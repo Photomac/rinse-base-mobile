@@ -33,10 +33,14 @@
 //   shots this clean owes. Until the server answers it, every required shot
 //   counts (owed null: fail-open, as on an older database or a failed call);
 //   when it answers, the counter narrows to it.
+// - A shot still uploading counts as taken, as it does in its room (lib/
+//   roomShots): the phone's queue is read before the reads go out and again
+//   every time the counter is shown.
 import { readSoon, readCacheEntry, type SoonRead } from './dataCache'
 import { photoEnforceRead, photoRequirementsRead, requirementShotsRead, jobAddressId } from './jobReads'
 import { supabase } from './supabase'
 import { lastTripFailed } from './netFetch'
+import { queuedNow, shotsTaken, type Queued } from './roomShots'
 
 /** How long the screen-opening load waits for the live answers. */
 export const PHOTO_COUNT_WAIT = { ms: 3_000 }
@@ -56,13 +60,13 @@ const LIVE = Infinity
 /** What the cached reads say: the switch, and (when on) the requirements and shots. */
 type Reads = { on: boolean; reqs?: any; shots?: any }
 
-function countOf(r: Reads, owed: Set<string> | null): PhotoCount {
+function countOf(r: Reads, owed: Set<string> | null, before: Queued, after: Queued): PhotoCount {
   if (!r.on) return { total: 0, done: 0, owed: null }
   const owedIds = owed ?? new Set(list(r.reqs).filter((q: any) => q.required === true).map((q: any) => q.id as string))
   // Distinct requirements satisfied (two shots of one area are one), counted
   // only within what is owed: a shot of an area no longer owed must not push
   // "done" past "total".
-  const done = new Set(list(r.shots).map((p: any) => p.photo_requirement_id).filter((id: string) => owedIds.has(id))).size
+  const done = [...shotsTaken(list(r.shots), before, after)].filter(id => owedIds.has(id)).length
   return { total: owedIds.size, done, owed }
 }
 
@@ -141,14 +145,17 @@ export function requiredPhotoCount(ui: { show: (c: PhotoCount) => void }) {
       const addrId = jobAddressId(job)
       if (!addrId) return
       const startedAt = Date.now()
+      const queuedBefore = await queuedNow(job.id)
       const { first, saved, fresh, owed, wait } = await readCount(job, user, addrId, !!opts.soon)
       // A reload that fell back to the saved copy keeps what is on screen.
       let reads: Reads | null = onScreen && saved && !opts.soon ? null : first
-      const put = () => {
+      const put = async () => {
         const r = reads ?? onScreen
         if (!r || !current()) return
+        const queuedAfter = await queuedNow(job.id)
+        if (!current()) return
         onScreen = r
-        ui.show(countOf(r, owedKnown))
+        ui.show(countOf(r, owedKnown, queuedBefore, queuedAfter))
       }
       const takeOwed = (o: Set<string> | null | undefined) => { if (o !== undefined && current()) owedKnown = o }
       // On opening, the owed list too if it answers within the same wait: one
@@ -159,9 +166,10 @@ export function requiredPhotoCount(ui: { show: (c: PhotoCount) => void }) {
         const o = await within(sent, Math.max(0, startedAt + wait - Date.now()))
         if (o !== undefined) { takeOwed(o); owedDone = true }
       }
-      if (reads) put()
+      // Shown even when it keeps what is on screen: a shot taken since counts.
+      await put()
       await Promise.all([
-        fresh.then(later => { if (later) { reads = later; put() } }),
+        fresh.then(async later => { if (later) { reads = later; await put() } }),
         (async () => {
           if (owedDone) return
           let p = owed()
@@ -170,7 +178,7 @@ export function requiredPhotoCount(ui: { show: (c: PhotoCount) => void }) {
           const o = await p
           if (o === undefined) return
           takeOwed(o)
-          put()
+          await put()
         })(),
       ])
     },

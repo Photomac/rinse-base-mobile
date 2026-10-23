@@ -180,6 +180,8 @@ const SCENARIOS = [
   'stopInfoOnAHangingLink',
   'stopInfoTrickleKeepsGotIt',
   'photoCountOnAHangingLink',
+  'roomShotsKeepTheQueue',
+  'photoCountCountsShotsOnThePhone',
   'photoCountOwedListNarrows',
   'photoCountTrickle',
   'photoCountNotEnforcedAsksNothingMore',

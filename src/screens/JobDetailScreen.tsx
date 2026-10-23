@@ -16,6 +16,7 @@ import { WalkthroughChecklist } from '../components/WalkthroughChecklist'
 import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
 import { PhotoViewer } from '../components/PhotoViewer'
+import { ShotThumb } from '../components/ShotThumb'
 import { StagingPhotoGroups, stagingViewerPhotos } from '../components/StagingPhotoGroups'
 import type { StagingPhotoRow } from '../lib/stagingRooms'
 import { IncidentReportCard } from '../components/IncidentReportCard'
@@ -919,7 +920,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     )
     setShootingId(null)
     if (res.status === 'captured' && res.localUri) {
-      setEvidence(prev => prev.map((x: any) => x.id === e.id ? { ...x, photo_url: res.localUri } : x))
+      // Reloads keep it until it uploads: the card lays the phone's shots
+      // over the server's (lib/roomShots).
+      setEvidence(prev => prev.map((x: any) => x.id === e.id ? { ...x, photo_url: res.localUri, photo_fallback: null } : x))
       loadPhotoRequirements()
       // Before the upload lands: the first shot after a change brings the
       // current list up, so the rest are taken against it.
@@ -2295,7 +2298,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                             {evidence.filter((e: any) => (e.room_id || '__other__') === g.key).map((e: any) => (
                               <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}>
                                 {e.photo_url
-                                  ? <Image source={{ uri: e.photo_url }} style={{ width: 34, height: 34, borderRadius: 6, backgroundColor: '#F3F4F6' }} />
+                                  ? <ShotThumb uri={e.photo_url} fallback={e.photo_fallback} size={34} />
                                   : <View style={{ width: 34, height: 34, borderRadius: 6, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}><Text style={{ opacity: 0.5 }}>📷</Text></View>}
                                 <View style={{ flex: 1 }}>
                                   <Text style={styles.checkLabel}>
