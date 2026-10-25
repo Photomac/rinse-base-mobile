@@ -14,6 +14,7 @@ import { ti, localeFor, capFirst } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences, quickGpsStamp } from '../lib/arrivalGeofence'
+import { arrivalForStart } from '../lib/siteVisits'
 import { cachedQuery, cachedRead, readSoon, writeCacheEntry, cacheEpoch } from '../lib/dataCache'
 import { lastTripFailed } from '../lib/netFetch'
 import { dashTodayRead, dashShiftRead, homeDayRows } from '../lib/jobReads'
@@ -337,6 +338,20 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const saveShift = (shift: { id: string; clocked_in_at: string } | null, epoch: number) =>
     writeCacheEntry(dashShiftRead(user).key, shift, epoch)
 
+  // "Start your day from when you arrived?": the arrival the phone recorded
+  // at the home they're at (lib/siteVisits arrivalForStart), or the tap. Two
+  // choices, theirs (CKS, 2026-10-23). Resolves to the arrival they picked,
+  // or null for now. Not dismissable: a tap outside on Android isn't a choice.
+  const askStartFrom = (arrival: { jobId: string; at: string }, tappedAt: string) => new Promise<string | null>(resolve => {
+    const row = dayRows.find((r: any) => r.id === arrival.jobId)
+    const home = (row?.client_addresses as any)?.nickname || (row?.client_addresses as any)?.street || t('arrival_generic_property')
+    const arrived = fmtTime(arrival.at, localeFor(lang))
+    Alert.alert(t('start_from_arrival_title'), ti(t('start_from_arrival_body'), { home, arrived }), [
+      { text: ti(t('start_from_arrival_then'), { arrived }), onPress: () => resolve(arrival.at) },
+      { text: ti(t('start_from_arrival_now'), { now: fmtTime(tappedAt, localeFor(lang)) }), onPress: () => resolve(null) },
+    ], { cancelable: false })
+  })
+
   async function handleStartDay() {
     if (startingDay.current) return
     startingDay.current = true
@@ -344,10 +359,17 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     setShiftBusy(true)
     const epoch = cacheEpoch()
     try {
-      // The start is the tap. Where they were is a best-effort GPS fix for the
-      // office (Time logs, Payroll, Team today: "📍 Started at SILEX"); it
-      // waits at most 2.5 s and never holds up the start (no fix, no stamp).
-      const startedAt = new Date().toISOString()
+      // The start is the tap, unless their phone recorded them reaching the
+      // home they're at 5+ minutes before it (day-shift arrive/leave on): then
+      // they pick the arrival or the tap, and a picked arrival is marked
+      // (source 'prompted', arrived_at) for the office's Time logs. Where they
+      // were is a best-effort GPS fix for the office (Time logs, Payroll, Team
+      // today: "📍 Started at SILEX"); it waits at most 2.5 s and never holds
+      // up the start (no fix, no stamp).
+      const tappedAt = new Date().toISOString()
+      const arrival = await arrivalForStart()
+      const fromArrival = arrival ? await askStartFrom(arrival, tappedAt) : null
+      const startedAt = fromArrival ?? tappedAt
       const stamp = await quickGpsStamp()
       // Client-minted id: offline the punch queues in the outbox (a shift IS the
       // day's pay) and replays idempotently when signal returns. The server
@@ -359,6 +381,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         tenant_id: user.tenant_id, user_id: user.id, job_id: null,
         entry_type: 'shift', clocked_in_at: startedAt,
         clock_in_lat: stamp?.lat ?? null, clock_in_lng: stamp?.lng ?? null,
+        ...(fromArrival ? { source: 'prompted', arrived_at: fromArrival } : {}),
       }
       const { error, queued } = await writeThrough({
         table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,

@@ -32,6 +32,10 @@ const SYSTEM_NOTES: Record<string, TranslationKey> = {
   // 20261023170814_day_shift_close_time).
   'Auto-closed: ended at the last clean of the day': 'pr_auto_last_clean',
   'Auto-closed: no clean finished, ended at the closing time': 'pr_auto_closing_time',
+  // ...and leaving that clean's home or the office after it, with arrive/leave
+  // on (rinsebase-app 20261023210200_complete_cleans_left_behind).
+  'Auto-closed: ended when they left the last home': 'pr_auto_left_home',
+  'Auto-closed: ended when they left the office': 'pr_auto_left_office',
   'Manual entry by owner': 'pr_manual_owner',
   'Clocked out by owner (left open)': 'pr_clocked_out_owner_open',
 }
