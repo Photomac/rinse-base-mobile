@@ -23,6 +23,7 @@ import { supabase, usableAccessToken } from './supabase'
 import { reportClientError } from './errorReporter'
 import { sha256HexOfBase64 } from './sha256'
 import type { PhotoOnPhone } from './photoBlockers'
+import { onTheWayRow, type OnTheWayRow } from './photosOnTheWay'
 
 const QUEUE_KEY = 'rinsebase.photoQueue.v1'
 const DIR = FileSystem.documentDirectory + 'pending_photos/'
@@ -111,6 +112,10 @@ export interface PendingPhoto {
   // REFUSALS_BEFORE_COMPLETE_GOES (photosAheadOfComplete). Absent on entries
   // queued before 2026-10-16.
   refusals?: number
+  // The server has been told this photo is on its way (job_photos_on_the_way,
+  // announcePhotos), so a teammate's Complete can be held for it. Absent until
+  // then, and on every entry queued before 2026-10-25 (told on the next pass).
+  announced?: boolean
 }
 
 export interface QueueStatus {
@@ -240,6 +245,8 @@ export async function enqueuePhoto(p: {
     taken_at: p.taken_at ?? null,
   }
   await mutateQueue(q => [...q, entry])
+  // The server hears of it now, ahead of the file (announcePhotos).
+  announcePhotos().catch(() => {})
   return id
 }
 
@@ -545,6 +552,9 @@ function summarize(uploaded: number, q: PendingPhoto[]): QueueStatus {
 // the stored queue as soon as it is known — so a photo that landed is never
 // sent again (a second job_photos row) if the app is closed mid-pass.
 async function runPass(force: boolean): Promise<{ uploaded: number; noSignal: boolean }> {
+  // Photos the server hasn't heard of yet: a small request, sent alongside
+  // the first upload rather than behind it.
+  announcePhotos().catch(() => {})
   // A photo that keeps timing out goes after the ones that haven't, or on a
   // slow bar it would fail first on every pass and nothing behind it would go.
   const q = (await readQueue()).slice()
@@ -554,6 +564,8 @@ async function runPass(force: boolean): Promise<{ uploaded: number; noSignal: bo
     if (!force && entry.nextAttemptAt && Date.now() < entry.nextAttemptAt) continue
     if (!entry.stored && await fileMissing(resolveLocal(entry.localUri))) {
       await mutateQueue(cur => cur.filter(e => e.id !== entry.id))
+      // It will never land: a teammate's Complete must not be held for it.
+      if (entry.announced) forgetRecord(entry.fileName)
       reportClientError(
         'photoQueue: dropped a queued photo whose file is no longer on the phone',
         JSON.stringify({ id: entry.id, job_id: entry.job_id, photo_type: entry.photo_type, attempts: entry.attempts ?? 0 }),
@@ -746,6 +758,99 @@ export async function photosOnPhone(jobId: string): Promise<PhotoOnPhone[]> {
       photo_requirement_id: p.photo_requirement_id ?? null,
       check_first_line_id: p.check_first_line_id ?? null,
     }))
+}
+
+/** The same photos as photosOnPhone, as the server records them: what the
+ *  Complete sends as this phone's own (complete_when_photos_land p_on_phone). */
+export async function photosOnTheWay(jobId: string): Promise<OnTheWayRow[]> {
+  return (await readQueue())
+    .filter(p => p.job_id === jobId && (!p.incident_report_id || p.also_job_photo) && !p.row_saved)
+    .filter(p => !(p.lastErrorKind === 'server' && refusalsOf(p) >= REFUSALS_BEFORE_COMPLETE_GOES))
+    .map(onTheWayRow)
+}
+
+// ── Telling the server a photo is on its way ────────────────────────────────
+// Every job photo taken here gets a row in job_photos_on_the_way (lib/
+// photosOnTheWay says why): at capture, and on every pass for any the server
+// hasn't heard of. The landing job_photos row removes it on the server. One
+// request for all of them, a few hundred bytes each, separate from the upload
+// so a 2 MB file stuck on one bar doesn't hold it.
+//   - No signal: tried again on the next capture or pass.
+//   - A server without the table (the app updated before the migration):
+//     not tried again until the app restarts. The photos upload as always.
+//   - Refused (the server said no): not tried again for that photo; its upload
+//     is unaffected, a teammate's Complete just can't be held for it. Only
+//     people on the clean (or the office) may record one, so a refusal by the
+//     row rules (42501: a photo for a clean you're not on) is expected and not
+//     reported; any other is. A batch refused whole goes again one row at a
+//     time, so one such row (or a clean from another account on a shared
+//     phone) can't sink the rest.
+let onTheWayUnknown = false
+let announcing: Promise<void> | null = null
+let announceAgain = false
+
+/** Tell the server about every queued job photo it hasn't heard of. Never
+ *  throws; a call while one runs makes it go round once more. */
+export function announcePhotos(): Promise<void> {
+  if (onTheWayUnknown) return Promise.resolve()
+  if (announcing) { announceAgain = true; return announcing }
+  announcing = (async () => {
+    do {
+      announceAgain = false
+      await announceOnce()
+    } while (announceAgain && !onTheWayUnknown)
+  })().catch(() => {}).finally(() => { announcing = null })
+  return announcing
+}
+
+type RecordAnswer = 'ok' | 'offline' | 'unknown' | 'refused'
+
+async function sendRecords(rows: Record<string, unknown>[]): Promise<{ answer: RecordAnswer; code?: string; message?: string }> {
+  try {
+    const { error, status } = await supabase.from('job_photos_on_the_way')
+      .upsert(rows, { onConflict: 'object_name', ignoreDuplicates: true })
+    if (!error) return { answer: 'ok' }
+    if (status === 0) return { answer: 'offline' }
+    // PostgREST: no such table (PGRST205); Postgres itself: 42P01.
+    if (error.code === 'PGRST205' || error.code === '42P01') return { answer: 'unknown' }
+    return { answer: 'refused', code: error.code, message: error.message }
+  } catch {
+    return { answer: 'offline' }
+  }
+}
+
+async function announceOnce(): Promise<void> {
+  const due = (await readQueue())
+    .filter(p => (!p.incident_report_id || p.also_job_photo) && !p.row_saved && !p.announced)
+  if (!due.length) return
+  const row = (p: PendingPhoto) => ({ tenant_id: p.tenant_id, job_id: p.job_id, user_id: p.user_id, ...onTheWayRow(p) })
+  const done = new Set<string>()
+  const first = await sendRecords(due.map(row))
+  if (first.answer === 'offline') return
+  if (first.answer === 'unknown') { onTheWayUnknown = true; return }
+  if (first.answer === 'ok') due.forEach(p => done.add(p.id))
+  else {
+    const refused: string[] = []
+    for (const p of due) {
+      const one = due.length > 1 ? await sendRecords([row(p)]) : first
+      if (one.answer === 'offline') break
+      if (one.answer === 'unknown') { onTheWayUnknown = true; break }
+      if (one.answer === 'refused' && one.code !== '42501') refused.push(one.message ?? '?')
+      done.add(p.id)
+    }
+    if (refused.length) {
+      reportClientError(`photoQueue: the server refused ${refused.length} photo record(s): ${refused[0]}`, undefined, 'photoQueue')
+    }
+  }
+  if (done.size) await mutateQueue(cur => cur.map(e => done.has(e.id) ? { ...e, announced: true } : e))
+}
+
+// A photo that will never land: its record goes, best effort (the server
+// forgets a record after a day anyway).
+function forgetRecord(objectName: string): void {
+  try {
+    supabase.from('job_photos_on_the_way').delete().eq('object_name', objectName).then(() => {}, () => {})
+  } catch { /* never in the way of the queue */ }
 }
 
 /** A required shot (photo_requirement_id) still on the phone. */

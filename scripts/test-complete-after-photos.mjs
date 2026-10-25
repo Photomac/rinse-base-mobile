@@ -51,6 +51,7 @@ const sources = {
   ], 'photoQueue.ts'),
   // No imports: as is.
   'photoBlockers.ts': read('src/lib/photoBlockers.ts'),
+  'photosOnTheWay.ts': read('src/lib/photosOnTheWay.ts'),
 }
 
 // Each must make at least one assertion fail (or the scenario stall).
@@ -81,6 +82,36 @@ const MUTANTS = [
   ['another clean\'s photos answer this one\'s blockers', 'photoQueue.ts',
     `export async function photosOnPhone(jobId: string): Promise<PhotoOnPhone[]> {\n  return (await readQueue())\n    .filter(p => p.job_id === jobId && `,
     `export async function photosOnPhone(jobId: string): Promise<PhotoOnPhone[]> {\n  return (await readQueue())\n    .filter(p => `],
+  // A teammate's photos on their way (lib/photosOnTheWay, photoQueue.announcePhotos).
+  ['a photo isn\'t recorded until a pass', 'photoQueue.ts',
+    `  announcePhotos().catch(() => {})\n  return id\n`, `  return id\n`],
+  ['a pass never records what capture couldn\'t', 'photoQueue.ts',
+    `  // the first upload rather than behind it.\n  announcePhotos().catch(() => {})\n`, `  // the first upload rather than behind it.\n`],
+  ['a record is sent again on every pass', 'photoQueue.ts',
+    `  if (done.size) await mutateQueue(cur => cur.map(e => done.has(e.id) ? { ...e, announced: true } : e))\n`, ``],
+  ['a server without the table is asked on every photo', 'photoQueue.ts',
+    `if (first.answer === 'unknown') { onTheWayUnknown = true; return }`, `if (first.answer === 'unknown') { return }`],
+  ['one refused record sinks the batch', 'photoQueue.ts',
+    `const one = due.length > 1 ? await sendRecords([row(p)]) : first`, `const one = first`],
+  ['a photo for a clean you\'re not on is reported as an error', 'photoQueue.ts',
+    `if (one.answer === 'refused' && one.code !== '42501') refused.push`, `if (one.answer === 'refused') refused.push`],
+  ['an incident-form photo is recorded', 'photoQueue.ts',
+    `.filter(p => (!p.incident_report_id || p.also_job_photo) && !p.row_saved && !p.announced)`, `.filter(p => !p.row_saved && !p.announced)`],
+  ['a photo that will never land keeps its record', 'photoQueue.ts',
+    `      if (entry.announced) forgetRecord(entry.fileName)\n`, ``],
+  ['another clean\'s photos go with the Complete', 'photoQueue.ts',
+    `export async function photosOnTheWay(jobId: string): Promise<OnTheWayRow[]> {\n  return (await readQueue())\n    .filter(p => p.job_id === jobId && `,
+    `export async function photosOnTheWay(jobId: string): Promise<OnTheWayRow[]> {\n  return (await readQueue())\n    .filter(p => `],
+  ['the record drops the required shot', 'photosOnTheWay.ts',
+    `photo_requirement_id: p.photo_requirement_id ?? null,`, `photo_requirement_id: null,`],
+  ['the record forgets where the file will land', 'photosOnTheWay.ts',
+    `object_name: p.fileName,`, `object_name: p.fileName.replace('.jpg', ''),`],
+  ['no answer reads as clear (the Complete goes past the gate\'s blockers)', 'photosOnTheWay.ts',
+    `if (error || !data || typeof data !== 'object') return { kind: 'unavailable' }`, `if (error || !data || typeof data !== 'object') return { kind: 'clear' }`],
+  ['an empty blocked list holds nothing back', 'photosOnTheWay.ts',
+    `case 'blocked': return Array.isArray(data.blockers) && data.blockers.length > 0`, `case 'blocked': return true`],
+  ['the crew is told their own phone is a teammate\'s', 'photosOnTheWay.ts',
+    `.filter(w => w.user_id !== me)`, `.filter(w => !!w)`],
 ]
 
 function run(files, { quiet }) {
@@ -96,8 +127,9 @@ function run(files, { quiet }) {
       [`'../outbox'`, `'./outbox'`],
       [`'../photoQueue'`, `'./photoQueue'`],
       [`'../photoBlockers'`, `'./photoBlockers'`],
+      [`'../photosOnTheWay'`, `'./photosOnTheWay'`],
     ], 'completeAfterPhotos.scenario.ts'))
-    execSync('npx --yes esbuild outbox.ts photoQueue.ts photoBlockers.ts sha256.ts timezone.ts photoQueue.mocks.ts completeAfterPhotos.mocks.ts scenario.ts --format=cjs --platform=node --outdir=out --log-level=warning', {
+    execSync('npx --yes esbuild outbox.ts photoQueue.ts photoBlockers.ts photosOnTheWay.ts sha256.ts timezone.ts photoQueue.mocks.ts completeAfterPhotos.mocks.ts scenario.ts --format=cjs --platform=node --outdir=out --log-level=warning', {
       cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
     })
     execSync('node out/scenario.js', { cwd: work, stdio: quiet ? 'pipe' : 'inherit' })

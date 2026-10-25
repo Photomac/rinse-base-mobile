@@ -96,6 +96,39 @@ export const net = {
   selectFails: false,
   /** Every job_photos lookup that reached the server: its filters. */
   selects: [] as Record<string, unknown>[],
+  /** job_photos_on_the_way (rinse-base-app 20261025160000): what the server
+   *  has heard is on its way, by object_name. */
+  records: new Map<string, any>(),
+  /** Every records request that reached the server: how many rows it sent. */
+  recordCalls: [] as number[],
+  /** The database doesn't have job_photos_on_the_way yet (PGRST205). */
+  noRecordsTable: false,
+  /** Cleans whose records the server refuses (42501): a clean you're not on, or from another account. */
+  refuseRecordsFor: new Set<string>(),
+  /** Cleans whose records the server refuses for another reason (a check: 23514). */
+  breakRecordsFor: new Set<string>(),
+}
+
+const recordsTable = {
+  upsert: async (rows: any[], opts?: { onConflict?: string; ignoreDuplicates?: boolean }) => {
+    if (net.offline) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
+    net.recordCalls.push(rows.length)
+    if (net.noRecordsTable) return { error: { code: 'PGRST205', message: "Could not find the table 'public.job_photos_on_the_way' in the schema cache" }, status: 404 }
+    if (opts?.onConflict !== 'object_name' || !opts?.ignoreDuplicates) return { error: { code: '42P10', message: 'test: records must be ON CONFLICT (object_name) DO NOTHING' }, status: 400 }
+    if (rows.some(r => net.refuseRecordsFor.has(r.job_id))) return { error: { code: '42501', message: 'new row violates row-level security policy for table "job_photos_on_the_way"' }, status: 403 }
+    if (rows.some(r => net.breakRecordsFor.has(r.job_id))) return { error: { code: '23514', message: 'new row for relation "job_photos_on_the_way" violates check constraint "job_photos_on_the_way_caption_length"' }, status: 400 }
+    for (const r of rows) if (!net.records.has(r.object_name)) net.records.set(r.object_name, { ...r })
+    return { error: null, status: 201 }
+  },
+  delete: () => ({
+    eq: (column: string, value: string) => ({
+      then: (ok: any, no: any) => Promise.resolve().then(() => {
+        if (net.offline) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
+        if (column === 'object_name') net.records.delete(value)
+        return { error: null, status: 204 }
+      }).then(ok, no),
+    }),
+  }),
 }
 
 export function release() {
@@ -149,7 +182,7 @@ export const supabase = {
       getPublicUrl: (name: string) => ({ data: { publicUrl: `https://cdn.test/job-photos/${name}` } }),
     }),
   },
-  from: (_table: string) => ({
+  from: (table: string): any => table === 'job_photos_on_the_way' ? recordsTable : ({
     insert: async (row: any) => {
       if (net.offline) return { error: { message: 'TypeError: fetch failed' }, status: 0 }
       net.inserts.push({ ...row })

@@ -16,8 +16,9 @@
 // green run is evidence and not an accident.
 import { randomBytes } from 'node:crypto'
 import { writeThrough, flushOutbox, pendingOpCount, rejectedOps, onCompletePastRefusedPhotos } from '../outbox'
-import { enqueuePhoto, enqueueIncidentPhoto, persistCapturedPhoto, flushQueue, photosOnPhone } from '../photoQueue'
+import { enqueuePhoto, enqueueIncidentPhoto, persistCapturedPhoto, flushQueue, photosOnPhone, photosOnTheWay, announcePhotos } from '../photoQueue'
 import { completeWhileUploading } from '../photoBlockers'
+import { readHoldAnswer, whoHasThePhotos } from '../photosOnTheWay'
 import {
   net, db, files, fileBytes, rawQueue, setRawQueue, reported, release, releaseWrites, MockFormData, fetchMock, AsyncStorage,
 } from './completeAfterPhotos.mocks'
@@ -74,6 +75,7 @@ async function reset() {
   net.attachResult = 'ok'; net.inserts = []; net.token = 'A'; net.storage.clear(); net.loseAnswer.clear()
   net.refuseNew = false; net.heads = []; net.headFails = false
   net.loseInsertAnswer = false; net.holdInsert = false; net.selectFails = false; net.selects = []
+  net.records.clear(); net.recordCalls = []; net.noRecordsTable = false; net.refuseRecordsFor.clear(); net.breakRecordsFor.clear()
   db.online = true; db.log = []; db.jobs.clear(); db.holdWrite = null; db.heldWrites = []; db.gate = defaultGate
   await AsyncStorage.setItem('writeOutbox', '[]')
   await AsyncStorage.setItem('writeOutboxRejected', '[]')
@@ -352,6 +354,128 @@ const afterRowOnServer = () => net.rows.push({ job_id: 'J1', photo_type: 'after'
   for (let i = 0; i < 3; i++) await flushQueue({ force: true })
   ok('a shot the server refused 3 times answers nothing (the outbox stops waiting on it too)',
     rawQueue()[0]?.refusals === 3 && completeWhileUploading([kitchen], await photosOnPhone('J1')).kind === 'wait')
+
+  // ── Photos on their way: what the server hears (lib/photosOnTheWay) ──────
+  // A lead's Complete waiting only on a TEAMMATE's shots, still on the
+  // teammate's phone on one bar, can be held on the server (rinse-base-app
+  // 20261025160000) only if the server knows those shots were taken. Each phone
+  // records every photo it takes, at capture: a small request that doesn't
+  // wait behind the 2 MB file.
+  await reset()
+  net.hold = true // the file is stuck on the bar
+  const takenAt = Date.now() - 60_000
+  await enqueuePhoto({ ...base, user_id: 'TEAMMATE', uri: shot(), photo_type: 'before', photo_requirement_id: 'KITCHEN', taken_at: takenAt })
+  await until(() => net.records.size === 1, 'the record of the shot')
+  const rec = [...net.records.values()][0]
+  ok('a photo taken: the server hears of it at capture, before the file', net.uploads.length === 0 && net.rows.length === 0)
+  ok('…with what the gate matches on, where the file will land, and when it was taken',
+    rec.object_name === rawQueue()[0].fileName && rec.job_id === 'J1' && rec.tenant_id === 'T' && rec.user_id === 'TEAMMATE'
+    && rec.photo_requirement_id === 'KITCHEN' && rec.photo_type === 'before' && rec.taken_at === new Date(takenAt).toISOString()
+    && rec.checklist_item_id === null && rec.check_first_line_id === null && rec.caption === null)
+  await until(() => rawQueue()[0]?.announced === true, 'the shot marked as told')
+  const toldCalls = net.recordCalls.length
+  const heldUp = flushQueue()
+  await until(() => net.held.length === 1, 'the stuck upload to start')
+  await settle()
+  ok('…told once: a pass doesn\'t send it again', net.recordCalls.length === toldCalls)
+  release()
+  await heldUp
+  ok('…and the shot itself lands as always', net.rows.length === 1 && rawQueue().length === 0)
+
+  // No signal when it was taken: the next pass tells the server, alongside the upload.
+  await reset()
+  net.offline = true
+  await enqueuePhoto({ ...base, uri: shot(), photo_type: 'after' })
+  await settle()
+  ok('no signal at capture: nothing heard yet', net.records.size === 0 && !rawQueue()[0].announced)
+  net.offline = false
+  net.hold = true
+  const later = flushQueue()
+  await until(() => net.records.size === 1, 'the pass to record it')
+  ok('…the next pass records it while the file is still going', net.rows.length === 0 && net.held.length === 1)
+  release()
+  await later
+
+  // Only photos that become job_photos rows are on their way to the gate.
+  await reset()
+  net.offline = true
+  await enqueueIncidentPhoto({ localUri: await persistCapturedPhoto(shot(), 'J1'), tenant_id: 'T', job_id: 'J1', user_id: 'U', incident_report_id: 'R1' })
+  net.offline = false
+  await announcePhotos()
+  ok('an incident-form photo is not recorded (it only joins its report)', net.records.size === 0 && net.recordCalls.length === 0)
+
+  // A clean you're not on (only people on it may record its photos): the
+  // server refuses that record. The rest still go, one at a time; nothing is
+  // retried forever; the expected refusal isn't reported, any other is.
+  await reset()
+  net.offline = true
+  await enqueuePhoto({ ...base, uri: shot(), photo_type: 'after' })
+  await enqueuePhoto({ ...base, job_id: 'J9', uri: shot(), photo_type: 'after' })
+  await enqueuePhoto({ ...base, job_id: 'J8', uri: shot(), photo_type: 'after' })
+  net.offline = false
+  net.refuseRecordsFor.add('J9')
+  net.breakRecordsFor.add('J8')
+  await announcePhotos()
+  ok('a refused batch goes again one at a time: the good record lands',
+    net.records.size === 1 && [...net.records.values()][0].job_id === 'J1')
+  ok('…all marked told; only the unexpected refusal is reported',
+    rawQueue().every(p => p.announced) && reported.filter(r => r.includes('photo record')).length === 1
+    && reported.some(r => r.includes('refused 1 photo record') && r.includes('check constraint')))
+  const callsThen = net.recordCalls.length
+  await announcePhotos()
+  ok('…and not sent again', net.recordCalls.length === callsThen)
+
+  // A photo whose file is gone never lands: its record is taken back, or a
+  // teammate's Complete would be held for it.
+  await reset()
+  await enqueuePhoto({ ...base, uri: shot(), photo_type: 'after' })
+  await until(() => rawQueue()[0]?.announced === true, 'the photo marked as told')
+  files.delete(rawQueue()[0].localUri)
+  await flushQueue()
+  await until(() => net.records.size === 0, 'the record of a photo that will never land to go')
+  ok('a photo whose file is gone is dropped and its record taken back', rawQueue().length === 0 && net.rows.length === 0)
+
+  // What the Complete sends as this phone's own photos (p_on_phone).
+  await reset()
+  net.offline = true
+  await enqueuePhoto({ ...base, photo_type: 'checklist', uri: shot(), checklist_item_id: 'L1', caption: 'Wipe the oven' })
+  await enqueuePhoto({ ...base, job_id: 'J2', uri: shot(), photo_type: 'after' })
+  const sent = await photosOnTheWay('J1')
+  ok('the Complete sends this clean\'s photos, as recorded',
+    sent.length === 1 && sent[0].object_name === rawQueue()[0].fileName && sent[0].checklist_item_id === 'L1' && sent[0].caption === 'Wipe the oven')
+
+  // The server's answer, read.
+  const held = readHoldAnswer<any>({ result: 'held', completed: false, waiting_on: [{ user_id: 'T2', name: 'Chloe NeSmith', photos: 3 }] }, null)
+  ok('held: with whose phones', held.kind === 'held' && !held.completed && held.waitingOn.length === 1)
+  ok('…would_hold, when only asked', readHoldAnswer<any>({ result: 'would_hold', waiting_on: [] }, null).kind === 'would_hold')
+  ok('…blocked names what nothing answers', (() => {
+    const b = readHoldAnswer<any>({ result: 'blocked', blockers: [{ code: 'no_after_photo' }] }, null)
+    return b.kind === 'blocked' && b.blockers[0].code === 'no_after_photo'
+  })())
+  ok('…no answer (no signal, a server without it): unavailable, never clear',
+    readHoldAnswer(null, { message: 'TypeError: Network request failed' }).kind === 'unavailable'
+    && readHoldAnswer(null, { code: 'PGRST202', message: 'Could not find the function public.complete_when_photos_land' }).kind === 'unavailable'
+    && readHoldAnswer({ result: 'something new' }, null).kind === 'unavailable')
+  ok('…an empty blocked list is no answer, not a go', readHoldAnswer({ result: 'blocked', blockers: [] }, null).kind === 'unavailable')
+  const who = whoHasThePhotos([
+    { user_id: 'U', name: 'Amayah Young', photos: 2 },
+    { user_id: 'T2', name: 'Chloe NeSmith', photos: 3 },
+    { user_id: 'T3', name: ' Marin  Leslie', photos: 1 },
+  ], 'U')
+  ok('the crew is told whose phones: teammates by first name, their own counted apart',
+    JSON.stringify(who) === JSON.stringify({ teammates: ['Chloe', 'Marin'], mine: 2 }))
+
+  // Last: a server without the table (the app updated before the migration).
+  // The photos upload as always and the server isn't asked again until the
+  // app restarts (so this case can't be followed by another).
+  await reset()
+  net.noRecordsTable = true
+  await enqueuePhoto({ ...base, uri: shot(), photo_type: 'after' })
+  await flushQueue()
+  await enqueuePhoto({ ...base, uri: shot(), photo_type: 'after' })
+  await flushQueue()
+  await settle()
+  ok('a server without job_photos_on_the_way: photos upload as always, asked once', net.rows.length === 2 && net.recordCalls.length === 1)
 
   finished = true
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }

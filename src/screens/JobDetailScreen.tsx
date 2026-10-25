@@ -37,8 +37,9 @@ import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { linkAnswering } from '../lib/netFetch'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
-import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, photosOnPhone } from '../lib/photoQueue'
+import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, photosOnPhone, photosOnTheWay } from '../lib/photoQueue'
 import { completeWhileUploading, type WhileUploading } from '../lib/photoBlockers'
+import { readHoldAnswer, whoHasThePhotos, type HoldAnswer } from '../lib/photosOnTheWay'
 import { cachedRead } from '../lib/dataCache'
 import { noteCachedJobs } from '../lib/cachePrune'
 // Every cached read here is built in lib/jobReads, shared with the offline day
@@ -1370,21 +1371,43 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     let blockers: any[] | null = gateBlockers
     // Photos on this phone that answer every blocker: how many (the crew is told).
     let photosAhead = 0
+    // Every blocker is a photo on its way, from this phone or a teammate's:
+    // the server holds the clean at the end (completeHeldJob).
+    let holdable = false
     if (!gateErr && blockers && blockers.length > 0) {
       // Queued-but-unuploaded photos would clear these blockers the moment
       // they land — keep the offline-aware messaging instead of a dead-end
       // "photo required" that reads as a bug.
       const queued = await pendingStatus(job.id).catch((): PendingStatus => ({ count: 0, serverRejected: 0, lastServerError: null }))
-      if (queued.count > 0) {
-        if (queued.serverRejected > 0) {
-          // The server is rejecting the uploads — waiting for signal won't
-          // help, so say what's wrong and who can fix it instead.
-          Alert.alert(
-            `⚠️ ${t('photo_upload_failing_title')}`,
-            ti(t('photo_pending_complete_failing_msg'), { error: queued.lastServerError || '?' }),
-          )
-          return
-        }
+      if (queued.count > 0 && queued.serverRejected > 0) {
+        // The server is rejecting the uploads — waiting for signal won't
+        // help, so say what's wrong and who can fix it instead.
+        Alert.alert(
+          `⚠️ ${t('photo_upload_failing_title')}`,
+          ti(t('photo_pending_complete_failing_msg'), { error: queued.lastServerError || '?' }),
+        )
+        return
+      }
+      // The server knows every phone's photos on their way, a teammate's too
+      // (lib/photosOnTheWay): asked first, not holding yet. Everything left on
+      // its way: held at the end, after the pet-fee question (auto-invoice
+      // reads it when the clean completes). What nothing answers is named
+      // below. No answer (no signal, an older server): this phone's own
+      // photos, as before.
+      const ask: HoldAnswer<any> = answering
+        ? await askToHold(false, new Date().toISOString())
+        : { kind: 'unavailable' }
+      if (ask.kind === 'would_hold' || ask.kind === 'held') {
+        // Refused at the last step a moment ago (completeHeldJob): don't go round
+        // again now; the crew taps Complete again.
+        if (holdRefusedRef.current) { Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg')); return }
+        holdable = true
+        blockers = []
+      } else if (ask.kind === 'clear') {
+        blockers = []
+      } else if (ask.kind === 'blocked') {
+        blockers = ask.blockers
+      } else if (queued.count > 0) {
         // Every blocker is a photo this phone is still sending: the Complete
         // goes now, at the tap, and the outbox holds it until they land
         // (lib/outbox), so the crew clocks out instead of waiting out the
@@ -1548,7 +1571,67 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       }
     }
 
+    if (holdable) { await completeHeldJob(); return }
     await completeJobNoPhotoCheck(photosAhead)
+  }
+
+  // complete_when_photos_land (lib/photosOnTheWay), with this phone's own
+  // photos still queued for the clean. hold false only asks. No signal, or a
+  // server without it yet, answers 'unavailable'.
+  async function askToHold(hold: boolean, completedAt: string): Promise<HoldAnswer<any>> {
+    try {
+      const onPhone = await photosOnTheWay(job.id).catch(() => [])
+      const { data, error } = await supabase.rpc('complete_when_photos_land', {
+        p_job_id: job.id, p_completed_at: completedAt, p_on_phone: onPhone, p_hold: hold,
+      })
+      return readHoldAnswer(data, error)
+    } catch {
+      return { kind: 'unavailable' }
+    }
+  }
+
+  // Every blocker was a photo on its way (completeJob asked): clocked out at
+  // the tap, then the server holds the clean, closing every other clock on it,
+  // and completes it with this tap's time and name when the photos land. The
+  // crew's note and a return visit are saved as a Complete carries them.
+  async function completeHeldJob() {
+    setSaving(true)
+    const completedAt = new Date().toISOString()
+    if (!(await clockOutActive())) { setSaving(false); return }
+    const held = await askToHold(true, completedAt)
+    // Landed meanwhile: an ordinary Complete.
+    if (held.kind === 'clear') { await sendComplete(completedAt, 0); return }
+    if (held.kind !== 'held') {
+      setSaving(false)
+      // Something new to do (a photo now presumed lost): named, from the top.
+      if (held.kind === 'blocked') {
+        holdRefusedRef.current = true
+        try { await completeJob() } finally { holdRefusedRef.current = false }
+        return
+      }
+      Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
+      return
+    }
+    const extra = { ...noteValues(), ...returnVisitValues(job, needsReturn) }
+    if (Object.keys(extra).length > 0) {
+      const { error } = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: extra })
+      if (error) Alert.alert(t('error'), error.message)
+    }
+    // (Completed already: the last photo landed while it was being held. Nothing to say.)
+    const { teammates, mine } = whoHasThePhotos(held.waitingOn, user?.id)
+    if (held.completed) { /* done */ }
+    else if (teammates.length > 0) {
+      Alert.alert(`✅ ${t('complete_held_title')}`, [
+        ti(t('complete_held_msg'), { names: teammates.join(' & ') }),
+        mine > 0 ? ti(t('complete_held_yours_too'), { n: String(mine) }) : null,
+      ].filter(Boolean).join('\n\n'))
+    } else if (mine > 0) {
+      Alert.alert(`✅ ${t('complete_photos_uploading_title')}`, ti(t('complete_photos_uploading_msg'), { n: String(mine) }))
+    }
+    maybeStopLocationTracking(user).catch(() => {})
+    onStatusChange(job, 'completed')
+    onBack()
+    setSaving(false)
   }
 
   // "Check first: tick these before completing", naming the lines, then back
@@ -1577,6 +1660,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Returns false only on a hard rejection (the alert is already shown);
   // `queued` is reported through the ref so the caller can still say so.
   const clockOutQueuedRef = useRef(false)
+  // completeHeldJob's hold was refused and it went back through completeJob to
+  // name what's left: that pass must not try to hold again.
+  const holdRefusedRef = useRef(false)
   async function clockOutActive(): Promise<boolean> {
     clockOutQueuedRef.current = false
     if (!activeEntry) return true
@@ -1626,14 +1712,23 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // migration it is overwritten with the delivery time, as today.
     const completedAt = new Date().toISOString()
     if (!(await clockOutActive())) { setSaving(false); return }
-    const queuedOffline = clockOutQueuedRef.current
-    // Append the crew's completion note to internal_notes instead of replacing
-    // it — the field also carries the owner's note to crew (and a task's title),
-    // which a plain overwrite used to erase.
+    await sendComplete(completedAt, photosAhead)
+  }
+
+  // Append the crew's completion note to internal_notes instead of replacing
+  // it — the field also carries the owner's note to crew (and a task's title),
+  // which a plain overwrite used to erase. Nothing when there's no note.
+  function noteValues(): { internal_notes?: string } {
     const crewNote = notes.trim()
-    const mergedNotes = crewNote
-      ? (job.internal_notes ? `${job.internal_notes}\n— ${crewNote}` : crewNote)
-      : (job.internal_notes ?? null)
+    if (!crewNote) return {}
+    return { internal_notes: job.internal_notes ? `${job.internal_notes}\n— ${crewNote}` : crewNote }
+  }
+
+  // The Complete itself, once clocked out (completeJobNoPhotoCheck, or a held
+  // clean whose photos landed while it was being held).
+  async function sendComplete(completedAt: string, photosAhead: number) {
+    const queuedOffline = clockOutQueuedRef.current
+    const mergedNotes = noteValues().internal_notes ?? (job.internal_notes ?? null)
     const { error: doneErr, queued: doneQueued } = await writeThrough({
       table: 'jobs', op: 'update', match: { id: job.id },
       values: {
