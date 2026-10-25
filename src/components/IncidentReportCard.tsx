@@ -8,6 +8,8 @@
 // chooses whether to send it to the host.
 // Absorbs the old LostFoundCard — lost_found is a picker type that keeps the
 // guest-belonging wording (lf_* keys) and skips the severity rating.
+// A deep clean needs a photo of each thing tapped before it saves (CKS
+// 2026-10-23: "the photo is the review"); each is queued with what it is of.
 // Icons/colors per type MUST stay in sync with the web DamageReportTab
 // REPORT_TYPES and the notify-damage-report email TYPE_ICON map.
 // (Table/function names keep the legacy "damage report" identifiers on purpose.)
@@ -22,10 +24,11 @@ import { queueIncidentNotify, flushIncidentNotifies } from '../lib/incidentNotif
 import { supabase } from '../lib/supabase'
 import { roomLabel } from '../lib/rooms'
 import { useLang } from '../contexts/LangContext'
+import { ti } from '../lib/i18n'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { TranslationKey } from '../lib/i18n'
 import { CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT } from '../lib/theme'
-import { DEEP_CLEAN_ITEMS, DEEP_CLEAN_OTHER_MAX, isDeepClean, deepCleanTitle, deepCleanReady } from '../lib/deepClean'
+import { DEEP_CLEAN_ITEMS, DEEP_CLEAN_OTHER_MAX, isDeepClean, deepCleanTitle, deepCleanReady, deepCleanSlots, deepCleanPhotosReady } from '../lib/deepClean'
 
 const RED = '#EF4444'
 
@@ -88,6 +91,8 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   const [deepItems, setDeepItems] = useState<string[]>([])
   const [deepOtherOn, setDeepOtherOn] = useState(false)
   const [deepOther, setDeepOther] = useState('')
+  // Its photos by slot (an item id, or 'other'): local uris, one of each required.
+  const [deepPhotos, setDeepPhotos] = useState<Record<string, string[]>>({})
 
   useEffect(() => {
     if (presetKey > 0) { setOpen(true); setRoomId(presetRoom?.id || '') }
@@ -124,23 +129,35 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   // Stained"); with no linen list on the property the crew describes it freely.
   const linenTitle = linenItem ? `${linenQty}× ${linenItem.item_name} — ${linenCondEn}` : title.trim()
   const deepTitle = deepCleanTitle(deepItems, deepOtherOn ? deepOther : '')
-  const canSubmit = isDeep ? deepCleanReady(deepItems, deepOtherOn, deepOther)
+  const deepSlots = deepCleanSlots(deepItems, deepOtherOn, deepOther)
+  const deepPhotosOk = deepCleanPhotosReady(deepSlots, deepPhotos)
+  const slotName = (sl: { label: string; labelKey?: string }) => (sl.labelKey ? t(sl.labelKey as TranslationKey) : sl.label)
+  const canSubmit = isDeep ? deepCleanReady(deepItems, deepOtherOn, deepOther) && deepPhotosOk
     : isLinen ? (!!linenItem || !!title.trim()) : !!title.trim()
 
   function reset() {
     setReportType('damage'); setSeverity('minor')
     setTitle(''); setDescription(''); setPhotoUrls([]); setOpen(false)
     setLinenItemId(''); setLinenQty(1); setLinenCond('stained'); setRoomId('')
-    setDeepItems([]); setDeepOtherOn(false); setDeepOther('')
+    setDeepItems([]); setDeepOtherOn(false); setDeepOther(''); setDeepPhotos({})
   }
 
   // Discard the form: its photos were never queued, so delete their files.
   function cancel() {
     photoUrls.forEach(u => { discardCapturedPhoto(u) })
+    Object.values(deepPhotos).flat().forEach(u => { discardCapturedPhoto(u) })
     reset()
   }
 
-  async function addPhoto() {
+  // Untapping an item drops its photos: they are of something no longer asked for.
+  function dropSlot(key: string) {
+    const urls = deepPhotos[key] ?? []
+    if (!urls.length) return
+    urls.forEach(u => { discardCapturedPhoto(u) })
+    setDeepPhotos(p => { const next = { ...p }; delete next[key]; return next })
+  }
+
+  async function addPhoto(slot: string | null = null) {
     setUploading(true)
     try {
       // Camera-only so incident photos are always fresh. Nothing uploads here:
@@ -150,7 +167,8 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
       const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', quality: 0.7 })
       if (!result.canceled && result.assets?.[0]) {
         const local = await persistCapturedPhoto(result.assets[0].uri, job.id)
-        setPhotoUrls(p => [...p, local])
+        if (slot) setDeepPhotos(p => ({ ...p, [slot]: [...(p[slot] ?? []), local] }))
+        else setPhotoUrls(p => [...p, local])
       }
     } catch (e: any) {
       Alert.alert(t('upload_failed'), e?.message || '')
@@ -159,7 +177,13 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   }
 
   async function save() {
-    if (!canSubmit) { Alert.alert(t(isLF ? 'lf_need_item' : isDeep ? 'ir_deep_need' : 'ir_need_title')); return }
+    if (!canSubmit) {
+      if (isDeep && deepCleanReady(deepItems, deepOtherOn, deepOther) && !deepPhotosOk) {
+        Alert.alert(ti(t('ir_deep_photo_need'), { items: deepSlots.filter(sl => !(deepPhotos[sl.key]?.length)).map(slotName).join(', ') }))
+        return
+      }
+      Alert.alert(t(isLF ? 'lf_need_item' : isDeep ? 'ir_deep_need' : 'ir_need_title')); return
+    }
     setSaving(true)
     try {
       const finalTitle = isDeep ? deepTitle : isLinen ? linenTitle : title.trim()
@@ -189,8 +213,17 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
         status: 'reported',
       } })
       if (insertError) throw insertError
-      for (const localUri of photoUrls) {
-        await enqueueIncidentPhoto({ localUri, tenant_id: user.tenant_id, job_id: job.id, user_id: user.id, incident_report_id: reportId })
+      if (isDeep) {
+        // Each slot's photos, labelled with the slot's English name ("Oven").
+        for (const sl of deepSlots) {
+          for (const localUri of deepPhotos[sl.key] ?? []) {
+            await enqueueIncidentPhoto({ localUri, tenant_id: user.tenant_id, job_id: job.id, user_id: user.id, incident_report_id: reportId, label: sl.label })
+          }
+        }
+      } else {
+        for (const localUri of photoUrls) {
+          await enqueueIncidentPhoto({ localUri, tenant_id: user.tenant_id, job_id: job.id, user_id: user.id, incident_report_id: reportId })
+        }
       }
 
       // Mirror a linen report into the linen ledger — the same job_inventory_log
@@ -360,12 +393,12 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
               const sel = deepItems.includes(i.id)
               return (
                 <TouchableOpacity key={i.id} style={[styles.typeBtn, sel && { borderColor: type.color, backgroundColor: type.color + '15' }]}
-                  onPress={() => setDeepItems(p => sel ? p.filter(x => x !== i.id) : [...p, i.id])}>
+                  onPress={() => { if (sel) dropSlot(i.id); setDeepItems(p => sel ? p.filter(x => x !== i.id) : [...p, i.id]) }}>
                   <Text style={[styles.typeLabel, sel && { color: type.color, fontWeight: '700' }]} numberOfLines={2}>{sel ? '✓ ' : ''}{t(i.labelKey)}</Text>
                 </TouchableOpacity>
               )
             })}
-            <TouchableOpacity style={[styles.typeBtn, deepOtherOn && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => setDeepOtherOn(o => !o)}>
+            <TouchableOpacity style={[styles.typeBtn, deepOtherOn && { borderColor: type.color, backgroundColor: type.color + '15' }]} onPress={() => { if (deepOtherOn) dropSlot('other'); setDeepOtherOn(o => !o) }}>
               <Text style={[styles.typeLabel, deepOtherOn && { color: type.color, fontWeight: '700' }]} numberOfLines={2}>{deepOtherOn ? '✓ ' : ''}{t('ir_deep_other')}</Text>
             </TouchableOpacity>
           </View>
@@ -379,6 +412,31 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
               placeholder={t('ir_deep_other_placeholder')}
               placeholderTextColor={TEXT_LIGHT}
             />
+          )}
+          {deepSlots.length > 0 && (
+            <>
+              <Text style={styles.label}>{t('ir_deep_photos_label')} *</Text>
+              <Text style={[styles.sub, { marginTop: 0, marginBottom: 6 }]}>{t('ir_deep_photos_hint')}</Text>
+              {deepSlots.map(sl => {
+                const shots = deepPhotos[sl.key] ?? []
+                return (
+                  <View key={sl.key} style={styles.slotRow}>
+                    <Text style={[styles.slotName, { color: shots.length ? TEXT : '#B45309' }]} numberOfLines={2}>{shots.length ? '✓ ' : ''}{slotName(sl)}</Text>
+                    {shots.map(u => (
+                      <View key={u}>
+                        <Image source={{ uri: u }} style={styles.slotThumb} />
+                        <TouchableOpacity style={styles.removePhoto} onPress={() => { discardCapturedPhoto(u); setDeepPhotos(p => ({ ...p, [sl.key]: (p[sl.key] ?? []).filter(x => x !== u) })) }}>
+                          <Text style={styles.removePhotoText}>×</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                    <TouchableOpacity style={styles.slotBtn} onPress={() => addPhoto(sl.key)} disabled={uploading}>
+                      <Text style={styles.photoBtnText}>{uploading ? '…' : t(shots.length ? 'ir_deep_photo_more' : 'ir_deep_photo_btn')}</Text>
+                    </TouchableOpacity>
+                  </View>
+                )
+              })}
+            </>
           )}
         </>
       )}
@@ -410,7 +468,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
         numberOfLines={2}
       />
 
-      {photoUrls.length > 0 && (
+      {!isDeep && photoUrls.length > 0 && (
         <View style={styles.photoRow}>
           {photoUrls.map((url, i) => (
             <View key={i}>
@@ -422,9 +480,11 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
           ))}
         </View>
       )}
-      <TouchableOpacity style={styles.photoBtn} onPress={addPhoto} disabled={uploading}>
-        <Text style={styles.photoBtnText}>{uploading ? '…' : t('lf_add_photo')}</Text>
-      </TouchableOpacity>
+      {!isDeep && (
+        <TouchableOpacity style={styles.photoBtn} onPress={() => addPhoto()} disabled={uploading}>
+          <Text style={styles.photoBtnText}>{uploading ? '…' : t('lf_add_photo')}</Text>
+        </TouchableOpacity>
+      )}
 
       <View style={styles.actions}>
         <TouchableOpacity style={styles.cancelBtn} onPress={cancel} disabled={saving}>
@@ -433,7 +493,8 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
         <TouchableOpacity
           style={[styles.saveBtn, { backgroundColor: type.color }, (!canSubmit || saving) && styles.saveBtnDisabled]}
           onPress={save}
-          disabled={!canSubmit || saving}
+          // A deep clean missing a photo stays tappable, so the alert says which.
+          disabled={(!canSubmit && !(isDeep && deepCleanReady(deepItems, deepOtherOn, deepOther))) || saving}
         >
           <Text style={styles.saveBtnText}>{saving ? t('lf_saving') : t(isLF ? 'lf_save' : isLinen ? 'ir_linen_save' : isDeep ? 'ir_deep_save' : 'ir_save')}</Text>
         </TouchableOpacity>
@@ -465,6 +526,10 @@ const styles = StyleSheet.create({
   removePhotoText: { color: '#fff', fontSize: 11, fontWeight: '700', lineHeight: 13 },
   photoBtn: { borderWidth: 1, borderColor: BORDER, borderRadius: 10, paddingVertical: 11, alignItems: 'center', marginBottom: 12 },
   photoBtnText: { fontSize: 13, fontWeight: '600', color: TEXT_MUTED },
+  slotRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, paddingVertical: 6, borderTopWidth: 1, borderTopColor: BORDER },
+  slotName: { fontSize: 13, fontWeight: '700', minWidth: 96, flexShrink: 1 },
+  slotThumb: { width: 44, height: 44, borderRadius: 7, borderWidth: 1, borderColor: BORDER },
+  slotBtn: { borderWidth: 1, borderColor: BORDER, borderStyle: 'dashed', borderRadius: 9, paddingVertical: 7, paddingHorizontal: 12, marginLeft: 'auto' },
   actions: { flexDirection: 'row', gap: 8 },
   cancelBtn: { flex: 1, borderWidth: 1, borderColor: BORDER, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   cancelBtnText: { fontSize: 14, fontWeight: '700', color: TEXT_MUTED },
