@@ -7,13 +7,17 @@
 // (2026-10-16): a Complete queued offline reached the server before its
 // photos, was refused five times and parked, and the clock-out queued before
 // it had landed, so the clean stayed open with its crew clocked out.
+// And (2026-10-25): online, the gate naming only photos still on this phone,
+// the Complete goes at the tap (lib/photoBlockers) instead of keeping the crew
+// clocked in until they upload; anything the phone can't answer still stops it.
 //
 // The runner also builds mutants (the hold removed, refused photos holding
 // forever, incident photos counted) and requires each one to FAIL here, so a
 // green run is evidence and not an accident.
 import { randomBytes } from 'node:crypto'
 import { writeThrough, flushOutbox, pendingOpCount, rejectedOps, onCompletePastRefusedPhotos } from '../outbox'
-import { enqueuePhoto, enqueueIncidentPhoto, persistCapturedPhoto, flushQueue } from '../photoQueue'
+import { enqueuePhoto, enqueueIncidentPhoto, persistCapturedPhoto, flushQueue, photosOnPhone } from '../photoQueue'
+import { completeWhileUploading } from '../photoBlockers'
 import {
   net, db, files, fileBytes, rawQueue, setRawQueue, reported, release, releaseWrites, MockFormData, fetchMock, AsyncStorage,
 } from './completeAfterPhotos.mocks'
@@ -270,6 +274,84 @@ const afterRowOnServer = () => net.rows.push({ job_id: 'J1', photo_type: 'after'
   await landed('the flush that was mid-pass to send the Complete')
   ok('photo landed mid-flush: that flush goes round and sends the Complete, no other trigger',
     (await pendingOpCount()) === 0 && completes().length === 1 && !completes()[0].refused)
+
+  // ── Online, the gate waiting on a shot this phone is still sending ───────
+  // JobDetailScreen.completeJob asked the gate and it named a shot still on
+  // the phone. It used to refuse ("Photos still uploading") and the crew stayed
+  // clocked in until the upload went: hours on one bar (Celebrity Clean,
+  // 10/24). Every blocker is a photo on its way from here, so the clock-out
+  // and the Complete go at the tap, and the Complete waits in the outbox.
+  const shotGate = (...reqs: string[]) => (jobId: string) => reqs
+    .filter(r => !net.rows.some(row => row.job_id === jobId && row.photo_requirement_id === r))
+    .map(r => ({ code: 'missing_required_area_photo', requirement_id: r }))
+  await reset()
+  db.gate = shotGate('KITCHEN')
+  net.hold = true
+  await enqueuePhoto({ ...base, uri: shot(), photo_requirement_id: 'KITCHEN' })
+  const shotUp = flushQueue()
+  await until(() => net.held.length === 1, 'the shot upload to start')
+  ok('online, the gate wants a shot this phone is still sending: Complete goes',
+    completeWhileUploading(db.gate('J1'), await photosOnPhone('J1')).kind === 'go')
+  const tap = await tapComplete()
+  ok('…clocked out at the tap, live', tap.out.queued === false && !tap.out.error && db.log[0]?.filters.includes('id=eq.TE-J1'))
+  ok('…the Complete waits behind the shot, no error to show',
+    tap.done.queued === true && !tap.done.error && db.jobs.get('J1') === 'in_progress' && (await parked()) === 0)
+  release()
+  await shotUp
+  await landed('the Complete after the shot')
+  const lastComplete = () => completes()[completes().length - 1]
+  ok('…the shot lands: the Complete goes by itself and is accepted',
+    completes().length === 2 && !lastComplete().refused && lastComplete().rowsAtTheTime === 1 && (await parked()) === 0)
+
+  // What no photo on this phone answers still stops it, or the held Complete
+  // would reach a gate that refuses it and park.
+  await reset()
+  net.offline = true // nothing uploads from here on: it's what's on the phone that counts
+  await enqueuePhoto({ ...base, uri: shot(), photo_requirement_id: 'KITCHEN' })
+  const kitchenOnPhone = await photosOnPhone('J1')
+  const kitchen = { code: 'missing_required_area_photo', requirement_id: 'KITCHEN' }
+  const bath = { code: 'missing_required_area_photo', requirement_id: 'BATH' }
+  const named = completeWhileUploading([kitchen, bath], kitchenOnPhone)
+  ok('a shot not on this phone (never taken, or a teammate\'s on theirs): named, no Complete',
+    named.kind === 'name' && named.left.length === 1 && named.left[0].requirement_id === 'BATH')
+  const line = completeWhileUploading([kitchen, { code: 'unchecked_required_item', checklist_item_id: 'L1' }], kitchenOnPhone)
+  ok('…an unticked required line is named too', line.kind === 'name' && line.left[0].code === 'unchecked_required_item')
+  ok('…none answered from here: "still uploading", as before', completeWhileUploading([bath], kitchenOnPhone).kind === 'wait')
+  ok('…another clean\'s photo answers nothing', completeWhileUploading([kitchen], await photosOnPhone('J2')).kind === 'wait')
+  ok('the after photo: a queued after photo answers it', completeWhileUploading([{ code: 'no_after_photo' }], kitchenOnPhone).kind === 'go')
+
+  await reset()
+  net.offline = true
+  await enqueuePhoto({ ...base, uri: shot(), check_first_line_id: 'CF1' })
+  const cfOnPhone = await photosOnPhone('J1')
+  ok('…a Check first photo is not the after photo', completeWhileUploading([{ code: 'no_after_photo' }], cfOnPhone).kind === 'wait')
+  ok('…it answers its own Check first line',
+    completeWhileUploading([{ code: 'check_first_photo_missing', requirement_id: 'CF1' }], cfOnPhone).kind === 'go')
+
+  await reset()
+  net.offline = true
+  await enqueueIncidentPhoto({ localUri: await persistCapturedPhoto(shot(), 'J1'), tenant_id: 'T', job_id: 'J1', user_id: 'U', incident_report_id: 'R1' })
+  ok('an incident-form photo answers nothing (it only joins its report)',
+    completeWhileUploading([{ code: 'no_after_photo' }], await photosOnPhone('J1')).kind === 'wait')
+
+  await reset()
+  net.offline = true
+  await enqueuePhoto({ ...base, photo_type: 'checklist', uri: shot(), checklist_item_id: 'L1', caption: 'Wipe the oven' })
+  await enqueuePhoto({ ...base, photo_type: 'checklist', uri: shot(), caption: 'Mop the floor' })
+  const linesOnPhone = await photosOnPhone('J1')
+  ok('a checklist line\'s photo answers its line',
+    completeWhileUploading([{ code: 'missing_required_photo', checklist_item_id: 'L1', task: 'Wipe the oven' }], linesOnPhone).kind === 'go')
+  ok('…an unlinked photo answers by its caption, as the gate matches it',
+    completeWhileUploading([{ code: 'missing_required_photo', checklist_item_id: 'L2', task: 'Mop the floor' }], linesOnPhone).kind === 'go')
+  ok('…a photo linked to another line doesn\'t, whatever its caption',
+    completeWhileUploading([{ code: 'missing_required_photo', checklist_item_id: 'L3', task: 'Wipe the oven' }], linesOnPhone).kind === 'wait')
+
+  await reset()
+  net.refuseNew = true
+  await enqueuePhoto({ ...base, uri: shot(), photo_requirement_id: 'KITCHEN' })
+  for (let i = 0; i < 3; i++) await flushQueue({ force: true })
+  ok('a shot the server refused 3 times answers nothing (the outbox stops waiting on it too)',
+    rawQueue()[0]?.refusals === 3 && completeWhileUploading([kitchen], await photosOnPhone('J1')).kind === 'wait')
 
   finished = true
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }

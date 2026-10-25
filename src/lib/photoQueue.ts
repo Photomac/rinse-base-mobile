@@ -22,6 +22,7 @@ import * as FileSystem from 'expo-file-system/legacy'
 import { supabase, usableAccessToken } from './supabase'
 import { reportClientError } from './errorReporter'
 import { sha256HexOfBase64 } from './sha256'
+import type { PhotoOnPhone } from './photoBlockers'
 
 const QUEUE_KEY = 'rinsebase.photoQueue.v1'
 const DIR = FileSystem.documentDirectory + 'pending_photos/'
@@ -638,7 +639,7 @@ export function flushQueue(opts?: { force?: boolean }): Promise<QueueStatus> {
       uploaded += pass.uploaded
       const again = takeRerun()
       // No signal: going round again would only fail again; the next trigger
-      // (capture, screen open, foreground, the 2-minute drain) retries.
+      // (capture, screen open, foreground, App.tsx's 30-second photo retry) retries.
       if (!again || pass.noSignal) break
       force = again.force
     }
@@ -729,6 +730,22 @@ export async function photosAheadOfComplete(jobId: string): Promise<PhotosAheadO
     refused: refused.length,
     lastServerError: refused.length ? refused[refused.length - 1].lastError ?? null : null,
   }
+}
+
+/** This clean's photos a queued Complete waits for (the `waiting` ones of
+ *  photosAheadOfComplete), by what the completion gate matches their rows on.
+ *  At Complete, lib/photoBlockers says which of the gate's blockers they answer. */
+export async function photosOnPhone(jobId: string): Promise<PhotoOnPhone[]> {
+  return (await readQueue())
+    .filter(p => p.job_id === jobId && (!p.incident_report_id || p.also_job_photo) && !p.row_saved)
+    .filter(p => !(p.lastErrorKind === 'server' && refusalsOf(p) >= REFUSALS_BEFORE_COMPLETE_GOES))
+    .map(p => ({
+      photo_type: p.photo_type,
+      caption: p.caption,
+      checklist_item_id: p.checklist_item_id ?? null,
+      photo_requirement_id: p.photo_requirement_id ?? null,
+      check_first_line_id: p.check_first_line_id ?? null,
+    }))
 }
 
 /** A required shot (photo_requirement_id) still on the phone. */

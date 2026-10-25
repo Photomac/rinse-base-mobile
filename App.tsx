@@ -28,7 +28,7 @@ import { resumeSOSTrailIfOpen } from './src/lib/sosTracker'
 // Side-effect import: registers the arrival-geofence TaskManager task at bundle
 // eval so headless OS launches (region crossings) find the handler.
 import './src/lib/arrivalGeofence'
-import { flushQueue } from './src/lib/photoQueue'
+import { flushQueue, pendingCount, photoQueueActive } from './src/lib/photoQueue'
 import { flushVideoQueue } from './src/lib/videoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
 import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
@@ -388,7 +388,21 @@ function AppInner() {
     // coverage with the app on screen never backgrounds it, so the foreground
     // trigger alone left photos waiting. Both drains are cheap no-ops when
     // nothing is queued, and flushQueue ignores overlapping calls.
-    const iv = setInterval(() => { if (AppState.currentState === 'active') drain() }, 120_000)
+    // Every 2 minutes, and photos every 30 seconds while any are on the phone:
+    // a pass stops at the first upload that can't get through, and a Complete
+    // can be waiting behind them in the outbox with the crew already gone
+    // (JobDetailScreen), so on a bar that comes and goes the next try comes
+    // sooner. Only the photos and what waits on them, not the whole drain.
+    let ticks = 0
+    const iv = setInterval(() => {
+      ticks++
+      if (AppState.currentState !== 'active') return
+      if (ticks % 4 === 0) { drain(); return }
+      if (photoQueueActive()) return
+      pendingCount().then(n => {
+        if (n > 0) return flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}).then(() => flushIncidentNotifies())
+      }).catch(() => {})
+    }, 30_000)
     // Queued writes just synced: the phone is back on signal.
     const offDrained = onOutboxDrained(() => { prefetchDays(user).catch(() => {}) })
     return () => { sub.remove(); clearInterval(iv); offDrained() }

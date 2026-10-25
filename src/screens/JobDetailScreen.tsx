@@ -37,7 +37,8 @@ import { SLATE_DARK, GOLD } from '../lib/theme'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { linkAnswering } from '../lib/netFetch'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
-import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive } from '../lib/photoQueue'
+import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, photosOnPhone } from '../lib/photoQueue'
+import { completeWhileUploading, type WhileUploading } from '../lib/photoBlockers'
 import { cachedRead } from '../lib/dataCache'
 import { noteCachedJobs } from '../lib/cachePrune'
 // Every cached read here is built in lib/jobReads, shared with the offline day
@@ -1362,10 +1363,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     // requires. RPC error → fail open: the status update below needs signal
     // anyway, and the DB-side backstop enforces once it ships. Not asked with
     // the link not answering: it would fail open after its 30 s deadline.
-    const { data: blockers, error: gateErr } = answering
+    const { data: gateBlockers, error: gateErr } = answering
       ? await supabase.rpc('job_completion_blockers', { p_job_id: job.id })
       : { data: null, error: { message: 'link not answering' } }
     setSaving(false)
+    let blockers: any[] | null = gateBlockers
+    // Photos on this phone that answer every blocker: how many (the crew is told).
+    let photosAhead = 0
     if (!gateErr && blockers && blockers.length > 0) {
       // Queued-but-unuploaded photos would clear these blockers the moment
       // they land — keep the offline-aware messaging instead of a dead-end
@@ -1381,16 +1385,33 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           )
           return
         }
-        // Still uploading (signal is fine, the photos are just big) vs. no
-        // signal — different advice.
-        if (photoQueueActive()) {
-          Alert.alert(`⬆️ ${t('photo_uploading_complete_title')}`, ti(t('photo_uploading_complete_msg'), { n: String(queued.count) }))
+        // Every blocker is a photo this phone is still sending: the Complete
+        // goes now, at the tap, and the outbox holds it until they land
+        // (lib/outbox), so the crew clocks out instead of waiting out the
+        // upload, for hours on one bar (Celebrity Clean, 10/24). Some answered
+        // here: the rest are named below, they still have to be done.
+        const verdict: WhileUploading<any> = await photosOnPhone(job.id)
+          .then(p => completeWhileUploading(blockers!, p))
+          .catch(() => ({ kind: 'wait' as const }))
+        if (verdict.kind === 'go') {
+          photosAhead = queued.count
+          blockers = []
+        } else if (verdict.kind === 'name') {
+          blockers = verdict.left
+        } else {
+          // Still uploading (signal is fine, the photos are just big) vs. no
+          // signal — different advice.
+          if (photoQueueActive()) {
+            Alert.alert(`⬆️ ${t('photo_uploading_complete_title')}`, ti(t('photo_uploading_complete_msg'), { n: String(queued.count) }))
+            return
+          }
+          Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
           return
         }
-        Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
-        return
       }
-
+    }
+    // What still stops the Complete.
+    if (!gateErr && blockers && blockers.length > 0) {
       if (blockers.some((b: any) => b.code === 'no_after_photo')) {
         Alert.alert(
           `📸 ${t('photo_required_alert')}`,
@@ -1527,7 +1548,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       }
     }
 
-    await completeJobNoPhotoCheck()
+    await completeJobNoPhotoCheck(photosAhead)
   }
 
   // "Check first: tick these before completing", naming the lines, then back
@@ -1593,7 +1614,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     onBack()
   }
 
-  async function completeJobNoPhotoCheck() {
+  // photosAhead: photos on this phone the gate is still waiting for (completeJob).
+  // The Complete then queues behind them, and the crew is told so.
+  async function completeJobNoPhotoCheck(photosAhead = 0) {
     setSaving(true)
     // completed_at = the tap, not the moment the outbox delivers it: offline
     // Completes replay later, and the server would otherwise stamp the replay.
@@ -1629,7 +1652,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
       Alert.alert(t('error'), doneErr.message)
       return
     }
-    if (queuedOffline || doneQueued) Alert.alert('📡', t('queued_offline'))
+    // Queued behind its photos: done and clocked out here, complete for the
+    // office when they land. (Landed already: the write went, nothing to say.)
+    if (photosAhead > 0 && doneQueued) {
+      Alert.alert(`✅ ${t('complete_photos_uploading_title')}`, ti(t('complete_photos_uploading_msg'), { n: String(photosAhead) }))
+    } else if (queuedOffline || doneQueued) Alert.alert('📡', t('queued_offline'))
     // Done working? Stop GPS. (No-op if another entry/shift is still open or
     // more jobs remain today — daily-shift crews keep broadcasting.)
     maybeStopLocationTracking(user).catch(() => {})
