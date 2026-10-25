@@ -1398,6 +1398,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         ? await askToHold(false, new Date().toISOString())
         : { kind: 'unavailable' }
       if (ask.kind === 'would_hold' || ask.kind === 'held') {
+        // Refused at the last step a moment ago (completeHeldJob): don't go round
+        // again now; the crew taps Complete again.
+        if (holdRefusedRef.current) { Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg')); return }
         holdable = true
         blockers = []
       } else if (ask.kind === 'clear') {
@@ -1601,7 +1604,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (held.kind !== 'held') {
       setSaving(false)
       // Something new to do (a photo now presumed lost): named, from the top.
-      if (held.kind === 'blocked') { await completeJob(); return }
+      if (held.kind === 'blocked') {
+        holdRefusedRef.current = true
+        try { await completeJob() } finally { holdRefusedRef.current = false }
+        return
+      }
       Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
       return
     }
@@ -1653,6 +1660,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // Returns false only on a hard rejection (the alert is already shown);
   // `queued` is reported through the ref so the caller can still say so.
   const clockOutQueuedRef = useRef(false)
+  // completeHeldJob's hold was refused and it went back through completeJob to
+  // name what's left: that pass must not try to hold again.
+  const holdRefusedRef = useRef(false)
   async function clockOutActive(): Promise<boolean> {
     clockOutQueuedRef.current = false
     if (!activeEntry) return true

@@ -44,7 +44,7 @@ export interface OnTheWayRow {
 export function onTheWayRow(p: QueuedForRecord): OnTheWayRow {
   return {
     object_name: p.fileName,
-    photo_type: p.photo_type,
+    photo_type: p.photo_type || 'general',
     caption: p.caption,
     checklist_item_id: p.checklist_item_id ?? null,
     photo_requirement_id: p.photo_requirement_id ?? null,
