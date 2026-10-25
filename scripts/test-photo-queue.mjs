@@ -32,11 +32,13 @@ try {
   writeFileSync(join(work, 'photoQueue.ts'), queue)
   cpSync(join(repo, 'src/lib/__tests__/photoQueue.mocks.ts'), join(work, 'photoQueue.mocks.ts'))
   cpSync(join(repo, 'src/lib/sha256.ts'), join(work, 'sha256.ts'))
+  // No imports: as is.
+  cpSync(join(repo, 'src/lib/photosOnTheWay.ts'), join(work, 'photosOnTheWay.ts'))
   const scenario = readFileSync(join(repo, 'src/lib/__tests__/photoQueue.scenario.ts'), 'utf8')
     .replaceAll(`'../photoQueue'`, `'./photoQueue'`)
   writeFileSync(join(work, 'scenario.ts'), scenario)
 
-  execSync('npx --yes esbuild photoQueue.ts photoQueue.mocks.ts sha256.ts scenario.ts --format=cjs --platform=node --outdir=out', {
+  execSync('npx --yes esbuild photoQueue.ts photoQueue.mocks.ts sha256.ts photosOnTheWay.ts scenario.ts --format=cjs --platform=node --outdir=out', {
     cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
   })
   execSync('node out/scenario.js', { cwd: work, stdio: 'inherit' })

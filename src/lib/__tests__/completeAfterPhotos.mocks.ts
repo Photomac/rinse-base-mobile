@@ -72,7 +72,7 @@ function builder(table: string, op: string, values: any) {
 export const supabase = {
   storage: photoServer.storage,
   rpc: photoServer.rpc,
-  from: (table: string) => table === 'job_photos' ? photoServer.from(table) : {
+  from: (table: string) => table === 'job_photos' || table === 'job_photos_on_the_way' ? photoServer.from(table) : {
     select: () => builder(table, 'select', null),
     upsert: (values: any) => builder(table, 'upsert', values),
     update: (values: any) => builder(table, 'update', values),
