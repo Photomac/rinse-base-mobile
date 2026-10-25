@@ -49,6 +49,8 @@ const sources = {
     [`from './errorReporter'`, `from '${MOCKS}'`],
     [`const UPLOAD_TIMEOUT_MS = 240_000`, `const UPLOAD_TIMEOUT_MS = 50`],
   ], 'photoQueue.ts'),
+  // No imports: as is.
+  'photoBlockers.ts': read('src/lib/photoBlockers.ts'),
 }
 
 // Each must make at least one assertion fail (or the scenario stall).
@@ -65,6 +67,20 @@ const MUTANTS = [
     `if (flushing) photoLandedMidFlush = true`, `if (flushing) return`],
   ['a live Complete refused for its photos is shown as an error', 'outbox.ts',
     `  if (await refusedForPhotosOnPhone(w, res.error)) {\n    await enqueue(w)`, `  if (false) {\n    await enqueue(w)`],
+  // Complete at the tap while photos upload (lib/photoBlockers, photosOnPhone).
+  ['Complete goes with a blocker no photo here answers', 'photoBlockers.ts',
+    `if (left.length === 0) return { kind: 'go' }`, `if (left.length < blockers.length) return { kind: 'go' }`],
+  ['any queued shot answers any required shot', 'photoBlockers.ts',
+    `photos.some(p => p.photo_requirement_id === b.requirement_id)`, `photos.some(p => !!p.photo_requirement_id)`],
+  ['a Check first photo counts as the after photo', 'photoBlockers.ts',
+    `(p.photo_type === 'after' || p.photo_type === 'general') && !p.check_first_line_id`, `(p.photo_type === 'after' || p.photo_type === 'general')`],
+  ['a photo linked to one line answers another by caption', 'photoBlockers.ts',
+    `(!p.checklist_item_id && b.task != null && p.caption === b.task)`, `(b.task != null && p.caption === b.task)`],
+  ['a shot the server keeps refusing answers its blocker', 'photoQueue.ts',
+    `    .filter(p => !(p.lastErrorKind === 'server' && refusalsOf(p) >= REFUSALS_BEFORE_COMPLETE_GOES))\n`, ``],
+  ['another clean\'s photos answer this one\'s blockers', 'photoQueue.ts',
+    `export async function photosOnPhone(jobId: string): Promise<PhotoOnPhone[]> {\n  return (await readQueue())\n    .filter(p => p.job_id === jobId && `,
+    `export async function photosOnPhone(jobId: string): Promise<PhotoOnPhone[]> {\n  return (await readQueue())\n    .filter(p => `],
 ]
 
 function run(files, { quiet }) {
@@ -79,8 +95,9 @@ function run(files, { quiet }) {
     writeFileSync(join(work, 'scenario.ts'), rewrite(read('src/lib/__tests__/completeAfterPhotos.scenario.ts'), [
       [`'../outbox'`, `'./outbox'`],
       [`'../photoQueue'`, `'./photoQueue'`],
+      [`'../photoBlockers'`, `'./photoBlockers'`],
     ], 'completeAfterPhotos.scenario.ts'))
-    execSync('npx --yes esbuild outbox.ts photoQueue.ts sha256.ts timezone.ts photoQueue.mocks.ts completeAfterPhotos.mocks.ts scenario.ts --format=cjs --platform=node --outdir=out --log-level=warning', {
+    execSync('npx --yes esbuild outbox.ts photoQueue.ts photoBlockers.ts sha256.ts timezone.ts photoQueue.mocks.ts completeAfterPhotos.mocks.ts scenario.ts --format=cjs --platform=node --outdir=out --log-level=warning', {
       cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
     })
     execSync('node out/scenario.js', { cwd: work, stdio: quiet ? 'pipe' : 'inherit' })
