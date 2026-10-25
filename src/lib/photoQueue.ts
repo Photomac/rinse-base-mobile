@@ -778,10 +778,13 @@ export async function photosOnTheWay(jobId: string): Promise<OnTheWayRow[]> {
 //   - No signal: tried again on the next capture or pass.
 //   - A server without the table (the app updated before the migration):
 //     not tried again until the app restarts. The photos upload as always.
-//   - Refused (the server said no): not tried again for that photo, and
-//     reported; its upload is unaffected, a teammate's Complete just can't be
-//     held for it. A batch refused whole goes again one row at a time, so one
-//     bad row (a clean from another account on a shared phone) can't sink the rest.
+//   - Refused (the server said no): not tried again for that photo; its upload
+//     is unaffected, a teammate's Complete just can't be held for it. Only
+//     people on the clean (or the office) may record one, so a refusal by the
+//     row rules (42501: a photo for a clean you're not on) is expected and not
+//     reported; any other is. A batch refused whole goes again one row at a
+//     time, so one such row (or a clean from another account on a shared
+//     phone) can't sink the rest.
 let onTheWayUnknown = false
 let announcing: Promise<void> | null = null
 let announceAgain = false
@@ -802,7 +805,7 @@ export function announcePhotos(): Promise<void> {
 
 type RecordAnswer = 'ok' | 'offline' | 'unknown' | 'refused'
 
-async function sendRecords(rows: Record<string, unknown>[]): Promise<{ answer: RecordAnswer; message?: string }> {
+async function sendRecords(rows: Record<string, unknown>[]): Promise<{ answer: RecordAnswer; code?: string; message?: string }> {
   try {
     const { error, status } = await supabase.from('job_photos_on_the_way')
       .upsert(rows, { onConflict: 'object_name', ignoreDuplicates: true })
@@ -810,7 +813,7 @@ async function sendRecords(rows: Record<string, unknown>[]): Promise<{ answer: R
     if (status === 0) return { answer: 'offline' }
     // PostgREST: no such table (PGRST205); Postgres itself: 42P01.
     if (error.code === 'PGRST205' || error.code === '42P01') return { answer: 'unknown' }
-    return { answer: 'refused', message: error.message }
+    return { answer: 'refused', code: error.code, message: error.message }
   } catch {
     return { answer: 'offline' }
   }
@@ -832,7 +835,7 @@ async function announceOnce(): Promise<void> {
       const one = due.length > 1 ? await sendRecords([row(p)]) : first
       if (one.answer === 'offline') break
       if (one.answer === 'unknown') { onTheWayUnknown = true; break }
-      if (one.answer === 'refused') refused.push(one.message ?? '?')
+      if (one.answer === 'refused' && one.code !== '42501') refused.push(one.message ?? '?')
       done.add(p.id)
     }
     if (refused.length) {

@@ -103,8 +103,10 @@ export const net = {
   recordCalls: [] as number[],
   /** The database doesn't have job_photos_on_the_way yet (PGRST205). */
   noRecordsTable: false,
-  /** Cleans whose records the server refuses (42501): a clean from another account. */
+  /** Cleans whose records the server refuses (42501): a clean you're not on, or from another account. */
   refuseRecordsFor: new Set<string>(),
+  /** Cleans whose records the server refuses for another reason (a check: 23514). */
+  breakRecordsFor: new Set<string>(),
 }
 
 const recordsTable = {
@@ -114,6 +116,7 @@ const recordsTable = {
     if (net.noRecordsTable) return { error: { code: 'PGRST205', message: "Could not find the table 'public.job_photos_on_the_way' in the schema cache" }, status: 404 }
     if (opts?.onConflict !== 'object_name' || !opts?.ignoreDuplicates) return { error: { code: '42P10', message: 'test: records must be ON CONFLICT (object_name) DO NOTHING' }, status: 400 }
     if (rows.some(r => net.refuseRecordsFor.has(r.job_id))) return { error: { code: '42501', message: 'new row violates row-level security policy for table "job_photos_on_the_way"' }, status: 403 }
+    if (rows.some(r => net.breakRecordsFor.has(r.job_id))) return { error: { code: '23514', message: 'new row for relation "job_photos_on_the_way" violates check constraint "job_photos_on_the_way_caption_length"' }, status: 400 }
     for (const r of rows) if (!net.records.has(r.object_name)) net.records.set(r.object_name, { ...r })
     return { error: null, status: 201 }
   },

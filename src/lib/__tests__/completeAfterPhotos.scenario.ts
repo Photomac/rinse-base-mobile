@@ -75,7 +75,7 @@ async function reset() {
   net.attachResult = 'ok'; net.inserts = []; net.token = 'A'; net.storage.clear(); net.loseAnswer.clear()
   net.refuseNew = false; net.heads = []; net.headFails = false
   net.loseInsertAnswer = false; net.holdInsert = false; net.selectFails = false; net.selects = []
-  net.records.clear(); net.recordCalls = []; net.noRecordsTable = false; net.refuseRecordsFor.clear()
+  net.records.clear(); net.recordCalls = []; net.noRecordsTable = false; net.refuseRecordsFor.clear(); net.breakRecordsFor.clear()
   db.online = true; db.log = []; db.jobs.clear(); db.holdWrite = null; db.heldWrites = []; db.gate = defaultGate
   await AsyncStorage.setItem('writeOutbox', '[]')
   await AsyncStorage.setItem('writeOutboxRejected', '[]')
@@ -404,18 +404,23 @@ const afterRowOnServer = () => net.rows.push({ job_id: 'J1', photo_type: 'after'
   await announcePhotos()
   ok('an incident-form photo is not recorded (it only joins its report)', net.records.size === 0 && net.recordCalls.length === 0)
 
-  // A clean from another account on a shared phone: the server refuses that
-  // record. The rest still go, one at a time; nothing is retried forever.
+  // A clean you're not on (only people on it may record its photos): the
+  // server refuses that record. The rest still go, one at a time; nothing is
+  // retried forever; the expected refusal isn't reported, any other is.
   await reset()
   net.offline = true
   await enqueuePhoto({ ...base, uri: shot(), photo_type: 'after' })
   await enqueuePhoto({ ...base, job_id: 'J9', uri: shot(), photo_type: 'after' })
+  await enqueuePhoto({ ...base, job_id: 'J8', uri: shot(), photo_type: 'after' })
   net.offline = false
   net.refuseRecordsFor.add('J9')
+  net.breakRecordsFor.add('J8')
   await announcePhotos()
   ok('a refused batch goes again one at a time: the good record lands',
     net.records.size === 1 && [...net.records.values()][0].job_id === 'J1')
-  ok('…both marked told, the refusal reported', rawQueue().every(p => p.announced) && reported.some(r => r.includes('refused 1 photo record')))
+  ok('…all marked told; only the unexpected refusal is reported',
+    rawQueue().every(p => p.announced) && reported.filter(r => r.includes('photo record')).length === 1
+    && reported.some(r => r.includes('refused 1 photo record') && r.includes('check constraint')))
   const callsThen = net.recordCalls.length
   await announcePhotos()
   ok('…and not sent again', net.recordCalls.length === callsThen)

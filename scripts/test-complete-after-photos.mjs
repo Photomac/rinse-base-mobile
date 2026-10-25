@@ -93,6 +93,8 @@ const MUTANTS = [
     `if (first.answer === 'unknown') { onTheWayUnknown = true; return }`, `if (first.answer === 'unknown') { return }`],
   ['one refused record sinks the batch', 'photoQueue.ts',
     `const one = due.length > 1 ? await sendRecords([row(p)]) : first`, `const one = first`],
+  ['a photo for a clean you\'re not on is reported as an error', 'photoQueue.ts',
+    `if (one.answer === 'refused' && one.code !== '42501') refused.push`, `if (one.answer === 'refused') refused.push`],
   ['an incident-form photo is recorded', 'photoQueue.ts',
     `.filter(p => (!p.incident_report_id || p.also_job_photo) && !p.row_saved && !p.announced)`, `.filter(p => !p.row_saved && !p.announced)`],
   ['a photo that will never land keeps its record', 'photoQueue.ts',
