@@ -12,6 +12,8 @@ import { Alert } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { ensureCameraCapture } from './permissions'
 import { enqueuePhoto, flushQueue } from './photoQueue'
+import { launchCameraFor, type CameraPhotoFor } from './cameraRecovery'
+import { reportClientError } from './errorReporter'
 
 export interface EvidenceReq { id: string; area_name: string }
 export interface CaptureCtx { tenantId: string; jobId: string; userId: string }
@@ -27,24 +29,25 @@ export async function captureRequiredPhoto(
   t: (k: any) => string,
 ): Promise<CaptureResult> {
   if (await ensureCameraCapture() !== 'granted') return { status: 'cancelled' }
+  const photo: CameraPhotoFor = {
+    tenant_id: ctx.tenantId,
+    job_id: ctx.jobId,
+    user_id: ctx.userId,
+    photo_type: 'after',
+    caption: req.area_name,
+    photo_requirement_id: req.id,
+    visible_to_client: true,
+  }
   try {
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false })
+    // Written down first: if Android closes the app while the camera is open,
+    // the next start queues the photo as this shot (lib/cameraRecovery).
+    const result = await launchCameraFor(photo, req.area_name, { quality: 0.7, allowsEditing: false })
     if (result.canceled) return { status: 'cancelled' }
     const uri = result.assets[0].uri
     // Taken just now: the camera has only just handed it back.
     const takenAt = Date.now()
     try {
-      await enqueuePhoto({
-        uri,
-        tenant_id: ctx.tenantId,
-        job_id: ctx.jobId,
-        user_id: ctx.userId,
-        photo_type: 'after',
-        caption: req.area_name,
-        photo_requirement_id: req.id,
-        visible_to_client: true,
-        taken_at: takenAt,
-      })
+      await enqueuePhoto({ ...photo, uri, taken_at: takenAt })
       // Uploads in the background, as on the Photos screen: the room shows the
       // shot from its local file right away, and the next one can be taken
       // without waiting out a slow bar. (Awaiting it here also mistook "queued
@@ -55,8 +58,12 @@ export async function captureRequiredPhoto(
       Alert.alert(t('upload_failed'), e.message || t('could_not_upload'))
       return { status: 'failed' }
     }
-  } catch {
-    return { status: 'cancelled' } // permission race / camera unavailable — no crash
+  } catch (e: any) {
+    // Permission race / camera unavailable: no crash. Logged, so a camera that
+    // fails on some phones shows up (admin System Health) instead of reading
+    // as "nothing happened".
+    reportClientError(`required shot camera failed: ${e?.message || e}`, e?.stack, 'requiredPhotoCapture')
+    return { status: 'cancelled' }
   }
 }
 

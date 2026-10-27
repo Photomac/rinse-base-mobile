@@ -1419,6 +1419,8 @@ const scenarios: Record<string, () => Promise<void>> = {
     e = await shot()
     ok('a shot still uploading stays in its room, from its file on the phone (today\'s folder)',
       e?.photo_url === localShot('q1') && e?.photo_fallback === storedShot('q1'), show(e))
+    // Z & K, 2026-10-27: the room says where the shot stands (lib/roomShots).
+    ok('and says it is on the phone, uploading', e?.photo_state === 'uploading', String(e?.photo_state))
 
     // A retake of a stored shot, still uploading: the newer one shows.
     server.tables.job_photos.push(photoRow('p-old', 'J-red', { photo_requirement_id: 'rq1', photo_url: storedShot('old') }))
@@ -1427,6 +1429,7 @@ const scenarios: Record<string, () => Promise<void>> = {
     queuePhotos()
     e = await shot()
     ok('with nothing on the phone the stored shot shows', e?.photo_url === storedShot('old') && e?.photo_fallback === null, show(e))
+    ok('and says it is saved', e?.photo_state === 'saved', String(e?.photo_state))
     server.tables.job_photos = []
 
     // Two shots of one area on the phone: the newer one.

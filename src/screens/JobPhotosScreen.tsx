@@ -15,6 +15,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { checklistPhotoNote } from '../lib/photoCaption'
+import { launchCameraFor } from '../lib/cameraRecovery'
 import { PhotoViewer, ViewerPhoto } from '../components/PhotoViewer'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -169,10 +170,23 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
       if (await ensureCameraCapture() !== 'granted') return
       let uri: string | undefined
       try {
-        const result = await ImagePicker.launchCameraAsync({
-          quality: 0.7,
-          allowsEditing: false,
-        })
+        const options: ImagePicker.ImagePickerOptions = { quality: 0.7, allowsEditing: false }
+        // Written down first, as addPhotos() would queue it: if Android closes
+        // the app while the camera is open, the next start queues the photo
+        // (lib/cameraRecovery). Not a damage photo: that one asks about a
+        // report before it is queued.
+        const { caption: note, checklistItemId } = checklistPhotoNote(caption, preselectedItem, shownTitle)
+        const result = selectedType === 'damage'
+          ? await ImagePicker.launchCameraAsync(options)
+          : await launchCameraFor({
+              tenant_id: user.tenant_id,
+              job_id: job.id,
+              user_id: user.id,
+              photo_type: selectedType,
+              caption: note || null,
+              checklist_item_id: checklistItemId,
+              visible_to_client: visibleToClient,
+            }, note || preselectedItem?.title || null, options)
         if (result.canceled) return
         uri = result.assets[0]?.uri
       } catch { return /* permission race / camera unavailable — no crash */ }
