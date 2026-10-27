@@ -29,6 +29,7 @@ import { resumeSOSTrailIfOpen } from './src/lib/sosTracker'
 // eval so headless OS launches (region crossings) find the handler.
 import './src/lib/arrivalGeofence'
 import { flushQueue, pendingCount, photoQueueActive } from './src/lib/photoQueue'
+import { recoverCameraPhoto } from './src/lib/cameraRecovery'
 import { flushVideoQueue } from './src/lib/videoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
 import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
@@ -495,6 +496,28 @@ function AppInner() {
       else pendingTab.current = 'Dashboard'
     })
   }, [lastResponse, user?.id])
+
+  // Android can close the app while the camera is open, and the photo taken
+  // then never reached the screen that asked for it: crews took the same shot
+  // five or ten times (Z & K, 2026-10-27). It is queued here instead, at the
+  // next start or return to the app (lib/cameraRecovery); its clean opens (as
+  // a tapped push would, waiting behind a full screen) and the crew is told
+  // not to take it again.
+  useEffect(() => {
+    if (!user) return
+    const check = () => {
+      recoverCameraPhoto(user.id).then(kept => {
+        if (!kept) return
+        tapRef.current?.tap(kept.jobId)
+        const tt = tRef.current
+        Alert.alert(`📸 ${tt('camera_photo_kept_title')}`,
+          kept.label ? ti(tt('camera_photo_kept_msg'), { name: kept.label }) : tt('camera_photo_kept_msg_plain'))
+      }).catch(() => {})
+    }
+    check()
+    const sub = AppState.addEventListener('change', (state) => { if (state === 'active') check() })
+    return () => sub.remove()
+  }, [user?.id])
 
   // Back on the tabs: a tap that waited opens now.
   useEffect(() => {

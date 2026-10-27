@@ -38,7 +38,8 @@ import { currencySymbol } from '../lib/money'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { linkAnswering } from '../lib/netFetch'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
-import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, photosOnPhone, photosOnTheWay } from '../lib/photoQueue'
+import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, photosOnPhone, photosOnTheWay, queuedShots } from '../lib/photoQueue'
+import { withShotStates, type ShotState } from '../lib/roomShots'
 import { completeWhileUploading, type WhileUploading } from '../lib/photoBlockers'
 import { readHoldAnswer, whoHasThePhotos, type HoldAnswer } from '../lib/photosOnTheWay'
 import { cachedRead } from '../lib/dataCache'
@@ -63,6 +64,15 @@ import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
 import { isRepairVisit, returnVisitValues } from '../lib/repairVisit'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
+
+// The line under a required shot that says where it stands (lib/roomShots), so
+// nobody retakes a shot that is already kept.
+const SHOT_MARK: Record<ShotState, { key: 'shot_state_saved' | 'shot_state_uploading' | 'shot_state_waiting' | 'shot_state_failed'; color: string }> = {
+  saved: { key: 'shot_state_saved', color: '#059669' },
+  uploading: { key: 'shot_state_uploading', color: '#B45309' },
+  waiting: { key: 'shot_state_waiting', color: '#B45309' },
+  failed: { key: 'shot_state_failed', color: '#DC2626' },
+}
 
 // Status writes only ever move a job FORWARD. A start or "On my way" can sit in
 // the offline outbox, and writeThrough queues every write behind an older stuck
@@ -878,12 +888,29 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   // A required shot counts toward "done" once its job_photos row exists, which
   // now happens in the background after capture — refresh the count when one
   // of this job's photos lands.
-  useEffect(() => onPhotoQueueChange(e => {
-    if (e.uploadedJobId === job.id) {
-      loadPhotoRequirements(); refreshIfShotListChanged()
-      if (cfHasLines.current) loadCheckFirst().catch(() => {})
-    }
-  }), [job.id])
+  // Each shot's mark in its room follows the phone's queue (lib/roomShots):
+  // uploading, waiting for signal, saved once it lands, or didn't upload.
+  // Read from the queue on the phone, not the server, so it moves offline too.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let landed = false
+    const off = onPhotoQueueChange(e => {
+      if (e.uploadedJobId === job.id) {
+        landed = true
+        loadPhotoRequirements(); refreshIfShotListChanged()
+        if (cfHasLines.current) loadCheckFirst().catch(() => {})
+      }
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        const l = landed
+        landed = false
+        queuedShots(job.id, { refused: true })
+          .then(q => setEvidence(prev => withShotStates(prev, q, l)))
+          .catch(() => {})
+      }, 250)
+    })
+    return () => { off(); if (timer) clearTimeout(timer) }
+  }, [job.id])
 
   // The office can rebuild this property's checklist or remove a room while the
   // crew is mid-clean. This screen keeps the shot list it loaded, so the next
@@ -925,7 +952,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
     if (res.status === 'captured' && res.localUri) {
       // Reloads keep it until it uploads: the card lays the phone's shots
       // over the server's (lib/roomShots).
-      setEvidence(prev => prev.map((x: any) => x.id === e.id ? { ...x, photo_url: res.localUri, photo_fallback: null } : x))
+      setEvidence(prev => prev.map((x: any) => x.id === e.id ? { ...x, photo_url: res.localUri, photo_fallback: null, photo_state: 'uploading' } : x))
       loadPhotoRequirements()
       // Before the upload lands: the first shot after a change brings the
       // current list up, so the rest are taken against it.
@@ -2429,6 +2456,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                                     {!e.required && <Text style={{ color: '#9CA3AF', fontStyle: 'italic', fontSize: 11 }}> · {t('optional_photo')}</Text>}
                                     {notOwed(e.id, e.required) && <Text style={{ color: '#9CA3AF', fontStyle: 'italic', fontSize: 11 }}> · {t('photo_not_required_this_clean')}</Text>}
                                   </Text>
+                                  {!!e.photo_url && !!SHOT_MARK[e.photo_state as ShotState] && (
+                                    <Text style={{ fontSize: 10, fontWeight: '700', marginTop: 1, color: SHOT_MARK[e.photo_state as ShotState].color }}>
+                                      {t(SHOT_MARK[e.photo_state as ShotState].key)}
+                                    </Text>
+                                  )}
                                 </View>
                                 <TouchableOpacity onPress={() => shootEvidence(e)} disabled={shootingId === e.id}
                                   style={{ paddingVertical: 5, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1,
