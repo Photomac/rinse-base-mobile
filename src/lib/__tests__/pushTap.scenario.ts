@@ -4,7 +4,8 @@
 // against the pushes the server sends — notify-crew-assigned
 // { type: 'job_assigned', jobId, tenantId } and send-job-reminders
 // { type: 'job_reminder', jobId, tenantId } (rinse-base-app #1687) and
-// notify-home-prepped { type: 'home_prepped', jobId, tenantId } — then
+// notify-home-prepped { type: 'home_prepped', jobId, tenantId } and
+// notify-crew-inspection { type: 'inspection_result', jobId, tenantId } — then
 // checks App.tsx's wiring on its source text (src/ and App.tsx are copied next
 // to the scenario by the runner): the launching tap and the warm tap go
 // through one ledger, the Schedule fallback reaches the navigator, the job
@@ -48,7 +49,10 @@ async function main() {
   ok('an assignment push opens its job', tappedJobId({ type: 'job_assigned', jobId: 'j2', tenantId: TENANT }, TENANT) === 'j2')
   ok('a "home is prepped" push opens the clean it is for', tappedJobId({ type: 'home_prepped', jobId: 'j3', tenantId: TENANT }, TENANT) === 'j3')
   ok('…and not another company\'s', tappedJobId({ type: 'home_prepped', jobId: 'j3', tenantId: 'ten-other' }, TENANT) === null)
-  ok('exactly those three types', JOB_PUSH_TYPES.slice().sort().join() === 'home_prepped,job_assigned,job_reminder')
+  ok('an inspection result opens the inspected clean', tappedJobId({ type: 'inspection_result', jobId: 'j4', tenantId: TENANT }, TENANT) === 'j4')
+  ok('…which is completed, and still opens for a cleaner who was on it (not for one who wasn\'t)',
+    openable(job('j4', ['u-mia'], { status: 'completed' }), MIA) && !openable(job('j4', ['u-other'], { status: 'completed' }), MIA))
+  ok('exactly those four types', JOB_PUSH_TYPES.slice().sort().join() === 'home_prepped,inspection_result,job_assigned,job_reminder')
   ok('any other type keeps doing nothing',
     tappedJobId({ type: 'chat_message', jobId: 'j1' }, TENANT) === null && tappedJobId({ type: 'sos', jobId: 'j1' }, TENANT) === null &&
     tappedJobId({ jobId: 'j1' }, TENANT) === null)
