@@ -73,7 +73,10 @@ export function InspectionResultCard({ job }: { job: any }) {
     ;(async () => {
       const { data } = await supabase.from('job_inspections')
         .select('id, job_id, result, corrections_made, correction_minutes, notes, inspector_user_id, completed_at')
-        .eq('parent_job_id', job.id).not('result', 'is', null).maybeSingle()
+        // Newest first, one row: two filed inspections of one clean would
+        // otherwise error maybeSingle() and the card would silently vanish.
+        .eq('parent_job_id', job.id).not('result', 'is', null)
+        .order('completed_at', { ascending: false }).limit(1).maybeSingle()
       if (!active || !data) return
       setInsp(data)
       const [insRes, phRes, lnRes, dfRes, seenRes] = await Promise.all([
