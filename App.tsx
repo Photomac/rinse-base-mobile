@@ -36,6 +36,7 @@ import { USERS_READABLE_COLUMNS, fetchMyPay } from './src/lib/userPrivateDetails
 import { clearDataCache, readCacheEntry } from './src/lib/dataCache'
 import { clearCarriedPhotos } from './src/lib/carriedPhotoFiles'
 import { setCurrentTz, fmtTime } from './src/lib/timezone'
+import { setCurrentCurrency } from './src/lib/money'
 import { flushOutbox, onOutboxDrained, onCompletePastRefusedPhotos, overlayPending } from './src/lib/outbox'
 import { prefetchDays, isDayChangePush } from './src/lib/offlinePrefetch'
 import { tappedJobId, onScreen, tapRouter, loadTappedJob, tapLedger, SCHEDULE_JOB_SELECT, type TapIO } from './src/lib/pushTap'
@@ -73,23 +74,25 @@ type CompanySettings = {
   _timeMode: string
   _assignmentMode: string
   _tz: string | null
+  _currency: string | null
   _laundryBonus: number
 }
 const defaultSettings = (): CompanySettings => ({
-  _contact: { crewCanContactClient: false, dispatchPhone: null }, _timeMode: 'per_job', _assignmentMode: 'default_crew', _tz: null, _laundryBonus: 0,
+  _contact: { crewCanContactClient: false, dispatchPhone: null }, _timeMode: 'per_job', _assignmentMode: 'default_crew', _tz: null, _currency: null, _laundryBonus: 0,
 })
 const settingsFrom = (p: any): CompanySettings => ({
   _contact: p._contact ?? defaultSettings()._contact,
   _timeMode: p._timeMode ?? 'per_job',
   _assignmentMode: p._assignmentMode ?? 'default_crew',
   _tz: p._tz ?? null,
+  _currency: p._currency ?? null,
   _laundryBonus: p._laundryBonus ?? 0,
 })
 
 // Null when they couldn't be read (no signal, timeout) — never a guess.
 async function companySettings(tenantId: string): Promise<CompanySettings | null> {
   const { data: tenant, error } = await supabase.from('tenants')
-    .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, timezone, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus, assignment_mode').eq('id', tenantId).maybeSingle()
+    .select('crew_can_contact_client, dispatch_phone, time_tracking_mode, timezone, currency, laundry_takehome_bonus, laundry_onsite_bonus, laundry_office_bonus, laundry_laundromat_bonus, assignment_mode').eq('id', tenantId).maybeSingle()
   if (error) return null
   // Crew→client contact policy. Default: crew can't call the host directly
   // (the cleaning company owns that relationship) — they reach dispatch.
@@ -112,6 +115,9 @@ async function companySettings(tenantId: string): Promise<CompanySettings | null
     // in THIS zone, not the phone's, so the crew and the owner read the same
     // clock for the same clean. Null → fall back to device-local.
     _tz: tenant?.timezone || null,
+    // The company's currency (usd/cad/nzd/eur/gbp): the symbol on every amount
+    // the app prints. Null → "$", what the app printed before.
+    _currency: tenant?.currency || null,
     // >0 → tenant pays a laundry bonus for at least one destination
     // (home / on-site / office / laundromat); gates the bag counter on cleans.
     _laundryBonus: Math.max(
@@ -170,6 +176,7 @@ function AppInner() {
         // Shared devices: don't leave the previous tenant's zone armed for
         // whoever signs in next.
         setCurrentTz(null)
+        setCurrentCurrency(null)
         setUser(null); setLoading(false)
       })
     })
@@ -220,6 +227,7 @@ function AppInner() {
     // Before setUser: the first paint of the dashboard already formats job
     // times, and a late call here would render one frame in the wrong zone.
     setCurrentTz(effective?._tz)
+    setCurrentCurrency(effective?._currency)
     setUser(effective)
     setLoading(false)
     if (effective) {

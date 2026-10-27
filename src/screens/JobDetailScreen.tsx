@@ -34,6 +34,7 @@ import { PAUSE_REASONS, pauseReasonLabel } from '../lib/pauseReason'
 import { captureRequiredPhoto, captureCheckFirstPhoto } from '../lib/requiredPhotoCapture'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
+import { currencySymbol } from '../lib/money'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { linkAnswering } from '../lib/netFetch'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
@@ -671,7 +672,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
         [
           { text: t('pet_prompt_no'), onPress: () => resolve('no') },
           {
-            text: petFee > 0 ? ti(t('pet_prompt_yes_fee'), { fee: `$${petFee}` }) : t('pet_prompt_yes'),
+            text: petFee > 0 ? ti(t('pet_prompt_yes_fee'), { fee: `${currencySymbol()}${petFee}` }) : t('pet_prompt_yes'),
             onPress: () => resolve('yes'),
           },
         ],
@@ -2502,7 +2503,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
                 {petFeeApplied && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.checkLabel}>🐾 {t('pet_at_clean')}{petFee > 0 ? ` — $${petFee}` : ''}</Text>
+                <Text style={styles.checkLabel}>🐾 {t('pet_at_clean')}{petFee > 0 ? ` — ${currencySymbol()}${petFee}` : ''}</Text>
                 <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{t('pet_at_clean_hint')}</Text>
               </View>
             </TouchableOpacity>

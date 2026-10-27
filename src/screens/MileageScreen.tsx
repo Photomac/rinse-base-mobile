@@ -7,6 +7,7 @@ import { fmtDate } from '../lib/timezone'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
+import { currencySymbol } from '../lib/money'
 import { startTrip, stopTrip, getTripState, accumulate } from '../lib/mileageTracker'
 
 // A trip logged here is priced by the database at miles x the company's
@@ -26,7 +27,7 @@ function priceTrip(miles: number, rate: number) { return Math.round(miles * rate
 const PURPOSES_KEYS = ['job_travel', 'supply_run_miles', 'equipment_pickup', 'client_meeting', 'training', 'other'] as const
 type PurposeKey = typeof PURPOSES_KEYS[number]
 
-function fmt$(n: number) { return '$' + n.toFixed(2) }
+function fmt$(n: number) { return currencySymbol() + n.toFixed(2) }
 function fmtEstimate(miles: number, rate: number | null) { return rate == null || !Number.isFinite(miles) ? '—' : fmt$(miles * rate) }
 function fmtDuration(ms: number) {
   const mins = Math.floor(ms / 60000)

@@ -12,6 +12,7 @@ import { isOfficeRole, isMyJob, jobsInScope, dayView, type JobScope } from '../l
 import { crewGroups, listItems } from '../lib/crewGroups'
 import { ti, localeFor, capFirst } from '../lib/i18n'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
+import { currencySymbol } from '../lib/money'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences, quickGpsStamp } from '../lib/arrivalGeofence'
 import { arrivalForStart } from '../lib/siteVisits'
@@ -742,7 +743,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               <TouchableOpacity style={styles.earningsCard} activeOpacity={0.85} onPress={() => onNavigate('week')}
                 accessibilityRole="button" accessibilityLabel={t('week_open')}>
                 <Text style={styles.earningsLabel}>💰 {t('my_earnings')}</Text>
-                <Text style={styles.earningsValue}>{monthStats.earnings == null ? '—' : `$${monthStats.earnings.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}</Text>
+                <Text style={styles.earningsValue}>{monthStats.earnings == null ? '—' : `${currencySymbol()}${monthStats.earnings.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}</Text>
                 <View style={styles.earningsStats}>
                   <View style={styles.earningStat}>
                     <Text style={styles.earningStatValue}>{monthStats.completed}</Text>

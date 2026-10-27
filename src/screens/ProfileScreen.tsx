@@ -9,6 +9,7 @@ import { useLang } from '../contexts/LangContext'
 import { localeFor, ti } from '../lib/i18n'
 import { pendingOpCount, rejectedOps, clearRejected, flushOutbox } from '../lib/outbox'
 import { SLATE_DARK, GOLD } from '../lib/theme'
+import { currencySymbol } from '../lib/money'
 // JS API only — expo-updates is already in the native binary (it is what
 // delivers OTAs), so reading these adds no native dependency and this screen
 // stays OTA-shippable.
@@ -323,8 +324,8 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
             <Text style={styles.rowLabel}>{t('pay_type')}</Text>
             <Text style={styles.rowValue}>{user.pay_type === 'hourly' ? t('hourly') : user.pay_type === 'per_job' ? t('per_job') : t('mixed_pay')}</Text>
           </View>
-          {user.hourly_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('hourly_rate')}</Text><Text style={styles.rowValue}>{ti(t('rate_per_hour'), { amt: '$' + Number(user.hourly_rate).toFixed(2) })}</Text></View>}
-          {user.per_job_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('per_job_rate')}</Text><Text style={styles.rowValue}>{ti(t('rate_per_job'), { amt: '$' + Number(user.per_job_rate).toFixed(2) })}</Text></View>}
+          {user.hourly_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('hourly_rate')}</Text><Text style={styles.rowValue}>{ti(t('rate_per_hour'), { amt: currencySymbol() + Number(user.hourly_rate).toFixed(2) })}</Text></View>}
+          {user.per_job_rate && <View style={styles.row}><Text style={styles.rowLabel}>{t('per_job_rate')}</Text><Text style={styles.rowValue}>{ti(t('rate_per_job'), { amt: currencySymbol() + Number(user.per_job_rate).toFixed(2) })}</Text></View>}
         </View>
         ) : null}
         {/* Sync health — rendered only when something needs attention. Rejected
