@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { SLATE_DARK, GOLD } from '../lib/theme'
+import { currencySymbol } from '../lib/money'
 
 const NAVY = SLATE_DARK
 const TEAL = GOLD
@@ -99,7 +100,7 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
     <View style={styles.fieldWrap} key={key}>
       <Text style={styles.fieldLabel}>{t(labelKey as any)}</Text>
       <View style={styles.moneyInputWrap}>
-        <Text style={styles.moneyPrefix}>$</Text>
+        <Text style={styles.moneyPrefix}>{currencySymbol()}</Text>
         <TextInput
           style={styles.moneyInput}
           value={form[key]}
@@ -149,13 +150,13 @@ export function LaundryRunScreen({ job, user, onBack }: Props) {
 
             <View style={[styles.fieldWrap, { borderTopWidth: 1, borderTopColor: '#F3F4F6', paddingTop: 12 }]}>
               <Text style={styles.fieldLabel}>{t('laundry_spent')}</Text>
-              <Text style={styles.spentValue}>{spent !== null ? `$${spent.toFixed(2)}` : '—'}</Text>
+              <Text style={styles.spentValue}>{spent !== null ? `${currencySymbol()}${spent.toFixed(2)}` : '—'}</Text>
             </View>
 
             {mismatch && (
               <View style={styles.mismatchBanner}>
                 <Text style={styles.mismatchText}>
-                  ⚠ {t('laundry_mismatch')} (${Math.abs(given! - (loaded! + pouch!)).toFixed(2)})
+                  ⚠ {t('laundry_mismatch')} ({currencySymbol()}{Math.abs(given! - (loaded! + pouch!)).toFixed(2)})
                 </Text>
               </View>
             )}

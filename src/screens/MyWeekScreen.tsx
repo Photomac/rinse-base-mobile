@@ -18,6 +18,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti, localeFor, capFirst } from '../lib/i18n'
 import { pauseReasonLabel } from '../lib/pauseReason'
 import { GOLD, SLATE_DARK } from '../lib/theme'
+import { formatMoney } from '../lib/money'
 import { cachedRead } from '../lib/dataCache'
 import { flushOutbox, onOutboxDrained, overlayPending } from '../lib/outbox'
 import { dayKey, fmtDate, fmtDatePart, fmtTime, todayKey, wallTimeInTz } from '../lib/timezone'
@@ -26,9 +27,6 @@ import {
   type DayBounds, type PaySchedule, type WeekDay,
 } from '../lib/myWeek'
 import { myWeekPaydayRead, myWeekRead, myWeekScheduleRead, scheduleOf, type WeekData } from '../lib/myWeekReads'
-
-/** Dollars, written the US way like every other amount in the app ($1,234.50). */
-const usDollars = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 function boundsOf(start: string): DayBounds[] {
   return weekDays(start).map(ymd => ({
@@ -146,7 +144,8 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
   }, [week, data, nowMs])
 
   // ── Formatting ──
-  const money = (n: number) => `${n < 0 ? '-' : ''}$${usDollars(Math.abs(n))}`
+  // Sign first, US grouping, the company's symbol: -$1,234.50 / €1,234.50.
+  const money = (n: number) => formatMoney(n)
   const dur = (mins: number) => {
     const m = Math.max(0, Math.round(mins))
     const h = Math.floor(m / 60), r = m % 60
