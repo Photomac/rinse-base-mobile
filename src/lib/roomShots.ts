@@ -14,12 +14,24 @@
 // they come back. A shot in the second read is still on the phone: its file.
 // A shot only in the first landed while the reads were out, so they may not
 // have it, and its file is already deleted: its stored copy.
+//
+// Each shot also says where it stands (Z & K Cleaning, 2026-10-27: "there
+// should also be a clear indication that the photo was successfully saved so
+// employees aren't left guessing"): saved, on the phone and uploading, on the
+// phone and waiting for signal, or refused by the server (take it again).
 import { queuedShots, type QueuedShot } from './photoQueue'
 
 export type Queued = Map<string, QueuedShot>
 
+/** Where a shot stands, as its room says it. */
+export type ShotState = 'saved' | 'uploading' | 'waiting' | 'failed'
+
 /** A shot to show: `uri` first, `fallback` when that file can't be loaded. */
-export interface RoomShot { uri: string; fallback: string | null }
+export interface RoomShot { uri: string; fallback: string | null; state: ShotState }
+
+function queuedState(q: QueuedShot): ShotState {
+  return q.refused ? 'failed' : q.waiting ? 'waiting' : 'uploading'
+}
 
 /** The phone's required shots for `jobId` now (none when the queue can't be read). */
 export function queuedNow(jobId: string): Promise<Queued> {
@@ -34,12 +46,37 @@ export function roomShots(server: any[], before: Queued, after: Queued): Record<
   const shots: Record<string, RoomShot> = {}
   for (const s of server) {
     if (s?.photo_requirement_id && s.photo_url && !shots[s.photo_requirement_id]) {
-      shots[s.photo_requirement_id] = { uri: s.photo_url, fallback: null }
+      shots[s.photo_requirement_id] = { uri: s.photo_url, fallback: null, state: 'saved' }
     }
   }
-  for (const [req, q] of before) if (!after.has(req)) shots[req] = { uri: q.storedUrl, fallback: null }
-  for (const [req, q] of after) shots[req] = { uri: q.localUri, fallback: q.storedUrl }
+  for (const [req, q] of before) if (!after.has(req)) shots[req] = { uri: q.storedUrl, fallback: null, state: 'saved' }
+  for (const [req, q] of after) shots[req] = { uri: q.localUri, fallback: q.storedUrl, state: queuedState(q) }
   return shots
+}
+
+/** A room's shot row as the stop's screen holds it. */
+export interface ShotRow { id: string; photo_url: string | null; photo_fallback?: string | null; photo_state?: ShotState | null }
+
+/** The rows brought up to the phone's queue now, between the card's reads.
+ *  `queued`: read with refused shots in (queuedShots(jobId, { refused: true })).
+ *  A shot on the phone shows from its file, with its state. One that has left
+ *  the queue is saved only when `landed` (one of this clean's photos just
+ *  became a row); anything else keeps its mark until the card reads again.
+ *  Rows that don't change are returned as they were. */
+export function withShotStates<T extends ShotRow>(rows: T[], queued: Queued, landed: boolean): T[] {
+  return rows.map(r => {
+    const q = queued.get(r.id)
+    if (q) {
+      // Refused, with nothing on screen: the room already asks for it again.
+      if (q.refused && !r.photo_url) return r
+      // As the card shows it (roomShots): the phone's shot is the newest.
+      const next = { photo_url: q.localUri, photo_fallback: q.storedUrl, photo_state: queuedState(q) }
+      if (next.photo_url === r.photo_url && next.photo_fallback === r.photo_fallback && next.photo_state === r.photo_state) return r
+      return { ...r, ...next }
+    }
+    if (landed && r.photo_url && (r.photo_state === 'uploading' || r.photo_state === 'waiting')) return { ...r, photo_state: 'saved' as const }
+    return r
+  })
 }
 
 /** The requirements taken, on the server or on the phone. */

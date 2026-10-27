@@ -116,7 +116,12 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
         meta: list(p.rooms),
         signoffs,
         mode: addrMode || tenMode || 'detailed',
-        evidence: list(p.reqs).map(rq => ({ ...rq, photo_url: shots[rq.id]?.uri ?? null, photo_fallback: shots[rq.id]?.fallback ?? null })),
+        evidence: list(p.reqs).map(rq => ({
+          ...rq,
+          photo_url: shots[rq.id]?.uri ?? null,
+          photo_fallback: shots[rq.id]?.fallback ?? null,
+          photo_state: shots[rq.id]?.state ?? null,
+        })),
       }
     } catch { /* the flat grouping */ }
   }
