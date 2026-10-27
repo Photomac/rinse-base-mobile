@@ -43,6 +43,7 @@ const RESULT_KEY: Record<string, string> = {
   off_that_day: 'open_jobs_r_off_day',
   double_booked: 'open_jobs_r_double',
   first_tier_only: 'open_jobs_r_first_tier',
+  inspects_this_clean: 'open_jobs_r_inspects',
 }
 
 export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
