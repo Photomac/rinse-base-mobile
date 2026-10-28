@@ -62,6 +62,8 @@ import {
 } from '../lib/checkFirst'
 import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
 import { isRepairVisit, returnVisitValues } from '../lib/repairVisit'
+import { canEditClean } from '../lib/officeEdit'
+import { OfficeEditSheet, type EditedPatch } from '../components/OfficeEditSheet'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -185,7 +187,7 @@ function fmtDuration(minutes: number) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`
 }
 
-export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: any; user: any; onBack: () => void; onStatusChange: (job: any, status: string) => void }) {
+export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited }: { job: any; user: any; onBack: () => void; onStatusChange: (job: any, status: string) => void; onJobEdited?: (patch: EditedPatch) => void }) {
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [notes, setNotes] = useState('')
   // A repair visit's "I need to come back": sent with Complete as
@@ -202,6 +204,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
   const [showMessages, setShowMessages] = useState(false)
   const [showLaundry, setShowLaundry] = useState(false)
   const [showInspection, setShowInspection] = useState(false)
+  // The office's "Edit time & crew" sheet (components/OfficeEditSheet).
+  const [showEdit, setShowEdit] = useState(false)
   const [checklist, setChecklist] = useState(DEFAULT_CHECKLIST as any[])
   const [loadingChecklist, setLoadingChecklist] = useState(false)
   const [itemPhotos, setItemPhotos] = useState<Record<string, number>>({})
@@ -1892,6 +1896,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
             </View>
           )}
           <Text style={styles.timeRow}>🕐 {fmtTime(job.scheduled_start, locale)} – {fmtTime(job.scheduled_end, locale)}</Text>
+          {/* The office moves the clean or changes its crew from the road. */}
+          {canEditClean(user.role, job) && (
+            <TouchableOpacity style={styles.editBtn} onPress={() => setShowEdit(true)}>
+              <Text style={styles.editBtnText}>✏️  {t('oe_edit_btn')}</Text>
+            </TouchableOpacity>
+          )}
           {turnover?.checkout && (
             <View style={{ backgroundColor: turnover.urgency === 'rapid' ? '#FEF2F2' : turnover.urgency === 'tight' ? '#FFFBEB' : '#EFF6FF', borderRadius: 10, padding: 10, marginTop: 8, marginBottom: 4 }}>
               <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827' }}>🧳 {t('guest_checkout')}: {fmtTime(turnover.checkout, locale)}</Text>
@@ -2615,6 +2625,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange }: { job: an
           onStart={startFromCheckFirst} onNotYet={() => setCfPrompt(null)} />
       )}
 
+      {/* The office's edit. A save updates this screen's clean in place (time
+          on the card, crew re-read), and Home / Schedule re-read on the way back. */}
+      {isAdminRole && (
+        <OfficeEditSheet visible={showEdit} job={job} user={user} onClose={() => setShowEdit(false)}
+          onSaved={patch => { onJobEdited?.(patch); details.load({ ...job, ...patch }).catch(() => {}) }} />
+      )}
+
       {/* Pause modal */}
       <Modal visible={showPauseModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -2693,6 +2710,8 @@ const styles = StyleSheet.create({
   routeStopBadge: { alignSelf: 'flex-start', backgroundColor: '#F5F3FF', borderColor: '#DDD6FE', borderWidth: 1, borderRadius: 10, paddingHorizontal: 9, paddingVertical: 4, marginBottom: 8 },
   routeStopText: { fontSize: 12, fontWeight: '800', color: '#6D28D9' },
   timeRow: { fontSize: 14, color: '#374151', marginBottom: 6, fontWeight: '500' },
+  editBtn: { alignSelf: 'flex-start', borderWidth: 1.5, borderColor: TEAL, borderRadius: 10, paddingVertical: 7, paddingHorizontal: 12, marginBottom: 8 },
+  editBtnText: { color: SLATE_DARK, fontSize: 13, fontWeight: '800' },
   address: { fontSize: 13, color: TEAL, marginBottom: 14, fontWeight: '500' },
   propSpecs: { fontSize: 14, color: '#374151', fontWeight: '700', marginTop: -8, marginBottom: 14 },
   infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10, padding: 10, backgroundColor: '#F9FAFB', borderRadius: 10 },
