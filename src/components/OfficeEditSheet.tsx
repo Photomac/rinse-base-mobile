@@ -12,12 +12,12 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor, type TranslationKey } from '../lib/i18n'
 import { GOLD, SLATE, ROLE_COLORS } from '../lib/theme'
-import { fmtDate, fmtTime, todayKey, tomorrowKey } from '../lib/timezone'
+import { fmtDate, fmtTime, todayKey, tomorrowKey, dayKey } from '../lib/timezone'
 import { parseClock, clockText, addDays, type Meridiem } from '../lib/teamDay'
 import { linkAnswering } from '../lib/netFetch'
 import { uuid4 } from '../lib/outbox'
 import {
-  canEditClean, draftFrom, planEdit, editWarnings, resolveLead, stepLength, saveEdit,
+  canEditClean, draftFrom, planEdit, editWarnings, resolveLead, stepLength, saveEdit, dayLimits, dayAllowed,
   loadEditBase, loadCrew, loadBookingWindow, loadDayOff, LENGTH_MIN, LENGTH_MAX,
   type EditBase, type EditDraft, type CrewMember, type BookingWindow, type ScheduleOff, type EditWarning,
 } from '../lib/officeEdit'
@@ -92,10 +92,12 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
     return () => { live = false }
   }, [phase, base?.id, draft?.ymd, people.length])
 
-  const plan = base && current ? planEdit(base, current) : null
+  // The days this clean may move to: none on a back-to-back or a guest's arrival day.
+  const limits = base ? dayLimits(base, win) : null
+  const plan = base && current ? planEdit(base, current, limits ?? undefined) : null
   const offNow = dayOff && draft && dayOff.ymd === draft.ymd ? dayOff : null
   const warnings: EditWarning[] = base && current && plan
-    ? editWarnings(base, current, plan, { window: win, timeOffIds: offNow?.timeOffIds ?? [], scheduleOff: offNow?.scheduleOff ?? new Map(), nowMs: Date.now() })
+    ? editWarnings(base, current, plan, { timeOffIds: offNow?.timeOffIds ?? [], scheduleOff: offNow?.scheduleOff ?? new Map(), nowMs: Date.now() })
     : []
 
   const nameOf = (id: string) => people.find(p => p.id === id)?.full_name || '—'
@@ -106,7 +108,20 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
     return h && m ? ti(t('oe_len_hm'), { h: String(h), m: String(m) }) : h ? ti(t('oe_len_h'), { h: String(h) }) : ti(t('oe_len_m'), { m: String(m) })
   }
 
-  function setDay(ymd: string) { setDraft(d => (d ? { ...d, ymd } : d)) }
+  // Its own day, or one the guests allow.
+  const canMoveTo = (ymd: string) => !!base && !!limits && (ymd === dayKey(base.scheduled_start) || dayAllowed(limits, ymd))
+  function setDay(ymd: string) { if (canMoveTo(ymd)) setDraft(d => (d ? { ...d, ymd } : d)) }
+  // ‹ / ›: greyed out where the guests rule the next day out.
+  function dayStep(dir: -1 | 1) {
+    const to = draft ? addDays(draft.ymd, dir) : ''
+    const ok = canMoveTo(to)
+    return (
+      <TouchableOpacity style={[styles.stepBtn, !ok && { opacity: 0.35 }]} disabled={!ok} onPress={() => setDay(to)}
+        accessibilityLabel={t(dir < 0 ? 'oe_day_earlier' : 'oe_day_later')}>
+        <Text style={styles.stepText}>{dir < 0 ? '‹' : '›'}</Text>
+      </TouchableOpacity>
+    )
+  }
   function toggle(id: string) {
     setDraft(d => {
       if (!d) return d
@@ -117,8 +132,8 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
 
   function warningText(w: EditWarning): string {
     switch (w.code) {
-      case 'window_before': return ti(t('oe_w_window_before'), { date: dayLabel(w.lo) })
-      case 'window_after': return ti(t('oe_w_window_after'), { date: dayLabel(w.hi) })
+      case 'before_checkout': return ti(t('oe_w_before_checkout'), { time: fmtTime(w.at, locale) })
+      case 'after_checkin': return ti(t('oe_w_after_checkin'), { time: fmtTime(w.at, locale) })
       case 'off_hours': return t('oe_w_off_hours')
       case 'past': return t('oe_w_past')
       case 'time_off': return ti(t('oe_w_time_off'), { names: w.ids.map(nameOf).join(', ') })
@@ -151,7 +166,7 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
     if (!go) return
 
     setSaving(true); setError('')
-    const out = await saveEdit(supabase, { base, draft: current, me: user.id, newBatchId: uuid4 })
+    const out = await saveEdit(supabase, { base, draft: current, me: user.id, newBatchId: uuid4, window: win })
     setSaving(false)
     const crewPatch = (): EditedPatch => ({
       job_assignments: current.crew.map(id => ({ user_id: id })),
@@ -213,27 +228,32 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
                 {!!error && <Text style={[styles.problem, { marginBottom: 6 }]}>{error}</Text>}
 
                 <Text style={styles.label}>{t('oe_day')}</Text>
-                <View style={styles.dayRow}>
-                  <TouchableOpacity style={styles.stepBtn} onPress={() => setDay(addDays(draft.ymd, -1))} accessibilityLabel={t('oe_day_earlier')}>
-                    <Text style={styles.stepText}>‹</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.dayText}>{fmtDate(draft.ymd, locale, { weekday: 'long' })}</Text>
-                  <TouchableOpacity style={styles.stepBtn} onPress={() => setDay(addDays(draft.ymd, 1))} accessibilityLabel={t('oe_day_later')}>
-                    <Text style={styles.stepText}>›</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.chips}>
-                  {[{ k: 'today' as const, ymd: todayKey() }, { k: 'oe_tomorrow' as const, ymd: tomorrowKey() }].map(c => (
-                    <TouchableOpacity key={c.k} style={[styles.chip, draft.ymd === c.ymd && styles.chipOn]} onPress={() => setDay(c.ymd)}>
-                      <Text style={[styles.chipText, draft.ymd === c.ymd && styles.chipTextOn]}>{t(c.k)}</Text>
-                    </TouchableOpacity>
-                  ))}
-                  {win && (
-                    <Text style={styles.windowText}>
-                      {win.hi ? ti(t('oe_window'), { out: dayLabel(win.lo), in: dayLabel(win.hi) }) : ti(t('oe_window_open'), { out: dayLabel(win.lo) })}
-                    </Text>
-                  )}
-                </View>
+                {limits?.locked ? (
+                  <>
+                    <Text style={[styles.dayText, styles.dayLocked]}>🔒  {fmtDate(draft.ymd, locale, { weekday: 'long' })}</Text>
+                    <Text style={styles.lockNote}>{t(limits.locked === 'back_to_back' ? 'oe_day_locked_b2b' : 'oe_day_locked_arrival')}</Text>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.dayRow}>
+                      {dayStep(-1)}
+                      <Text style={styles.dayText}>{fmtDate(draft.ymd, locale, { weekday: 'long' })}</Text>
+                      {dayStep(1)}
+                    </View>
+                    <View style={styles.chips}>
+                      {[{ k: 'today' as const, ymd: todayKey() }, { k: 'oe_tomorrow' as const, ymd: tomorrowKey() }].filter(c => canMoveTo(c.ymd)).map(c => (
+                        <TouchableOpacity key={c.k} style={[styles.chip, draft.ymd === c.ymd && styles.chipOn]} onPress={() => setDay(c.ymd)}>
+                          <Text style={[styles.chipText, draft.ymd === c.ymd && styles.chipTextOn]}>{t(c.k)}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </>
+                )}
+                {win && (
+                  <Text style={styles.windowText}>
+                    {win.hi ? ti(t('oe_window'), { out: dayLabel(win.lo), in: dayLabel(win.hi) }) : ti(t('oe_window_open'), { out: dayLabel(win.lo) })}
+                  </Text>
+                )}
 
                 <Text style={styles.label}>{t('oe_start')}</Text>
                 <View style={styles.timeRow}>
@@ -301,6 +321,7 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
                   </View>
                 )}
                 {plan?.problem === 'no_time' && <Text style={[styles.problem, { marginTop: 12 }]}>{t('oe_p_time')}</Text>}
+                {plan?.problem === 'day' && <Text style={[styles.problem, { marginTop: 12 }]}>{t('oe_p_day')}</Text>}
 
                 <View style={styles.actions}>
                   <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={close} disabled={saving}>
@@ -339,7 +360,9 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: SLATE, borderColor: SLATE },
   chipText: { fontSize: 13, fontWeight: '700', color: '#334155' },
   chipTextOn: { color: '#fff' },
-  windowText: { fontSize: 12, color: '#64748B', flexBasis: '100%', marginTop: 2 },
+  windowText: { fontSize: 12, color: '#64748B', marginTop: 8 },
+  dayLocked: { textAlign: 'left', paddingVertical: 4 },
+  lockNote: { fontSize: 13, color: '#92400E', backgroundColor: '#FFFBEB', borderColor: '#FCD34D', borderWidth: 1, borderRadius: 10, padding: 10, marginTop: 8, lineHeight: 18 },
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   timeInput: {
     flex: 1, minWidth: 0, borderWidth: 1.5, borderColor: '#CBD5E1', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8,

@@ -95,6 +95,7 @@ const base = {
   id: 'job-1', tenant_id: 'ten-1', status: 'scheduled', job_type: 'clean',
   scheduled_start: '2026-10-30T14:00:00+00:00', scheduled_end: '2026-10-30T16:30:00+00:00',
   manually_retimed_at: null, min_crew: 2, max_crew: 2, is_turnover: true, reservation_id: 'res-1', address_id: 'addr-1',
+  window_minutes: null, checkout_time: null, checkin_time: null,
   client_addresses: { id: 'addr-1', nickname: 'Blue Ridge', street: '1 Main', max_cleaners: 3, min_cleaners: null },
   crew: ['kristi', 'gina'], lead: 'kristi',
 }
@@ -132,15 +133,59 @@ check('… nobody picked → 1', E.crewSizeFields(base, 0), { min_crew: 1, max_c
 const minBase = { ...base, min_crew: 2, client_addresses: { ...base.client_addresses, min_cleaners: 2 } }
 check('… a property minimum of 2 → max only, never below the minimum', [E.crewSizeFields(minBase, 1), E.crewSizeFields(minBase, 3)], [{ max_crew: 2 }, { max_crew: 3 }])
 
+// ── the day: a turnover stays between its guests (Todd, 2026-10-28) ─────────
+// Fri Oct 30: the guest leaves at 10 AM (14:00Z), the next one arrives at 3 PM (19:00Z).
+const b2b = { ...base, window_minutes: 300, checkout_time: '2026-10-30T14:00:00+00:00', checkin_time: '2026-10-30T19:00:00+00:00' }
+const win = { lo: '2026-10-30', hi: '2026-11-02' }
+const days = ['2026-10-29', '2026-10-30', '2026-11-01', '2026-11-02', '2026-11-03']
+const allowed = l => days.filter(d => E.dayAllowed(l, d))
+check('no window and no guest times: any day', [E.dayLimits(base, null), allowed(E.dayLimits(base, null))],
+  [{ lo: null, hi: null, locked: null }, days])
+check('a booking window: from the checkout day to the next check-in day, both included',
+  allowed(E.dayLimits(base, win)), ['2026-10-30', '2026-11-01', '2026-11-02'])
+check('no next guest yet: any day from the checkout on', allowed(E.dayLimits(base, { lo: '2026-10-30', hi: null })), ['2026-10-30', '2026-11-01', '2026-11-02', '2026-11-03'])
+check('back to back (the sync\'s turnover window): locked, whatever the reservations say',
+  [E.dayLimits(b2b, win).locked, allowed(E.dayLimits(b2b, win)), E.dayLimits({ ...base, window_minutes: 0 }, null).locked], ['back_to_back', [], 'back_to_back'])
+check('a guest checks in on the clean\'s day (the job\'s check-in time): locked',
+  E.dayLimits({ ...base, checkin_time: '2026-10-30T20:00:00+00:00' }, null).locked, 'arrival_day')
+check('… or the next reservation arrives that day: locked', E.dayLimits(base, { lo: '2026-10-28', hi: '2026-10-30' }).locked, 'arrival_day')
+check('a check-in late at night is still that day on the company clock (11:30 PM EDT = 03:30Z next day)',
+  E.dayLimits({ ...base, checkin_time: '2026-10-31T03:30:00+00:00' }, null).locked, 'arrival_day')
+check('the job\'s next check-in closes the window before the reservation\'s does',
+  E.dayLimits({ ...base, checkin_time: '2026-11-01T19:00:00+00:00' }, win), { lo: '2026-10-30', hi: '2026-11-01', locked: null })
+check('a non-turnover with no guest data: open', E.dayLimits({ ...base, is_turnover: false, reservation_id: null }, null).locked, null)
+
+const lim = E.dayLimits(b2b, win)
+check('back to back: another day can\'t be saved', E.planEdit(b2b, { ...E.draftFrom(b2b), ymd: '2026-10-31' }, lim).problem, 'day')
+check('… the time and crew still can', [
+  E.planEdit(b2b, { ...E.draftFrom(b2b), start: { h: 11, mi: 0 } }, lim).problem,
+  E.planEdit(b2b, { ...E.draftFrom(b2b), crew: ['gina'], lead: 'gina' }, lim).problem,
+], [null, null])
+check('outside the window: refused; inside: fine', [
+  E.planEdit(base, { ...d0, ymd: '2026-11-03' }, E.dayLimits(base, win)).problem,
+  E.planEdit(base, { ...d0, ymd: '2026-10-29' }, E.dayLimits(base, win)).problem,
+  E.planEdit(base, { ...d0, ymd: '2026-11-02' }, E.dayLimits(base, win)).problem,
+], ['day', 'day', null])
+check('a clean already outside its window can still change its time (it isn\'t moving day)',
+  E.planEdit(base, { ...d0, start: { h: 12, mi: 0 } }, E.dayLimits(base, { lo: '2026-10-25', hi: '2026-10-27' })).problem, null)
+
 // ── warnings ────────────────────────────────────────────────────────────────
 const NOW = Date.parse('2026-10-29T12:00:00Z')
-const quiet = { window: null, timeOffIds: [], scheduleOff: new Map(), nowMs: NOW }
+const quiet = { timeOffIds: [], scheduleOff: new Map(), nowMs: NOW }
 const warn = (draft, inp = {}, b = base) => E.editWarnings(b, draft, E.planEdit(b, draft), { ...quiet, ...inp }).map(w => w.code)
-const win = { lo: '2026-10-30', hi: '2026-11-02' }
-check('inside the booking window: no warning', warn({ ...d0, ymd: '2026-11-01' }, { window: win }), [])
-check('before the guest checks out', warn({ ...d0, ymd: '2026-10-29' }, { window: win }), ['window_before'])
-check('after the next guest arrives', warn({ ...d0, ymd: '2026-11-03' }, { window: win }), ['window_after'])
-check('no next guest: any later day is fine', warn({ ...d0, ymd: '2026-11-20' }, { window: { lo: '2026-10-30', hi: null } }), [])
+const db2b = E.draftFrom(b2b)
+check('back to back: starting before the guest leaves at 10 AM', warn({ ...db2b, start: { h: 9, mi: 30 } }, {}, b2b), ['before_checkout'])
+check('… ending after the next guest arrives at 3 PM (1:00 + 2 h 30 = 3:30)', warn({ ...db2b, start: { h: 13, mi: 0 } }, {}, b2b), ['after_checkin'])
+check('… inside the gap: no warning (11:00 to 1:30)', warn({ ...db2b, start: { h: 11, mi: 0 } }, {}, b2b), [])
+check('… ending exactly at check-in is fine', warn({ ...db2b, start: { h: 12, mi: 30 } }, {}, b2b), [])
+check('… a crew-only change says nothing about the guests', warn({ ...db2b, crew: ['gina'], lead: 'gina' }, {}, b2b), [])
+const early = { ...b2b, scheduled_start: '2026-10-30T13:00:00+00:00', scheduled_end: '2026-10-30T15:30:00+00:00' }
+check('… even on a clean already set before the checkout (9 AM): only a time change is warned', [
+  warn({ ...E.draftFrom(early), crew: ['gina'], lead: 'gina' }, {}, early),
+  warn({ ...E.draftFrom(early), minutes: 180 }, {}, early),
+], [[], ['before_checkout']])
+check('the warning carries the guest\'s time', E.editWarnings(b2b, { ...db2b, start: { h: 13, mi: 0 } }, E.planEdit(b2b, { ...db2b, start: { h: 13, mi: 0 } }), quiet),
+  [{ code: 'after_checkin', at: '2026-10-30T19:00:00+00:00' }])
 check('before 7 AM and from 7 PM', [warn({ ...d0, start: { h: 6, mi: 45 } }), warn({ ...d0, start: { h: 19, mi: 0 } }), warn({ ...d0, start: { h: 18, mi: 59 } })],
   [['off_hours'], ['off_hours'], []])
 check('a time already gone', warn({ ...d0, ymd: '2026-10-28' }), ['past'])
@@ -281,6 +326,17 @@ const save = (db, draft, b = base) => E.saveEdit(db, { base: b, draft, me: 'me-1
 }
 {
   const db = fakeDb()
+  const out = await E.saveEdit(db, { base: b2b, draft: { ...E.draftFrom(b2b), ymd: '2026-10-31' }, me: 'me-1', newBatchId: () => 'batch-1', window: win, now: () => STAMP })
+  check('the save itself refuses a back-to-back day move: nothing written', [db.calls.length, out.ok, out.error], [0, false, 'day'])
+  const db2 = fakeDb()
+  const out2 = await E.saveEdit(db2, { base, draft: { ...d0, ymd: '2026-11-03' }, me: 'me-1', newBatchId: () => 'batch-1', window: win, now: () => STAMP })
+  check('… and a day past the next check-in', [db2.calls.length, out2.ok, out2.error], [0, false, 'day'])
+  const db3 = fakeDb()
+  const out3 = await E.saveEdit(db3, { base: b2b, draft: { ...E.draftFrom(b2b), start: { h: 11, mi: 0 } }, me: 'me-1', newBatchId: () => 'batch-1', window: win, now: () => STAMP })
+  check('… while a back-to-back time change goes through', [shape(db3.calls), out3.ok], [['job_reschedules.insert', 'jobs.update'], true])
+}
+{
+  const db = fakeDb()
   await save(db, { ...d0, crew: ['tia', 'gina'], lead: 'nobody-picked' })
   check('a lead who isn\'t picked never lands: the first picked leads', db.calls[2].values.map(r => r.is_lead), [true, false])
 }
@@ -305,6 +361,10 @@ check('the sheet asks whether the link answers before it loads and before it sav
 check('no drag anywhere in the sheet', /PanResponder|onPanResponder|Gesture|draggable/i.test(sheet), false)
 check('the button shows through canEditClean only', /canEditClean\(user\.role, job\) && \(\s*<TouchableOpacity style=\{styles\.editBtn\}/.test(detail), true)
 check('the sheet mounts for the office only', /\{isAdminRole && \(\s*<OfficeEditSheet/.test(detail), true)
+check('the sheet holds the day: limits from dayLimits, every day change through canMoveTo, locked = no arrows or chips',
+  [/const limits = base \? dayLimits\(base, win\)/.test(sheet), /function setDay\(ymd: string\) \{ if \(canMoveTo\(ymd\)\)/.test(sheet),
+    /\{limits\?\.locked \? \(/.test(sheet), (sheet.match(/setDay\(/g) || []).length], [true, true, true, 3])
+check('the save gets the window, so the day rule is checked again there', /saveEdit\(supabase, \{[^}]*window: win/.test(sheet), true)
 const work = mkdtempSync(join(tmpdir(), 'office-edit-'))
 try {
   writeFileSync(join(work, 'i18n.ts'), readFileSync(join(repo, 'src/lib/i18n.ts'), 'utf8').replace(

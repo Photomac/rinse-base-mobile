@@ -27,10 +27,15 @@
 // not-started status the sheet read. Otherwise nothing is changed and the owner
 // is told someone else got there first.
 //
+// A turnover's DAY is held between its guests (dayLimits, below): locked on a
+// back-to-back or a day a guest checks in, otherwise kept between the departing
+// guest's checkout and the next guest's check-in. The web only warns.
+//
 // The warnings are the web Edit tab's, shown on the sheet as they apply rather
-// than as a run of dialogs: outside the booking window, before 7 AM or from
-// 7 PM, approved time off, not on their weekly schedule, over the property's
-// maximum, under its minimum. The rules are copied from the web
+// than as a run of dialogs: before 7 AM or from 7 PM, approved time off, not on
+// their weekly schedule, over the property's maximum, under its minimum; plus,
+// on the day of a checkout or check-in, a start before the guest leaves or an
+// end after the next one arrives. The rules are copied from the web
 // (leadSelection.ts, weeklySchedule.ts, jobQueue.ts propertyMinCrew,
 // bookingWindow.ts); scripts/test-office-edit.mjs runs both copies over the
 // same cases when the web repo is on this machine.
@@ -161,6 +166,11 @@ export interface EditBase {
   is_turnover: boolean | null
   reservation_id: string | null
   address_id: string | null
+  /** Set by the sync on a back-to-back: minutes between checkout and the next check-in. */
+  window_minutes: number | null
+  /** The departing guest's checkout and the next guest's check-in, when the sync knows them. */
+  checkout_time: string | null
+  checkin_time: string | null
   client_addresses: { id?: string; nickname?: string | null; street?: string | null; max_cleaners?: number | null; min_cleaners?: number | null } | null
   /** Who is on it now: user ids in lead-first order, and the lead ('' for none). */
   crew: string[]
@@ -207,8 +217,9 @@ export function stepLength(minutes: number, dir: 1 | -1): number {
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every(x => b.includes(x))
 
 export interface EditPlan {
-  /** Why it can't be saved yet; null when it can. */
-  problem: 'no_time' | 'nothing' | null
+  /** Why it can't be saved yet; null when it can. 'day': a day the clean's
+   *  guests rule out (dayLimits). */
+  problem: 'no_time' | 'day' | 'nothing' | null
   newStart: string | null
   newEnd: string | null
   timeChanged: boolean
@@ -216,8 +227,8 @@ export interface EditPlan {
   crewChanged: boolean
 }
 
-/** What saving the draft would change. */
-export function planEdit(base: EditBase, d: EditDraft): EditPlan {
+/** What saving the draft would change. With `limits`, a new day they rule out is a problem. */
+export function planEdit(base: EditBase, d: EditDraft, limits?: DayLimits): EditPlan {
   const startMs = d.start ? wallTimeInTz(d.ymd, d.start.h, d.start.mi).getTime() : NaN
   if (!Number.isFinite(startMs)) {
     return { problem: 'no_time', newStart: null, newEnd: null, timeChanged: false, dayChanged: false, crewChanged: false }
@@ -227,22 +238,59 @@ export function planEdit(base: EditBase, d: EditDraft): EditPlan {
   const timeChanged = startMs !== Date.parse(base.scheduled_start) || endMs !== Date.parse(base.scheduled_end)
   const dayChanged = d.ymd !== dayKey(base.scheduled_start)
   const crewChanged = !sameSet(d.crew, base.crew) || (d.crew.length > 0 && d.lead !== base.lead)
+  const dayRuledOut = !!limits && dayChanged && !dayAllowed(limits, d.ymd)
   return {
-    problem: timeChanged || crewChanged ? null : 'nothing',
+    problem: dayRuledOut ? 'day' : timeChanged || crewChanged ? null : 'nothing',
     newStart: new Date(startMs).toISOString(),
     newEnd: new Date(endMs).toISOString(),
     timeChanged, dayChanged, crewChanged,
   }
 }
 
-// ── Warnings ────────────────────────────────────────────────────────────────
+// ── The day: a turnover stays between its guests ────────────────────────────
+// Todd, 2026-10-28, after trying the sheet: no changing the date "when it's
+// back to back or when a new guest is checking in". A back-to-back clean has
+// to happen between one guest's checkout and the next one's check-in on the
+// same day; on any other day the house is occupied, or the next guest walks
+// into it dirty. The web Edit tab and Schedule drag only warn about the
+// booking window; the phone holds the day:
+//   - back to back (the sync's jobs.window_minutes), or a guest checking in on
+//     the clean's day (jobs.checkin_time, or the next reservation's check-in):
+//     the day is locked; the time and crew still change;
+//   - otherwise a turnover's day stays between the departing guest's checkout
+//     and the next guest's check-in, both days included.
+// Z & K, 2026-10-28: 41 of 267 upcoming turnovers are back to back, every one
+// with window_minutes set; checkin_time is set only on those (40 of 41).
 
 /** The booking a turnover belongs between: checkout day, next guest's arrival day. */
 export interface BookingWindow { lo: string; hi: string | null }
 
+export type DayLock = 'back_to_back' | 'arrival_day'
+
+/** The days a clean may move to ('YYYY-MM-DD', null = open), and why it can't move at all. */
+export interface DayLimits { lo: string | null; hi: string | null; locked: DayLock | null }
+
+export function dayLimits(base: EditBase, w: BookingWindow | null): DayLimits {
+  const day = dayKey(base.scheduled_start)
+  if (base.window_minutes != null) return { lo: day, hi: day, locked: 'back_to_back' }
+  const arrival = base.checkin_time ? dayKey(base.checkin_time) : null
+  if (arrival === day || w?.hi === day) return { lo: day, hi: day, locked: 'arrival_day' }
+  // The next arrival closes the window, whichever source knows it first.
+  let hi = w?.hi ?? null
+  if (arrival && arrival > day && (!hi || arrival < hi)) hi = arrival
+  return { lo: w?.lo ?? null, hi, locked: null }
+}
+
+/** May the clean move to `ymd`? (Its own day is never asked: it can always stay.) */
+export function dayAllowed(l: DayLimits, ymd: string): boolean {
+  return !l.locked && (!l.lo || ymd >= l.lo) && (!l.hi || ymd <= l.hi)
+}
+
+// ── Warnings ────────────────────────────────────────────────────────────────
+
 export type EditWarning =
-  | { code: 'window_before'; lo: string }
-  | { code: 'window_after'; hi: string }
+  | { code: 'before_checkout'; at: string }
+  | { code: 'after_checkin'; at: string }
   | { code: 'off_hours' }
   | { code: 'past' }
   | { code: 'time_off'; ids: string[] }
@@ -252,7 +300,6 @@ export type EditWarning =
   | { code: 'no_crew' }
 
 export interface WarningInputs {
-  window: BookingWindow | null
   /** Approved time off covering the draft's day, by user id. */
   timeOffIds: string[]
   /** Off that day by their weekly schedule, by user id. */
@@ -266,10 +313,14 @@ export interface WarningInputs {
 export function editWarnings(base: EditBase, d: EditDraft, plan: EditPlan, inp: WarningInputs): EditWarning[] {
   if (plan.problem || !plan.newStart) return []
   const out: EditWarning[] = []
-  if (plan.timeChanged) {
-    const w = inp.window
-    if (w && d.ymd < w.lo) out.push({ code: 'window_before', lo: w.lo })
-    else if (w?.hi && d.ymd > w.hi) out.push({ code: 'window_after', hi: w.hi })
+  if (plan.timeChanged && plan.newEnd) {
+    // On the day a guest leaves or arrives: start after they leave, finish before the next one comes.
+    if (base.checkout_time && dayKey(base.checkout_time) === d.ymd && Date.parse(plan.newStart) < Date.parse(base.checkout_time)) {
+      out.push({ code: 'before_checkout', at: base.checkout_time })
+    }
+    if (base.checkin_time && dayKey(base.checkin_time) === d.ymd && Date.parse(plan.newEnd) > Date.parse(base.checkin_time)) {
+      out.push({ code: 'after_checkin', at: base.checkin_time })
+    }
     if (d.start && (d.start.h < 7 || d.start.h >= 19)) out.push({ code: 'off_hours' })
     if (Date.parse(plan.newStart) < inp.nowMs) out.push({ code: 'past' })
   }
@@ -297,7 +348,7 @@ export function editWarnings(base: EditBase, d: EditDraft, plan: EditPlan, inp: 
 
 // Every FK hinted: an unhinted embed turns into a 300 the day a second FK
 // appears. One literal, so scripts/test-task-pay.mjs can read the columns.
-const BASE_SELECT = 'id, tenant_id, status, job_type, scheduled_start, scheduled_end, manually_retimed_at, min_crew, max_crew, is_turnover, reservation_id, address_id, client_addresses!jobs_address_id_fkey(id, nickname, street, max_cleaners, min_cleaners), job_assignments!job_assignments_job_id_fkey(user_id, is_lead)'
+const BASE_SELECT = 'id, tenant_id, status, job_type, scheduled_start, scheduled_end, manually_retimed_at, min_crew, max_crew, is_turnover, reservation_id, address_id, window_minutes, checkout_time, checkin_time, client_addresses!jobs_address_id_fkey(id, nickname, street, max_cleaners, min_cleaners), job_assignments!job_assignments_job_id_fkey(user_id, is_lead)'
 
 /** The clean, read fresh. null + error when it can't be read. */
 export async function loadEditBase(db: any, jobId: string): Promise<{ base: EditBase | null; error: string | null }> {
@@ -379,10 +430,12 @@ export async function saveEdit(db: any, p: {
   draft: EditDraft
   me: string
   newBatchId: () => string
+  /** The turnover's booking window as the sheet read it: the day rule is checked again here. */
+  window?: BookingWindow | null
   now?: () => string
 }): Promise<SaveOutcome> {
   const { base, draft, me } = p
-  const plan = planEdit(base, draft)
+  const plan = planEdit(base, draft, dayLimits(base, p.window ?? null))
   if (plan.problem || !plan.newStart || !plan.newEnd) return { ok: false, stage: 'job', stale: false, error: plan.problem }
   const stamp = p.now?.() ?? new Date().toISOString()
 
