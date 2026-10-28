@@ -3,6 +3,9 @@ import * as Sentry from '@sentry/react-native'
 // OTAs), so reading it here costs no new native dependency and this file can
 // still ship over the air.
 import * as Updates from 'expo-updates'
+// Also already in the native binary (notifications.ts uses it), so the
+// simulator gate below ships over the air too.
+import * as Device from 'expo-device'
 
 // Which JS BUNDLE this device is running.
 //
@@ -54,7 +57,22 @@ function bundleTags(): Record<string, string> {
 // SENTRY_AUTH_TOKEN + org/project on the app.json plugin; add when ready —
 // intentionally disabled for now per SENTRY_DISABLE_AUTO_UPLOAD in eas.json.)
 Sentry.init({
-  dsn: 'https://f58499b805c5368ac611bb0e837a6008@o4511111110459392.ingest.us.sentry.io/4511586838511616',
+  // Simulators and emulators send NOTHING.
+  //
+  // WHY: on 2026-10-27 a stubbed test bundle crashed twice on a throwaway
+  // iPhone simulator and landed as RINSEBASE-MOBILE-6, -7 and -8 — 1 event,
+  // 1 user each, environment `production` — which on the admin System Health
+  // card looks exactly like a crew phone crashing. A simulator is always us
+  // testing; it is never a crew member.
+  //
+  // The gate is the DSN, not `enabled: false`. `enabled` is only checked on
+  // the JS side — the native SDK is still initialized and its crash handler
+  // still installed — and MOBILE-7 was the native layer's copy of that crash.
+  // With no DSN the SDK skips native init entirely and every capture is a
+  // no-op; Sentry.wrap in App.tsx still renders the app as before.
+  dsn: Device.isDevice
+    ? 'https://f58499b805c5368ac611bb0e837a6008@o4511111110459392.ingest.us.sentry.io/4511586838511616'
+    : undefined,
   environment: 'production',
   // Tags on initialScope apply to EVERY event, including any thrown before the
   // first render — which is where a bad bundle is most likely to fail.
