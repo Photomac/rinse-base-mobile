@@ -572,6 +572,7 @@ function AppInner() {
         user={user}
         onBack={() => setSelectedJob(null)}
         onStatusChange={(job: any, status: string) => setSelectedJob((prev: any) => prev ? { ...prev, status } : null)}
+        onJobEdited={patch => setSelectedJob((prev: any) => prev ? { ...prev, ...patch } : null)}
       />
     )
   }
