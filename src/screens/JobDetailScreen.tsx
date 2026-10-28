@@ -2552,9 +2552,6 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           </View>
         )}
 
-        {/* Stay condition rating — how the guests left it (host sees it with photos) */}
-        {isStarted && !isTask && !isResidential && <StayRatingCard job={job} user={user} />}
-
         {/* Property incident report — damage / missing / maintenance / pest /
             safety / lost & found (manager reviews before the host is told) */}
         <View onLayout={e => { incidentY.current = e.nativeEvent.layout.y }}>
@@ -2562,6 +2559,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
               visit, a needed deep clean above all (CKS, 2026-10-22). */}
           {isStarted && (!isTask || isInspection) && <IncidentReportCard job={job} user={user} rooms={roomsMeta} presetRoom={incidentRoom} presetKey={incidentKey} />}
         </View>
+
+        {/* Stay condition rating — how the guests left it (host sees it with photos) */}
+        {isStarted && !isTask && !isResidential && <StayRatingCard job={job} user={user} />}
 
         {/* Notes */}
         {isStarted && (
