@@ -168,7 +168,7 @@ export const propMetaRead = (addrId: string): CacheRead => ({
     .maybeSingle(),
 })
 
-/** The property's lead-only notes (address_lead_notes, web 20261029172000):
+/** The property's lead-only notes (address_lead_notes, web 20261029175055):
  *  owner closet codes and the like. The server returns the row only to lead
  *  cleaners and the office, so everyone else saves and shows nothing. The day
  *  pack saves it with the door code. Before the table exists the read fails
