@@ -64,6 +64,7 @@ import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
 import { isRepairVisit, returnVisitValues } from '../lib/repairVisit'
 import { canEditClean } from '../lib/officeEdit'
 import { finishedCleanReadOnly, walkthroughDefault } from '../lib/finishedClean'
+import { CrewAnswerCard } from '../components/CrewAnswerCard'
 import { OfficeEditSheet, type EditedPatch } from '../components/OfficeEditSheet'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
@@ -1832,6 +1833,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll}>
+        {/* "Can you do this clean?" — only at a company that asks its crew to
+            accept or decline, on a clean still ahead (lib/crewAnswers). A
+            decline takes them off it, so the screen goes back. */}
+        <CrewAnswerCard job={job} user={user} onDeclined={onBack} />
         {/* Finished: said first, then what the inspector found on THIS clean,
             shown to the cleaner who did it (the inspection push opens here).
             Read-only, findings-not-scores; the card renders nothing until an
