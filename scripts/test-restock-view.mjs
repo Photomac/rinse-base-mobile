@@ -106,7 +106,8 @@ check('"Already flagged low here" (consumables) and each item\'s "Flagged low si
   /\{open\[item\.id\] && \(/.test(screen), /fmtDate\(open\[item\.id\]\.since, localeFor\(lang\)\)/.test(screen),
 ], [true, true, true, true, true])
 const detail = read('src/screens/JobDetailScreen.tsx')
-check('the job screen offers Supplies on inspections too', /\{\(!isTask \|\| isInspection\) && \(\s*<TouchableOpacity style=\{styles\.actionChip\} onPress=\{\(\) => setShowInventory\(true\)\}>/.test(detail), true)
+// Not on a finished clean the crew only read (lib/finishedClean).
+check('the job screen offers Supplies on inspections too', /\{\(!isTask \|\| isInspection\) && !readOnly && \(\s*<TouchableOpacity style=\{styles\.actionChip\} onPress=\{\(\) => setShowInventory\(true\)\}>/.test(detail), true)
 
 // ── Strings ──────────────────────────────────────────────────────────────────
 const i18n = read('src/lib/i18n.ts')
