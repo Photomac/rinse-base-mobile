@@ -63,6 +63,7 @@ import {
 import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
 import { isRepairVisit, returnVisitValues } from '../lib/repairVisit'
 import { canEditClean } from '../lib/officeEdit'
+import { finishedCleanReadOnly, walkthroughDefault } from '../lib/finishedClean'
 import { OfficeEditSheet, type EditedPatch } from '../components/OfficeEditSheet'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
@@ -100,7 +101,7 @@ const LAUNDRY_MODES = [
   { key: 'bags_to_office' as const,     labelKey: 'laundry_bags_office' as const },
   { key: 'bags_to_laundromat' as const, labelKey: 'laundry_bags_laundromat' as const },
 ]
-function TakeHomeLaundryCard({ job, user, bagColor }: { job: any; user: any; bagColor?: string | null }) {
+function TakeHomeLaundryCard({ job, user, bagColor, readOnly = false }: { job: any; user: any; bagColor?: string | null; readOnly?: boolean }) {
   const { t } = useLang()
   const [bags, setBags] = useState<Record<string, number>>({ bags_taken_home: 0, bags_onsite: 0, bags_to_office: 0, bags_to_laundromat: 0 })
   const [rowUserId, setRowUserId] = useState<string | null>(null)
@@ -147,25 +148,25 @@ function TakeHomeLaundryCard({ job, user, bagColor }: { job: any; user: any; bag
         <View key={key} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
           <Text style={{ fontSize: 14, fontWeight: '600', color: '#374151', flex: 1, paddingRight: 8 }}>{t(labelKey)}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-            <TouchableOpacity onPress={() => setBags(b => ({ ...b, [key]: Math.max(0, b[key] - 1) }))}
+            {!readOnly && <TouchableOpacity onPress={() => setBags(b => ({ ...b, [key]: Math.max(0, b[key] - 1) }))}
               style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', lineHeight: 22 }}>−</Text>
-            </TouchableOpacity>
+            </TouchableOpacity>}
             <Text style={{ fontSize: 20, fontWeight: '900', color: bags[key] > 0 ? '#111827' : '#9CA3AF', minWidth: 30, textAlign: 'center' }}>{bags[key]}</Text>
-            <TouchableOpacity onPress={() => setBags(b => ({ ...b, [key]: b[key] + 1 }))}
+            {!readOnly && <TouchableOpacity onPress={() => setBags(b => ({ ...b, [key]: b[key] + 1 }))}
               style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ color: '#fff', fontSize: 20, fontWeight: '800', lineHeight: 22 }}>+</Text>
-            </TouchableOpacity>
+            </TouchableOpacity>}
           </View>
         </View>
       ))}
-      <TouchableOpacity
+      {!readOnly && <TouchableOpacity
         onPress={save} disabled={saving}
         style={{ marginTop: 4, borderRadius: 12, padding: 12, alignItems: 'center', backgroundColor: saved ? '#10B981' : TEAL }}>
         {saving
           ? <ActivityIndicator color="#fff" size="small" />
           : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>{saved ? `✓ ${t('saved')}` : t('takehome_save')}</Text>}
-      </TouchableOpacity>
+      </TouchableOpacity>}
     </View>
   )
 }
@@ -362,6 +363,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // Desk staff on somebody else's clean. An admin who IS on the roster is just
   // crew here and keeps the normal self-clock-in path.
   const recordsForOthers = isAdminRole && crewOnJob.length > 0 && !crewOnJob.some(c => c.id === user.id)
+  // A finished clean is the crew's to read, the office's to change (CKS,
+  // 2026-10-28: the inspection push opens it, and a stray tap changed it).
+  const readOnly = finishedCleanReadOnly(user.role, job)
   // "Maria · " prefix for a time entry that isn't the viewer's own.
   function entryOwnerLabel(entry: any): string {
     if (!entry || entry.user_id === user.id) return ''
@@ -1809,13 +1813,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       onFiled={finishFiledInspection}
     />
   )
-  if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} requiredOutstanding={Math.max(0, reqTotal - reqDone)} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
+  if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} requiredOutstanding={Math.max(0, reqTotal - reqDone)} readOnly={readOnly} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
   if (showWalkthrough) {
     // Arrival until the clean is ~15 minutes in, finished after that. The crew
-    // can switch it on the recorder.
-    const firstIn = timeEntries[0]?.clocked_in_at || activeEntry?.clocked_in_at
-    const arriving = !isStarted || (!!firstIn && Date.now() - new Date(firstIn).getTime() < 15 * 60_000)
-    return <WalkthroughScreen job={job} user={user} defaultType={arriving ? 'before' : 'after'} onBack={() => setShowWalkthrough(false)} />
+    // can switch it on the recorder. Day shift has no punch on the clean, so
+    // its Start is the clock (lib/finishedClean).
+    const firstIn = timeEntries[0]?.clocked_in_at || activeEntry?.clocked_in_at || (dailyMode ? jobStartAt : null)
+    const defaultType = walkthroughDefault({ started: isStarted, startedAt: firstIn, now: Date.now() })
+    return <WalkthroughScreen job={job} user={user} defaultType={defaultType} onBack={() => setShowWalkthrough(false)} />
   }
 
   return (
@@ -1827,6 +1832,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       </View>
 
       <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll}>
+        {/* Finished: said first, then what the inspector found on THIS clean,
+            shown to the cleaner who did it (the inspection push opens here).
+            Read-only, findings-not-scores; the card renders nothing until an
+            inspection is filed. */}
+        {job.status === 'completed' && (
+          <View style={[styles.completedBanner, { marginBottom: 12 }]}>
+            <Text style={{ color: '#065F46', fontSize: 16, fontWeight: '800' }}>✓ {t('job_completed')}</Text>
+            {elapsedMinutes > 0 && <Text style={{ color: '#065F46', fontSize: 13, marginTop: 4 }}>{t('total_time')}: {fmtDuration(elapsedMinutes)}</Text>}
+            {readOnly && <Text style={{ color: '#065F46', fontSize: 12, marginTop: 6, textAlign: 'center' }}>{t('finished_view_only')}</Text>}
+          </View>
+        )}
+        {job.status === 'completed' && !isTask && <InspectionResultCard job={job} />}
+
         {/* Check first: the property's own list, the very first thing on the
             screen, before and after Start (cleans only). */}
         {!!checkFirst && !isTask && (
@@ -2098,7 +2116,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                 <Text style={styles.actionChipLabel} numberOfLines={1}>{t('job_photos')}</Text>
               </TouchableOpacity>
             )}
-            {!isTask && videoEnabled && (
+            {!isTask && videoEnabled && !readOnly && (
               <TouchableOpacity style={styles.actionChip} onPress={() => setShowWalkthrough(true)}>
                 <Text style={styles.actionChipIcon}>🎥</Text>
                 <Text style={styles.actionChipLabel} numberOfLines={1}>{t('walkthrough_chip')}</Text>
@@ -2119,8 +2137,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             )}
             {/* Cleans and inspections: the home's supplies, and what's
                 already flagged low there (CKS, 2026-10-22: "visible to
-                cleaners AND inspectors while they're standing in the home"). */}
-            {(!isTask || isInspection) && (
+                cleaners AND inspectors while they're standing in the home").
+                Not on a finished clean the crew only read: the screen saves counts. */}
+            {(!isTask || isInspection) && !readOnly && (
               <TouchableOpacity style={styles.actionChip} onPress={() => setShowInventory(true)}>
                 <Text style={styles.actionChipIcon}>📦</Text>
                 <Text style={styles.actionChipLabel} numberOfLines={1}>{t('supplies')}</Text>
@@ -2278,7 +2297,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             then holds only the property's own required shots. */}
         {isStarted && !isTask && walkthroughJob && (
           <View style={styles.card}>
-            <WalkthroughChecklist job={job} user={user}
+            <WalkthroughChecklist job={job} user={user} readOnly={readOnly}
               onAddPhoto={item => { setActivePhotoItem(item); setShowPhotos(true) }}
               onChanged={() => loadChecklist(true)} />
           </View>
@@ -2378,7 +2397,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                         const on = item.result === v
                                         const col = v === 'ok' ? '#16A34A' : v === 'issue' ? '#DC2626' : '#9CA3AF'
                                         return (
-                                          <TouchableOpacity key={v}
+                                          <TouchableOpacity key={v} disabled={readOnly}
                                             onPress={() => {
                                               if (v === 'issue' && !on) { setIssueForId(item.id); setIssueText(item.issue_note || ''); return }
                                               saveVerify(item, on ? null : v)
@@ -2416,7 +2435,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                               }
                               return (
                                 <View key={item.id} style={styles.checkItem}>
-                                  <TouchableOpacity onPress={() => {
+                                  <TouchableOpacity disabled={readOnly} onPress={() => {
                                     const newVal = !checked[item.id]
                                     if (newVal && item.requires_photo && !itemPhotos[item.id]) {
                                       Alert.alert(`📸 ${t('photo_required_alert')}`, t('item_photo_before_check_msg'), [
@@ -2439,7 +2458,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                     </View>
                                   </TouchableOpacity>
                                   {/* Generated "Restock…" tasks jump to this room's supplies */}
-                                  {/^restock/i.test((item.title || '').trim()) && item.room_uid && (
+                                  {/^restock/i.test((item.title || '').trim()) && item.room_uid && !readOnly && (
                                     <TouchableOpacity style={styles.itemPhotoBtn} onPress={() => setShowInventory({ roomId: item.room_uid })}>
                                       <Text style={styles.itemPhotoBtnText}>📦</Text>
                                     </TouchableOpacity>
@@ -2472,17 +2491,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                     </Text>
                                   )}
                                 </View>
-                                <TouchableOpacity onPress={() => shootEvidence(e)} disabled={shootingId === e.id}
+                                {!readOnly && <TouchableOpacity onPress={() => shootEvidence(e)} disabled={shootingId === e.id}
                                   style={{ paddingVertical: 5, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1,
                                     borderColor: e.photo_url ? '#E5E7EB' : '#8B5CF6',
                                     backgroundColor: e.photo_url ? '#fff' : '#F5F3FF' }}>
                                   <Text style={{ fontSize: 11, fontWeight: '800', color: e.photo_url ? '#6B7280' : '#7C3AED' }}>
                                     {shootingId === e.id ? '…' : e.photo_url ? t('retake_photo') : t('take_photo')}
                                   </Text>
-                                </TouchableOpacity>
+                                </TouchableOpacity>}
                               </View>
                             ))}
-                            {g.key !== '__other__' && !isTask && (
+                            {g.key !== '__other__' && !isTask && !readOnly && (
                               <TouchableOpacity onPress={() => reportIssueIn(g.key, g.name)}
                                 style={{ marginTop: 6, alignSelf: 'flex-start', borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E7EB', borderRadius: 8, paddingVertical: 5, paddingHorizontal: 10 }}>
                                 <Text style={{ fontSize: 11, fontWeight: '700', color: '#6B7280' }}>⚠ {ti(t('ir_report_in_room'), { room: tx(g.name) })}</Text>
@@ -2491,7 +2510,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                             {g.mode === 'room_complete' && g.key !== '__other__' && (
                               st.signed ? (
                                 <Text style={{ fontSize: 12, color: '#059669', fontWeight: '800', marginTop: 6 }}>✓ {t('room_signed_off')}</Text>
-                              ) : (
+                              ) : readOnly ? null : (
                                 <TouchableOpacity disabled={st.req.done < st.req.total} onPress={() => signOffRoom(g.key)}
                                   style={{ marginTop: 6, borderRadius: 10, paddingVertical: 9, alignItems: 'center',
                                     backgroundColor: st.req.done < st.req.total ? '#E5E7EB' : '#10B981' }}>
@@ -2519,12 +2538,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
 
         {/* Take-home laundry — cleaner bags laundry on a clean and washes it at
             home for the per-bag bonus. Only shows when the tenant pays one. */}
-        {isStarted && !isTask && !isResidential && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} bagColor={tx(bagColor)} />}
+        {isStarted && !isTask && !isResidential && user._laundryBonus > 0 && <TakeHomeLaundryCard job={job} user={user} bagColor={tx(bagColor)} readOnly={readOnly} />}
 
         {/* All laundry done on-site — one-tap flag, counted per crew on Payroll */}
         {isStarted && !isTask && !isResidential && (
           <View style={styles.card}>
-            <TouchableOpacity onPress={toggleLaundryDoneOnsite} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <TouchableOpacity onPress={toggleLaundryDoneOnsite} disabled={readOnly} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <View style={[styles.checkbox, laundryDoneOnsite && styles.checkboxDone]}>
                 {laundryDoneOnsite && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
               </View>
@@ -2540,7 +2559,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             Only shows when the property is pet-friendly or has a fee configured. */}
         {isStarted && !isTask && (petFriendly || petFee > 0) && (
           <View style={styles.card}>
-            <TouchableOpacity onPress={togglePetFee} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <TouchableOpacity onPress={togglePetFee} disabled={readOnly} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <View style={[styles.checkbox, petFeeApplied && styles.checkboxDone]}>
                 {petFeeApplied && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>✓</Text>}
               </View>
@@ -2553,18 +2572,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
         )}
 
         {/* Stay condition rating — how the guests left it (host sees it with photos) */}
-        {isStarted && !isTask && !isResidential && <StayRatingCard job={job} user={user} />}
+        {isStarted && !isTask && !isResidential && <StayRatingCard job={job} user={user} readOnly={readOnly} />}
 
         {/* Property incident report — damage / missing / maintenance / pest /
             safety / lost & found (manager reviews before the host is told) */}
         <View onLayout={e => { incidentY.current = e.nativeEvent.layout.y }}>
           {/* Cleans and inspections: inspectors report what they find on the
               visit, a needed deep clean above all (CKS, 2026-10-22). */}
-          {isStarted && (!isTask || isInspection) && <IncidentReportCard job={job} user={user} rooms={roomsMeta} presetRoom={incidentRoom} presetKey={incidentKey} />}
+          {isStarted && (!isTask || isInspection) && !readOnly && <IncidentReportCard job={job} user={user} rooms={roomsMeta} presetRoom={incidentRoom} presetKey={incidentKey} />}
         </View>
 
-        {/* Notes */}
-        {isStarted && (
+        {/* Notes. Saved only by Complete (into internal_notes), so a finished
+            clean's box took typing and kept none of it. */}
+        {isStarted && !readOnly && (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>{t('notes_optional')}</Text>
             <TextInput style={styles.notesInput} value={notes} onChangeText={setNotes} placeholder={t(needsReturn ? 'needs_return_visit_ph' : 'notes_placeholder')} placeholderTextColor="#9CA3AF" multiline numberOfLines={3} />
@@ -2583,17 +2603,6 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           </View>
         )}
 
-        {/* Inspection results — what the inspector found on THIS clean, shown
-            to the cleaner who did it. Read-only, findings-not-scores; renders
-            nothing until an inspection is filed. */}
-        {job.status === 'completed' && !isTask && <InspectionResultCard job={job} />}
-
-        {job.status === 'completed' && (
-          <View style={styles.completedBanner}>
-            <Text style={{ color: '#065F46', fontSize: 16, fontWeight: '800' }}>✓ {t('job_completed')}</Text>
-            {elapsedMinutes > 0 && <Text style={{ color: '#065F46', fontSize: 13, marginTop: 4 }}>{t('total_time')}: {fmtDuration(elapsedMinutes)}</Text>}
-          </View>
-        )}
       </ScrollView>
 
       {viewPropertyPhoto && propertyPhotoUrl && (
