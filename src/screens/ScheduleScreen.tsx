@@ -15,6 +15,7 @@ import { SLATE_DARK, GOLD } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { overlayPending } from '../lib/outbox'
+import { useAwaitingAnswers } from '../lib/useCrewAnswers'
 // Which day a clean falls on is the TENANT's day, not the phone's — see
 // src/lib/timezone.ts. Grid cells are local calendar Dates whose literal Y/M/D
 // is what's drawn, so they key off localDayKey and jobs key off dayKey.
@@ -59,6 +60,10 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const isOffice = isOfficeRole(user.role)
   const [scope, setScope] = useJobScope(user.id)
   const viewScope: JobScope = isOffice ? scope : 'everyone'
+  // Cleans still waiting on the viewer's accept / decline (lib/crewAnswers),
+  // re-read with every load. null = the company doesn't ask.
+  const [loads, setLoads] = useState(0)
+  const awaiting = useAwaitingAnswers(user, loads)
 
   useEffect(() => { load() }, [])
 
@@ -87,6 +92,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     setJobs((await overlayPending('jobs', myJobs)).sort(byCrewDayOrder))
     setLoading(false)
     setRefreshing(false)
+    setLoads(n => n + 1)
   }
 
   // Bucket once per load rather than re-scanning every job for each of the ~42
@@ -290,6 +296,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                   <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}</Text>
                   {(!job.job_type || job.job_type === 'clean' || job.job_type === 'inspection') && <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>}
                   {kind.length > 0 && <Text style={styles.kindTag}>{kind.join('  ·  ')}</Text>}
+                  {!!awaiting?.waiting.has(job.id) && <Text style={styles.answerTag}>⏳ {t('answer_needed_tag')}</Text>}
                   <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                 </View>
                 <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
@@ -345,4 +352,5 @@ const styles = StyleSheet.create({
   jobClient: { fontSize: 14, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
   jobAddress: { fontSize: 11, color: '#94A3B8' },
   kindTag: { fontSize: 10, color: '#06B6D4', fontWeight: '700', marginTop: 3 },
+  answerTag: { fontSize: 11, color: '#B45309', fontWeight: '800', marginTop: 4 },
 })

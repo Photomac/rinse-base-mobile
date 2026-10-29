@@ -30,6 +30,7 @@ import { JobClock } from '../components/JobClock'
 // src/lib/timezone.ts.
 import { fmtTime, fmtDate, fmtDateTime, dayKey, todayKey, startOfDayInTz, startOfMonthInTz } from '../lib/timezone'
 import { shiftYmd } from '../lib/nextArrival'
+import { useAwaitingAnswers } from '../lib/useCrewAnswers'
 
 // How long the shift card waits for the live read on a weak signal before it
 // answers from the saved copy (as the checklist does: lib/checklistCard).
@@ -54,6 +55,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [earnings, setEarnings] = useState<number | null>(null)
   // Bumped per load(): an older load's late answers must not overwrite a newer one's.
   const loadGen = useRef(0)
+  // Cleans still waiting on the viewer's accept / decline (lib/crewAnswers),
+  // re-read on every load. null = the company doesn't ask.
+  const [loads, setLoads] = useState(0)
+  const awaiting = useAwaitingAnswers(user, loads)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [offline, setOffline] = useState(false)
@@ -133,6 +138,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
     const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
     const gen = ++loadGen.current
+    setLoads(n => n + 1)
 
     readShift(gen)
 
@@ -541,6 +547,14 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           </View>
         )}
 
+        {/* Cleans waiting on their accept / decline: each is answered on its
+            own screen, and Schedule tags them. */}
+        {!!awaiting && awaiting.waiting.size > 0 && (
+          <TouchableOpacity style={styles.answerBanner} onPress={() => onNavigate('schedule')} activeOpacity={0.85}>
+            <Text style={styles.answerBannerText}>⏳ {awaiting.waiting.size === 1 ? t('answer_home_banner_one') : ti(t('answer_home_banner'), { n: String(awaiting.waiting.size) })}</Text>
+          </TouchableOpacity>
+        )}
+
         {/* What the offline day pack holds. Hidden for an office user with
             no stops of their own — "0 stops" every day is noise there. */}
         {packStops != null && !(isOffice && packStops === 0) && dayPack && (
@@ -768,6 +782,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
   scroll: { paddingBottom: 40 },
   offlineBanner: { marginHorizontal: 16, marginTop: 12, backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1, borderRadius: 10, padding: 10 },
+  answerBanner: { marginHorizontal: 16, marginTop: 12, backgroundColor: '#FFFBEB', borderColor: '#FCD34D', borderWidth: 2, borderRadius: 12, padding: 12 },
+  answerBannerText: { color: '#B45309', fontSize: 14, fontWeight: '800' },
   offlineBannerText: { color: '#92400E', fontSize: 12, fontWeight: '700', textAlign: 'center' },
   dayPackLine: { marginHorizontal: 16, marginTop: 10, fontSize: 11, color: '#64748B', textAlign: 'center' },
   startDayBtn:{ marginHorizontal: 16, marginTop: 16, backgroundColor: GOLD, borderRadius: 14, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' },
