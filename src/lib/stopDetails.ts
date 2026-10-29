@@ -11,7 +11,7 @@
 // checklist card had the same wait (lib/checklistCard.ts).
 //
 // So now:
-// - The three reads start at once, and each shows as soon as it is in.
+// - The reads start at once, and each shows as soon as it is in.
 // - A read with a saved copy waits at most STOP_DETAILS_WAIT.ms for the live
 //   answer, and not at all when the phone's last request already failed; then
 //   the saved copy shows (dataCache readSoon). The live answer, when it comes,
@@ -30,7 +30,7 @@
 // The reads are the shared builders in lib/jobReads, the ones the day pack
 // saves (scripts/test-offline-day-pack.mjs checks this file too).
 import { readSoon } from './dataCache'
-import { jobMetaRead, jobCrewRead, propMetaRead, jobAddressId } from './jobReads'
+import { jobMetaRead, jobCrewRead, propMetaRead, leadNotesRead, jobAddressId } from './jobReads'
 import { lastTripFailed } from './netFetch'
 import type { Roster } from './jobScope'
 
@@ -49,6 +49,9 @@ export interface StopDetailsUi {
   /** The property: size, crew notes, door code, arrival instructions, bag
    *  colour, staging photos, pets. */
   property: (row: any) => void
+  /** The property's lead-only notes, for a lead cleaner or the office; null
+   *  for everyone else (the server returns them no row). */
+  leadNotes: (notes: string | null) => void
 }
 
 const list = (x: any): any[] => (Array.isArray(x) ? x : [])
@@ -83,6 +86,13 @@ export function stopDetails(ui: StopDetailsUi) {
           if (r.data) ui.property(r.data)
           const late = await r.late
           if (late && !late.fromCache && late.data) ui.property(late.data)
+        }) : null,
+        addrId ? readSoon(leadNotesRead(addrId), wait).then(async r => {
+          if (r.data) ui.leadNotes((r.data as any).notes ?? null)
+          const late = await r.late
+          // The live answer wins, a no-row one included: notes cleared, or
+          // the viewer no longer a lead.
+          if (late && !late.fromCache && !late.error) ui.leadNotes((late.data as any)?.notes ?? null)
         }) : null,
       ])
     },

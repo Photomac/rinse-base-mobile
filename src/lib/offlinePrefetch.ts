@@ -48,7 +48,7 @@ const PACKED_STATUSES = ['pending_approval', 'scheduled', 'en_route', 'in_progre
 
 // Door code and checklist first, so a run cut short by the signal has saved
 // what a crew member at the door needs before the nice-to-haves.
-const FIRST = ['propmeta:', 'chkrows:', 'tmpl:', 'jobmeta:', 'crewnote:', 'time:']
+const FIRST = ['propmeta:', 'leadnotes:', 'chkrows:', 'tmpl:', 'jobmeta:', 'crewnote:', 'time:']
 const rank = (r: CacheRead) => (FIRST.some(p => r.key.startsWith(p)) ? 0 : 1)
 
 export interface DayPack {
