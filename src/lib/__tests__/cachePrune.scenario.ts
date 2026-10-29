@@ -87,7 +87,7 @@ const STOP_KEYS = (J: string) => [
   `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`,
 ]
 const PROPERTY_KEYS = (A: string) => [
-  `tmpl:${A}`, `rooms:${A}`, `addrmode:${A}`, `preq:${A}`, `propmeta:${A}`,
+  `tmpl:${A}`, `rooms:${A}`, `addrmode:${A}`, `preq:${A}`, `propmeta:${A}`, `leadnotes:${A}`,
   `inv:items:${A}`, `inv:rooms:${A}`, `inv:open:${A}`, `wttrash:${A}`, `nextarr:addr:${A}`, `cflines:${A}`,
 ]
 // Per user / per company / per day, and the phone's other stores: never touched.
@@ -154,6 +154,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       jobMetaRead: () => R.jobMetaRead(J),
       jobCrewRead: () => R.jobCrewRead(J),
       propMetaRead: () => R.propMetaRead(A),
+      leadNotesRead: () => R.leadNotesRead(A),
       crewClockRead: () => R.crewClockRead(J),
       timeEntriesRead: () => [R.timeEntriesRead(J, U, false), R.timeEntriesRead(J, U, true)],
       checklistTemplateRead: () => R.checklistTemplateRead(A),

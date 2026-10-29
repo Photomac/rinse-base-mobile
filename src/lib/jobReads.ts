@@ -168,6 +168,19 @@ export const propMetaRead = (addrId: string): CacheRead => ({
     .maybeSingle(),
 })
 
+/** The property's lead-only notes (address_lead_notes, web 20261029172000):
+ *  owner closet codes and the like. The server returns the row only to lead
+ *  cleaners and the office, so everyone else saves and shows nothing. The day
+ *  pack saves it with the door code. Before the table exists the read fails
+ *  and nothing is saved or shown. */
+export const leadNotesRead = (addrId: string): CacheRead => ({
+  key: `leadnotes:${addrId}`,
+  q: () => supabase.from('address_lead_notes')
+    .select('notes')
+    .eq('address_id', addrId)
+    .maybeSingle(),
+})
+
 /** Every crew member's punches on the job (the on-the-clock line). */
 export const crewClockRead = (jobId: string): CacheRead => ({
   key: `crewclock:${jobId}`,
@@ -478,7 +491,7 @@ const JOB_KEYS = new Set(['chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'ph
   'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'wtcarry', 'cfticks', 'cfphotos', 'cfstart',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
   'crewNoteAck'])
-const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'wttrash', 'cflines'])
+const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'leadnotes', 'wttrash', 'cflines'])
 
 /** The job or property a cache key (without dataCache's prefix) belongs to,
  *  or null when it belongs to neither. */
@@ -533,7 +546,7 @@ export function jobPackReads(job: any, user: any): PackRead[] {
     // loadPropMeta
     jobMetaRead(job.id),
     jobCrewRead(job.id),
-    ...(addrId ? [propMetaRead(addrId)] : []),
+    ...(addrId ? [propMetaRead(addrId), leadNotesRead(addrId)] : []),
     // loadCrewNote
     crewNoteRead(job.id),
     crewNoteAckRead(job.id, user.id),
