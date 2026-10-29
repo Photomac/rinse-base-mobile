@@ -357,7 +357,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // The job's extras, its crew and the property's notes (lib/stopDetails):
   // read at once, each saved copy within a few seconds on a weak signal, the
   // live answer replacing it when it comes.
-  const [details] = useState(() => stopDetails({ job: showJobMeta, crew: showCrew, roster: setRoster, property: showPropMeta }))
+  // Leads only (address_lead_notes): owner closet codes and the like. The
+  // server hands them to lead cleaners and the office only; anyone else gets
+  // null and sees no row. Shown exactly as stored, never through tx(), like
+  // the WiFi: a translated code is a wrong one.
+  const [leadNotes, setLeadNotes] = useState<string | null>(null)
+  const [details] = useState(() => stopDetails({ job: showJobMeta, crew: showCrew, roster: setRoster, property: showPropMeta, leadNotes: setLeadNotes }))
   // Crew see the property, not the homeowner — client names are for admins.
   const isAdminRole = ['owner', 'manager', 'dispatcher'].includes(user.role)
   const propLabel = addr?.nickname || (isAdminRole ? client?.full_name : addr?.street)
@@ -2022,6 +2027,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
               </View>
             </View>
           )}
+          {leadNotes?.trim() ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.infoIcon}>🔒</Text>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('leads_only')}</Text><Text style={styles.infoValue} selectable>{leadNotes}</Text></View>
+            </View>
+          ) : null}
           {arrivalInstructions && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📋</Text>
