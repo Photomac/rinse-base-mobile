@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { localeFor } from '../lib/i18n'
 import { chooseAttachmentSource, pickAndUploadImage } from '../lib/chatAttachments'
+import { dmListRows } from '../lib/chatList'
 import { SLATE_DARK, GOLD, ROLE_COLORS } from '../lib/theme'
 
 const ROLE_KEYS: Record<string, string> = {
@@ -101,9 +102,8 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
   }
 
   const teamChannels = channels.filter(c => c.channel_type === 'team')
-  const dmChannels = channels.filter(c =>
-    (c.channel_type === 'dm' || c.channel_type === 'group') && c.participant_ids?.includes(user.id)
-  )
+  // Conversations newest first (DMs and groups), then everyone else A–Z.
+  const dmRows = dmListRows(channels, crew, user.id)
 
   function getDMName(channel: any) {
     if (channel.channel_type === 'group') return channel.name || t('group')
@@ -205,25 +205,41 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
         />
       ) : (
         <FlatList
-          data={crew}
+          data={dmRows}
           keyExtractor={item => item.id}
           contentContainerStyle={{ padding: 16 }}
           renderItem={({ item }) => {
-            const dmChannel = dmChannels.find(c => c.participant_ids?.includes(item.id))
-            const color = ROLE_COLORS[item.role] || GOLD
+            if (item.type === 'label') return <Text style={styles.sectionLabel}>{t('chat_start_a_conversation')}</Text>
+            if (item.type === 'group') return (
+              <TouchableOpacity style={styles.channelRow} onPress={() => onOpenChannel({ ...item.channel, displayName: getDMName(item.channel) })}>
+                <View style={styles.channelIcon}>
+                  <Text style={styles.channelIconText}>👥</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.channelName}>{getDMName(item.channel)}</Text>
+                  <Text style={styles.channelRole}>{t('group')}</Text>
+                  {!!item.channel.last_message && <Text style={styles.channelPreview} numberOfLines={1}>{item.channel.last_message}</Text>}
+                </View>
+                {isUnread(item.channel) && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444', marginRight: 8 }} />}
+                <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
+              </TouchableOpacity>
+            )
+            const person = item.person
+            const dmChannel = item.type === 'dm' ? item.channel : null
+            const color = ROLE_COLORS[person.role] || GOLD
             return (
-              <TouchableOpacity style={styles.channelRow} onPress={() => openDM(item)}>
-                {item.avatar_url ? (
-                  <Image source={{ uri: item.avatar_url }} style={styles.avatarPhoto} />
+              <TouchableOpacity style={styles.channelRow} onPress={() => openDM(person)}>
+                {person.avatar_url ? (
+                  <Image source={{ uri: person.avatar_url }} style={styles.avatarPhoto} />
                 ) : (
                   <View style={[styles.avatar, { backgroundColor: color }]}>
-                    <Text style={styles.avatarText}>{item.full_name?.split(' ')[0]?.[0] || '?'}</Text>
+                    <Text style={styles.avatarText}>{person.full_name?.split(' ')[0]?.[0] || '?'}</Text>
                   </View>
                 )}
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.channelName}>{item.nickname?.trim() || item.full_name}</Text>
-                  <Text style={styles.channelRole}>{t((ROLE_KEYS[item.role] || 'role_cleaner') as any)}</Text>
-                  {dmChannel?.last_message && <Text style={styles.channelPreview} numberOfLines={1}>{dmChannel.last_message}</Text>}
+                  <Text style={styles.channelName}>{person.nickname?.trim() || person.full_name}</Text>
+                  <Text style={styles.channelRole}>{t((ROLE_KEYS[person.role] || 'role_cleaner') as any)}</Text>
+                  {!!dmChannel?.last_message && <Text style={styles.channelPreview} numberOfLines={1}>{dmChannel.last_message}</Text>}
                 </View>
                 {dmChannel && isUnread(dmChannel) && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444', marginRight: 8 }} />}
                 <Text style={{ color: '#CBD5E1', fontSize: 18 }}>›</Text>
@@ -498,6 +514,7 @@ const styles = StyleSheet.create({
   channelName: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
   channelRole: { fontSize: 11, color: '#94A3B8', textTransform: 'capitalize' },
   channelPreview: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
+  sectionLabel: { fontSize: 11, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 8, marginBottom: 8, marginLeft: 4 },
   avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   avatarPhoto: { width: 40, height: 40, borderRadius: 20, flexShrink: 0 },
   avatarText: { color: '#fff', fontSize: 15, fontWeight: '700' },

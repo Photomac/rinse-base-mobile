@@ -376,6 +376,7 @@ export const translations = {
     create_group: 'Create group',
     team_channel: 'Team channel',
     direct_message: 'Direct message',
+    chat_start_a_conversation: 'Start a conversation',
     // Profile
     profile_title: 'Profile', contact_info: 'Contact info', pay_structure: 'Pay structure',
     pay_type: 'Pay type', hourly: 'Hourly', per_job: 'Per job', mixed_pay: 'Hourly + turnover',
@@ -1388,6 +1389,7 @@ export const translations = {
     create_group: 'Crear grupo',
     team_channel: 'Canal del equipo',
     direct_message: 'Mensaje directo',
+    chat_start_a_conversation: 'Inicia una conversación',
     // Profile
     profile_title: 'Perfil', contact_info: 'Información de contacto', pay_structure: 'Estructura de pago',
     pay_type: 'Tipo de pago', hourly: 'Por hora', per_job: 'Por trabajo', mixed_pay: 'Por hora + cambio',
@@ -2395,6 +2397,7 @@ export const translations = {
     create_group: 'Criar grupo',
     team_channel: 'Canal da equipe',
     direct_message: 'Mensagem direta',
+    chat_start_a_conversation: 'Comece uma conversa',
     // Profile
     profile_title: 'Perfil', contact_info: 'Contato', pay_structure: 'Estrutura de pagamento',
     pay_type: 'Tipo de pagamento', hourly: 'Por hora', per_job: 'Por serviço', mixed_pay: 'Por hora + virada',
