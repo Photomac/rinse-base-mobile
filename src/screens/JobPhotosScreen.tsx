@@ -46,9 +46,12 @@ interface Props {
    *  not satisfy them — see the banner. Passed down rather than re-queried:
    *  JobDetailScreen already resolves it, gated on the tenant's enforce flag. */
   requiredOutstanding?: number
+  /** A finished clean the crew only read (lib/finishedClean): the photos and
+   *  their upload state, no capture, no note or delete. */
+  readOnly?: boolean
 }
 
-export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOutstanding = 0 }: Props) {
+export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOutstanding = 0, readOnly = false }: Props) {
   const { t, lang } = useLang()
   const [serverPhotos, setServerPhotos] = useState<any[]>([])
   const [devicePhotos, setDevicePhotos] = useState<QueuedJobPhoto[]>([])
@@ -418,7 +421,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
             area photos. Measured on one account: 264 of 1,665 photos (16%)
             across 22 jobs counted for nothing, and the crew member with the
             most wasted shots was on this app, not the web. Say so here. */}
-        {requiredOutstanding > 0 && (
+        {requiredOutstanding > 0 && !readOnly && (
           <TouchableOpacity onPress={onBack} style={styles.reqWarn} activeOpacity={0.7}>
             <Text style={styles.reqWarnTitle}>
               📷 {ti(t('photos_dont_count_title'), { n: String(requiredOutstanding) })}
@@ -456,6 +459,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
             </TouchableOpacity>
           )
         })()}
+        {!readOnly && <>
         {/* Photo type selector */}
         <View style={styles.typeRow}>
           {PHOTO_TYPES.map(pt => (
@@ -495,6 +499,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
             <Text style={styles.galleryBtnText}>🖼 {t('choose_photos')}</Text>
           </TouchableOpacity>
         </View>
+        </>}
 
         {/* Photo sections */}
         {loading ? (
@@ -503,7 +508,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
           <View style={styles.empty}>
             <Text style={styles.emptyIcon}>📸</Text>
             <Text style={styles.emptyTitle}>{t('no_photos')}</Text>
-            <Text style={styles.emptyText}>{t('no_photos_sub')}</Text>
+            {!readOnly && <Text style={styles.emptyText}>{t('no_photos_sub')}</Text>}
           </View>
         ) : (
           <>
@@ -525,7 +530,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
                       onPress={() => setViewerIndex(galleryPhotos.findIndex(p => p.id === photo.id))}
                       // A queued photo has no job_photos row yet, so note/delete
                       // don't apply; the banner above is where its retry lives.
-                      onLongPress={() => { if (!photo.queued) openPhotoOptions(photo) }}
+                      onLongPress={() => { if (!photo.queued && !readOnly) openPhotoOptions(photo) }}
                     >
                       <Image source={{ uri: photo.photo_url }} style={[styles.photo, photo.queued && { opacity: 0.75 }]} />
                       {/* Every thumbnail says where its photo is: waiting,
@@ -560,7 +565,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
           </>
         )}
 
-        <Text style={styles.hint}>{t('long_press_delete')}</Text>
+        {!readOnly && <Text style={styles.hint}>{t('long_press_delete')}</Text>}
       </ScrollView>
 
       {viewerIndex !== null && viewerIndex >= 0 && (

@@ -3,6 +3,8 @@
 // clean (1-5 + condition flags + optional note). Writes to jobs.stay_* (the same
 // columns the web app reads/writes). Shown at clean-completion on JobDetailScreen,
 // above the notes card. Bilingual via useLang. Mirrors web StayConditionCard.
+// readOnly (a finished clean, for the crew): the saved rating, its flags and
+// note as text; nothing at all when none was saved.
 // See docs/stay-condition-report-spec.md in the web repo.
 
 import React, { useEffect, useState } from 'react'
@@ -20,7 +22,7 @@ const FLAGS = [
   { key: 'items_moved', i18n: 'stay_flag_items_moved', icon: '📦' },
 ] as const
 
-export function StayRatingCard({ job, user }: { job: any; user: any }) {
+export function StayRatingCard({ job, user, readOnly = false }: { job: any; user: any; readOnly?: boolean }) {
   const { t } = useLang()
   const [rating, setRating] = useState(0)
   const [flags, setFlags] = useState<string[]>([])
@@ -65,6 +67,29 @@ export function StayRatingCard({ job, user }: { job: any; user: any }) {
 
   const canSave = rating > 0 && !(saved && !dirty)
   const btnLabel = saving ? '…' : (saved && !dirty) ? `✓ ${t('stay_saved')}` : saved ? t('stay_update') : t('stay_save')
+
+  if (readOnly) {
+    if (!rating) return null
+    const on = FLAGS.filter(f => flags.includes(f.key))
+    return (
+      <View style={styles.card}>
+        <Text style={styles.title}>{t('stay_rating_title')}</Text>
+        <View style={[styles.stars, { marginTop: 8, marginBottom: on.length || note ? 10 : 0 }]}>
+          {[1, 2, 3, 4, 5].map(n => <Text key={n} style={[styles.star, { color: n <= rating ? GOLD : BORDER }]}>★</Text>)}
+        </View>
+        {on.length > 0 && (
+          <View style={styles.flags}>
+            {on.map(f => (
+              <View key={f.key} style={[styles.chip, styles.chipOn]}>
+                <Text style={[styles.chipText, styles.chipTextOn]}>{f.icon} {t(f.i18n as any)}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+        {!!note && <Text style={{ fontSize: 13, color: TEXT }}>{note}</Text>}
+      </View>
+    )
+  }
 
   return (
     <View style={styles.card}>

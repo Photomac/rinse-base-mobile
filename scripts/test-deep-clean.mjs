@@ -113,7 +113,8 @@ check("chips in the crew's language; Other's box capped like the title", [
   /\{t\(i\.labelKey\)\}/.test(card), /maxLength=\{DEEP_CLEAN_OTHER_MAX\}/.test(card),
 ], [true, true])
 const detail = read('src/screens/JobDetailScreen.tsx')
-check('inspectors get the card: cleans and inspections', /\{isStarted && \(!isTask \|\| isInspection\) && <IncidentReportCard /.test(detail), true)
+// Not on a finished clean the crew only read (lib/finishedClean).
+check('inspectors get the card: cleans and inspections', /\{isStarted && \(!isTask \|\| isInspection\) && !readOnly && <IncidentReportCard /.test(detail), true)
 
 // ── A photo of each ──────────────────────────────────────────────────────────
 check('slots: tapped items in list order (with their chip key), then Other', D.deepCleanSlots(['fans', 'oven'], true, ' rugs '),
