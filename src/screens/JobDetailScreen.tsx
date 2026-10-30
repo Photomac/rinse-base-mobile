@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, Linking, ActivityIndicator, Modal, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
@@ -46,7 +46,9 @@ import { cachedRead } from '../lib/dataCache'
 import { noteCachedJobs } from '../lib/cachePrune'
 // Every cached read here is built in lib/jobReads, shared with the offline day
 // pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
-import { crewClockRead, checkFirstStartRead } from '../lib/jobReads'
+import { crewClockRead, checkFirstStartRead, videosOwedRead } from '../lib/jobReads'
+import { videosInBlockers, videosInRefusal, videosFromOwedRows, videosStillOwed } from '../lib/videosOwed'
+import { queuedJobVideos, announceVideos, type WalkthroughType } from '../lib/videoQueue'
 import { checklistCard, type ChecklistView } from '../lib/checklistCard'
 import { stopDetails } from '../lib/stopDetails'
 import { checkFirstCard } from '../lib/checkFirstCard'
@@ -206,8 +208,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // supplies screen fronts that room's section.
   const [showInventory, setShowInventory] = useState<boolean | { roomId: string }>(false)
   const [showWalkthrough, setShowWalkthrough] = useState(false)
+  // Opened for one video (Start's question, Complete's alert): the recorder starts on it.
+  const [walkthroughFor, setWalkthroughFor] = useState<WalkthroughType | null>(null)
   // Per-company switch (tenants.video_walkthroughs_enabled), off by default.
   const [videoEnabled, setVideoEnabled] = useState(false)
+  // The videos the company still needs for this clean (lib/videosOwed): the
+  // server's last answer, kept for no signal.
+  const [videosOwed, setVideosOwed] = useState<WalkthroughType[]>([])
+  const arrivalAsked = useRef(false)
   const [showMessages, setShowMessages] = useState(false)
   const [showLaundry, setShowLaundry] = useState(false)
   const [showInspection, setShowInspection] = useState(false)
@@ -423,6 +431,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const isInspection = job.job_type === 'inspection'
   // Any internal task (laundry run, generic task): no property/checklist/photos.
   const isTask = !!job.job_type && job.job_type !== 'clean'
+  const loadVideosOwed = useCallback(() => {
+    cachedRead(videosOwedRead(job.id)).then(r => setVideosOwed(videosFromOwedRows(r.data))).catch(() => {})
+  }, [job.id])
+  useEffect(() => {
+    if (videoEnabled && !isTask) loadVideosOwed()
+  }, [videoEnabled, isTask, loadVideosOwed])
   // A task pointed at a REAL property (e.g. a property inspection) — the owner
   // attached a client_addresses row instead of the internal shell (whose street
   // is the sentinel 'Internal task'). Show its address/lockbox/map/photo so the
@@ -1201,13 +1215,42 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
    * Fires once per screen mount so a pause/resume does not nag.
    */
   function announceRequiredPhotos() {
-    if (reqAnnounced || reqTotal === 0 || reqDone >= reqTotal) return
+    if (reqAnnounced || reqTotal === 0 || reqDone >= reqTotal) { askArrivalVideo(); return }
     setReqAnnounced(true)
     Alert.alert(
       `📸 ${t('required_photos_title')}`,
       ti(t('required_photos_on_start'), { n: String(reqTotal - reqDone) }),
-      [{ text: t('ok') }]
+      [{ text: t('ok'), onPress: () => { askArrivalVideo() } }]
     )
+  }
+
+  /**
+   * The company requires the arrival video, and it can't be redone honestly
+   * once the clean is under way: ask at the moment they start. Asked, never
+   * insisted on: Start has gone through, and Complete says so if it's still
+   * missing. Once per screen mount, like the photos above.
+   */
+  function askArrivalVideo() {
+    if (arrivalAsked.current || recordsForOthers || !videosOwed.includes('before')) return
+    arrivalAsked.current = true
+    Alert.alert(`🎥 ${t('walkthrough_arrival_title')}`, t('walkthrough_arrival_msg'), [
+      { text: t('walkthrough_not_now'), style: 'cancel' },
+      { text: t('walkthrough_record_arrival'), onPress: () => openWalkthrough('before') },
+    ])
+  }
+
+  function openWalkthrough(type: WalkthroughType | null) {
+    setWalkthroughFor(type)
+    setShowWalkthrough(true)
+  }
+
+  /** Complete stopped for these videos: say which, and open the recorder on the first. */
+  function alertVideosNeeded(types: WalkthroughType[]) {
+    const label = (x: WalkthroughType) => t(x === 'before' ? 'walkthrough_type_before' : 'walkthrough_type_after')
+    Alert.alert(`🎥 ${t('walkthrough_required_title')}`, ti(t('walkthrough_required_msg'), { list: types.map(label).join(', ') }), [
+      { text: t(types[0] === 'before' ? 'walkthrough_record_arrival' : 'walkthrough_record_finished'), onPress: () => openWalkthrough(types[0]) },
+      { text: t('cancel'), style: 'cancel' },
+    ])
   }
 
   // Daily mode: start the clean for status + photo proof only — no per-job
@@ -1401,7 +1444,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     // started, not waited for.
     setSaving(true)
     try {
-      const sending = Promise.all([flushQueue(), flushOutbox()])
+      const sending = Promise.all([flushQueue(), flushOutbox(), announceVideos()])
       if (answering) await Promise.race([sending, new Promise(resolve => setTimeout(resolve, 10_000))])
       else sending.catch(() => {})
     } catch { /* offline — handled below */ }
@@ -1478,6 +1521,23 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           Alert.alert(`📥 ${t('photo_pending_complete_title')}`, t('photo_pending_complete_msg'))
           return
         }
+      }
+    }
+    // Required walkthrough videos. With no answer from the gate: what the server
+    // says this clean owes, or last said with no signal, less what's on this
+    // phone (a Complete queued without them would be refused when it lands, with
+    // the crew long gone). The gate itself times out on some companies' data.
+    const videosLeft = !gateErr ? videosInBlockers(blockers)
+      : answering && videoEnabled && !isTask ? videosFromOwedRows((await cachedRead(videosOwedRead(job.id)).catch(() => ({ data: null }))).data)
+      : videosOwed
+    if (videosLeft.length > 0) {
+      const needed = videosStillOwed(videosLeft, await queuedJobVideos(job.id).catch(() => []))
+      if (needed.length > 0) { alertVideosNeeded(needed); return }
+      // Recorded here, and the server hasn't heard yet (with no answer from it,
+      // the Complete queues behind the record instead).
+      if (!gateErr) {
+        Alert.alert(`🎥 ${t('walkthrough_sending_title')}`, t('walkthrough_sending_msg'))
+        return
       }
     }
     // What still stops the Complete.
@@ -1804,6 +1864,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     })
     if (doneErr) {
       setSaving(false)
+      // The gate refused for a video this screen didn't know was owed.
+      const refusedVideos = videosInRefusal(doneErr.message)
+      if (refusedVideos.length > 0) { alertVideosNeeded(refusedVideos); return }
       Alert.alert(t('error'), doneErr.message)
       return
     }
@@ -1844,7 +1907,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     // its Start is the clock (lib/finishedClean).
     const firstIn = timeEntries[0]?.clocked_in_at || activeEntry?.clocked_in_at || (dailyMode ? jobStartAt : null)
     const defaultType = walkthroughDefault({ started: isStarted, startedAt: firstIn, now: Date.now() })
-    return <WalkthroughScreen job={job} user={user} defaultType={defaultType} onBack={() => setShowWalkthrough(false)} />
+    return <WalkthroughScreen job={job} user={user} defaultType={walkthroughFor ?? defaultType} owed={videosOwed}
+      onBack={() => { setShowWalkthrough(false); if (videoEnabled && !isTask) loadVideosOwed() }} />
   }
 
   return (
@@ -2152,9 +2216,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
               </TouchableOpacity>
             )}
             {!isTask && videoEnabled && !readOnly && (
-              <TouchableOpacity style={styles.actionChip} onPress={() => setShowWalkthrough(true)}>
+              <TouchableOpacity style={styles.actionChip} onPress={() => openWalkthrough(null)}>
                 <Text style={styles.actionChipIcon}>🎥</Text>
-                <Text style={styles.actionChipLabel} numberOfLines={1}>{t('walkthrough_chip')}</Text>
+                <Text style={styles.actionChipLabel} numberOfLines={1}>{t('walkthrough_chip')}{videosOwed.length > 0 ? ` (${videosOwed.length})` : ''}</Text>
               </TouchableOpacity>
             )}
             {/* Reference shots, with the count on the chip. The photo-requirement

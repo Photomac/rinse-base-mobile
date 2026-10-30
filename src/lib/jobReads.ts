@@ -82,6 +82,12 @@ export const tenantVideoRead = (tenantId: string): CacheRead => ({
     .select('video_walkthroughs_enabled').eq('id', tenantId).maybeSingle(),
 })
 
+/** What this clean still owes in walkthrough videos (lib/videosOwed). */
+export const videosOwedRead = (jobId: string): CacheRead => ({
+  key: `videosowed:${jobId}`,
+  q: () => supabase.rpc('job_videos_owed', { p_job_id: jobId }) as any,
+})
+
 /** The crew member's own route-ordered jobs on this job's day, for "Stop k of M".
  *  The day is the PHONE's calendar day, as the screen has always ranked it. */
 export function routeStopRead(job: any, user: any): CacheRead {
@@ -490,7 +496,7 @@ export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^
 const JOB_KEYS = new Set(['chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
   'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'wtcarry', 'cfticks', 'cfphotos', 'cfstart',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
-  'crewNoteAck'])
+  'crewNoteAck', 'videosowed'])
 const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'leadnotes', 'wttrash', 'cflines'])
 
 /** The job or property a cache key (without dataCache's prefix) belongs to,
@@ -527,7 +533,8 @@ export function jobPackReads(job: any, user: any): PackRead[] {
     ...(addrId ? [trashDaysRead(addrId), carriedLinesRead(job.id)] : []),
   ]
   const reads: PackRead[] = [
-    tenantVideoRead(user.tenant_id),
+    // A required video can stop Complete with no signal: what's owed goes in the pack.
+    { ...tenantVideoRead(user.tenant_id), then: row => (!isTask && row?.video_walkthroughs_enabled === true ? [videosOwedRead(job.id)] : []) },
     // loadChecklist / loadChecklistForAddress
     ...(addrId ? [checklistTemplateRead(addrId)] : []),
     { ...checklistRowsRead(job.id), then: rows => (!isTask && Array.isArray(rows) && isWalkthroughJob(rows) ? walkthrough() : []) },

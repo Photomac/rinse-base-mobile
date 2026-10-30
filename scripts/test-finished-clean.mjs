@@ -78,7 +78,7 @@ check('read-only is the shared rule, for this viewer and this clean',
 check('day shift hands the clean\'s Start to the recorder',
   /const firstIn = timeEntries\[0\]\?\.clocked_in_at \|\| activeEntry\?\.clocked_in_at \|\| \(dailyMode \? jobStartAt : null\)/.test(detail), true)
 check('the recorder starts on the shared default',
-  has(detail, 'walkthroughDefault({ started: isStarted, startedAt: firstIn, now: Date.now() })') && has(detail, 'defaultType={defaultType}'), true)
+  has(detail, 'walkthroughDefault({ started: isStarted, startedAt: firstIn, now: Date.now() })') && has(detail, 'defaultType={walkthroughFor ?? defaultType}'), true)
 check('no 15-minute rule of its own left on the screen', /15 \* 60_000/.test(detail), false)
 
 check('checklist answers and ticks are off',
