@@ -23,6 +23,7 @@ import { IncidentReportCard } from '../components/IncidentReportCard'
 import { uploadImageToJobPhotos } from '../lib/chatAttachments'
 import { InspectionResultCard } from '../components/InspectionResultCard'
 import { CarriedLinesCard } from '../components/CarriedLinesCard'
+import { PickupBagsCard } from '../components/PickupBagsCard'
 import { CrewNoteBanner, CrewNoteModal } from '../components/CrewNoteModal'
 import { CheckFirstCard, CheckFirstModal, type CheckFirstView } from '../components/CheckFirst'
 import { JobClock } from '../components/JobClock'
@@ -1884,6 +1885,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
         {/* What the last inspection here found and no inspection has cleared
             since: before and after Start (open cleans only; lib/carriedLines). */}
         {!isTask && !walkthroughJob && <CarriedLinesCard job={job} />}
+        {/* A laundry pickup lists the bags for its crew's cleans that day. */}
+        <PickupBagsCard job={job} />
         {/* The office's note for this clean, pinned on top. */}
         {!!crewNoteShown && (
           <CrewNoteBanner note={crewNoteShown} translated={tx(crewNoteShown)} atClockIn={!!crewNoteAtClockIn} confirmed={!crewNoteNeedsAck} />

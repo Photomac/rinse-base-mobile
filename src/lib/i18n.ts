@@ -181,6 +181,10 @@ export const translations = {
     wt_not_right_count: '⚠ {n} not right',
     wt_and: '&',
     // Lines missed at an earlier inspection, carried until one marks them OK (lib/carriedLines)
+    pickup_bags_title: "Bags for today's cleans",
+    pickup_packed: 'Packed',
+    pickup_not_packed: 'Not packed',
+    pickup_no_label: 'No bag label',
     carried_title: 'Missed at the last inspection',
     carried_hint: 'The inspector flagged these at this home. They show on every clean here until an inspection marks them OK.',
     carried_flagged: 'Flagged {date}',
@@ -1197,6 +1201,10 @@ export const translations = {
     wt_not_right_count: '⚠ {n} con problemas',
     wt_and: 'y',
     // Puntos que se pasaron en una inspección, hasta que otra los marque bien (lib/carriedLines)
+    pickup_bags_title: 'Bolsas para las limpiezas de hoy',
+    pickup_packed: 'Empacado',
+    pickup_not_packed: 'Sin empacar',
+    pickup_no_label: 'Sin etiqueta de bolsa',
     carried_title: 'Se pasó en la última inspección',
     carried_hint: 'El inspector marcó esto en esta casa. Sale en cada limpieza aquí hasta que una inspección lo marque como bien.',
     carried_flagged: 'Marcado el {date}',
@@ -2207,6 +2215,10 @@ export const translations = {
     wt_not_right_count: '⚠ {n} com problema',
     wt_and: 'e',
     // Itens que passaram numa vistoria, até outra marcar como certo (lib/carriedLines)
+    pickup_bags_title: 'Sacos para as limpezas de hoje',
+    pickup_packed: 'Embalado',
+    pickup_not_packed: 'Não embalado',
+    pickup_no_label: 'Sem etiqueta de saco',
     carried_title: 'Passou na última vistoria',
     carried_hint: 'O inspetor marcou isto nesta casa. Aparece em toda limpeza aqui até uma vistoria marcar como certo.',
     carried_flagged: 'Marcado em {date}',
