@@ -97,7 +97,7 @@ check('the walkthrough list, photos, stay rating and laundry bags are told',
 check('laundry on-site and pet toggles are off',
   [has(detail, 'onPress={toggleLaundryDoneOnsite} disabled={readOnly}'), has(detail, 'onPress={togglePetFee} disabled={readOnly}')], [true, true])
 check('no new incident, no notes box',
-  [has(detail, '{isStarted && (!isTask || isInspection) && !readOnly && <IncidentReportCard'), has(detail, '{isStarted && !readOnly && (\n          <View style={styles.card}>\n            <Text style={styles.sectionTitle}>{t(\'notes_optional\')}')], [true, true])
+  [has(detail, '{isStarted && (!isTask || isInspection) && !readOnly && <IncidentReportCard'), has(detail, '{isStarted && !readOnly && (\n          <View style={styles.card}>\n            <Text style={styles.sectionTitle}>{t(\'notes_for_office\')}')], [true, true])
 check('no Supplies or walkthrough chip',
   [has(detail, '{(!isTask || isInspection) && !readOnly && (\n              <TouchableOpacity style={styles.actionChip} onPress={() => setShowInventory(true)}>'),
    has(detail, '{!isTask && videoEnabled && !readOnly && (')], [true, true])
