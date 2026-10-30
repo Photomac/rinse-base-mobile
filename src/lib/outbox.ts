@@ -383,6 +383,15 @@ export function onCompletePastRefusedPhotos(fn: (e: CompletePastRefusedPhotos) =
   return () => { pastRefusedListeners.delete(fn) }
 }
 
+// Run before a queued Complete is sent: a walkthrough clip's record has to reach
+// the server first, or the gate refuses it (lib/videoQueue registers). A hook
+// because videoQueue already imports this file. Never holds the Complete back.
+const beforeQueuedComplete = new Set<() => Promise<void>>()
+export function onBeforeQueuedComplete(fn: () => Promise<void>): () => void {
+  beforeQueuedComplete.add(fn)
+  return () => { beforeQueuedComplete.delete(fn) }
+}
+
 let flushing = false
 // Cleans whose Complete the latest flush held for photos. When one of their
 // photos lands, the Complete goes now, not at the next trigger.
@@ -466,6 +475,7 @@ async function flushPass(): Promise<number> {
     if (!op) break
     const completes = completesClean(op)
     if (completes) {
+      await Promise.all([...beforeQueuedComplete].map(fn => fn().catch(() => {})))
       // A photo queue that can't be read holds nothing: the server decides.
       const photos = await photosAheadOfComplete(completes).catch(() => ({ waiting: 0, refused: 0, lastServerError: null }))
       if (photos.waiting > 0) { waitingOnPhotos.add(completes); continue }

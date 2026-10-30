@@ -84,7 +84,7 @@ const STOP_KEYS = (J: string) => [
   `chkrows:${J}`, `jobmeta:${J}`, `crew:${J}`, `crewclock:${J}`, `time:${J}:${U}`, `time:${J}:job`,
   `photos:${J}`, `pshot:${J}`, `signoffs:${J}`, `inv:log:${J}`, `inv:extras:${J}`, `nextarr:${J}`,
   `route:${J}:${U}`, `crewnote:${J}`, `crewnoteack:${J}:${U}`, `crewNoteAck:${J}:${U}`, `wtlines:${J}`, `wtphotos:${J}`, `wtcarry:${J}`,
-  `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`,
+  `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`, `videosowed:${J}`,
 ]
 const PROPERTY_KEYS = (A: string) => [
   `tmpl:${A}`, `rooms:${A}`, `addrmode:${A}`, `preq:${A}`, `propmeta:${A}`, `leadnotes:${A}`,
@@ -179,6 +179,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       linenExtrasRead: () => R.linenExtrasRead(J),
       openRestockRead: () => R.openRestockRead(A),
       supplyCountsTenantRead: () => R.supplyCountsTenantRead(T),
+      videosOwedRead: () => R.videosOwedRead(J),
       walkthroughLinesRead: () => R.walkthroughLinesRead(J),
       walkthroughPhotosRead: () => R.walkthroughPhotosRead(J),
       trashDaysRead: () => R.trashDaysRead(A),
