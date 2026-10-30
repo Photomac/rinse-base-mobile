@@ -60,5 +60,19 @@ check('…and no other write names the column', (screen.match(/needs_return_visi
 const i18n = read('src/lib/i18n.ts')
 check('English, Spanish and Portuguese', ['needs_return_visit:', 'needs_return_visit_hint:', 'needs_return_visit_ph:'].map(k => (i18n.match(new RegExp(`\\b${k} '`, 'g')) || []).length), [3, 3, 3])
 
+console.log('\nthe incident\'s photos on the visit')
+const { notesWithoutPhotoLinks, photoLinksInNotes, photoThumb } = await import(join(repo, 'src/lib/repairVisit.ts'))
+const noted = '🔧 RAIN FOREST · Repair driveway\nIncident: Fix run off\nIncident photos (2):\nhttps://x/1.jpg\nhttps://x/2.jpg\n— Added blocker rocks'
+check('the crew reads the notes without the links', notesWithoutPhotoLinks(noted), '🔧 RAIN FOREST · Repair driveway\nIncident: Fix run off\n— Added blocker rocks')
+check('the block gives the links back, not the note after it', photoLinksInNotes(noted), ['https://x/1.jpg', 'https://x/2.jpg'])
+check('a link the office typed stays in the notes', notesWithoutPhotoLinks('T\nhttps://x/map'), 'T\nhttps://x/map')
+check('…and is not a photo', photoLinksInNotes('T\nhttps://x/map'), [])
+check('no notes', [notesWithoutPhotoLinks(null), photoLinksInNotes(undefined)], ['', []])
+check('a storage photo gets the small copy', photoThumb('https://p.supabase.co/storage/v1/object/public/job-photos/a.jpg', 76), 'https://p.supabase.co/storage/v1/render/image/public/job-photos/a.jpg?width=228&height=228&resize=cover')
+check('any other link is left alone', photoThumb('https://x/1.jpg', 76), 'https://x/1.jpg')
+check('the screen hides the links from the note, and so from translation', /const jobNote = \(job\.job_type === 'task'\s*\? notesWithoutPhotoLinks\(job\.internal_notes\)/.test(screen), true)
+check('the screen shows the photos on a repair visit only', /\{isRepairVisit\(job\) && <RepairVisitPhotos reportId=\{job\.source_report_id\}/.test(screen), true)
+check('English, Spanish and Portuguese name them', (i18n.match(/\brepair_photos: '/g) || []).length, 3)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
