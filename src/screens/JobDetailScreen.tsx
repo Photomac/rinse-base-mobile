@@ -61,7 +61,8 @@ import {
   type CheckFirstLine, type CheckFirstTick,
 } from '../lib/checkFirst'
 import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
-import { isRepairVisit, returnVisitValues } from '../lib/repairVisit'
+import { isRepairVisit, returnVisitValues, notesWithoutPhotoLinks } from '../lib/repairVisit'
+import { RepairVisitPhotos } from '../components/RepairVisitPhotos'
 import { CLIENT_NOTE_MAX, clientNoteValues, takesClientNote } from '../lib/clientNote'
 import { canEditClean } from '../lib/officeEdit'
 import { finishedCleanReadOnly, walkthroughDefault } from '../lib/finishedClean'
@@ -432,7 +433,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // note; laundry runs and cleans use the whole field. Shown for ALL job
   // types — the owner uses it to tell crew things like which bags to take.
   const jobNote = (job.job_type === 'task'
-    ? String(job.internal_notes || '').split('\n').slice(1).join('\n')
+    ? notesWithoutPhotoLinks(job.internal_notes).split('\n').slice(1).join('\n')
     : String(job.internal_notes || '')).trim()
   // The office's note, and whether this person still owes a "Got it" for it.
   const crewNoteShown = crewNoteText(crewNote)
@@ -2082,6 +2083,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
               <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('laundry_bags_label')}</Text><Text style={styles.infoValue}>{tx(bagColor)}</Text></View>
             </View>
           )}
+          {isRepairVisit(job) && <RepairVisitPhotos reportId={job.source_report_id} notes={job.internal_notes} />}
           {!!jobNote && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📝</Text>
