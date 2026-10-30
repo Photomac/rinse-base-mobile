@@ -62,6 +62,7 @@ import {
 } from '../lib/checkFirst'
 import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
 import { isRepairVisit, returnVisitValues } from '../lib/repairVisit'
+import { CLIENT_NOTE_MAX, clientNoteValues, takesClientNote } from '../lib/clientNote'
 import { canEditClean } from '../lib/officeEdit'
 import { finishedCleanReadOnly, walkthroughDefault } from '../lib/finishedClean'
 import { CrewAnswerCard } from '../components/CrewAnswerCard'
@@ -195,6 +196,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // A repair visit's "I need to come back": sent with Complete as
   // jobs.needs_return_visit (lib/repairVisit.ts).
   const [needsReturn, setNeedsReturn] = useState(false)
+  // The note for the client: sent with Complete as jobs.guest_ready_note
+  // (lib/clientNote.ts).
+  const [clientNote, setClientNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [showPhotos, setShowPhotos] = useState(false)
   // true = plain open; { roomId } = opened from a room's Restock task, the
@@ -1639,6 +1643,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   async function completeHeldJob() {
     setSaving(true)
     const completedAt = new Date().toISOString()
+    // Before the hold: its last photo completes the clean on the server, maybe
+    // while this is still asking, and the guest-ready email reads the note then.
+    const noteFirst = clientNoteValues(clientNote, clientNoteSavedRef.current)
+    if ('guest_ready_note' in noteFirst) {
+      const { error } = await writeThrough({ table: 'jobs', op: 'update', match: { id: job.id }, values: noteFirst })
+      if (error) { setSaving(false); Alert.alert(t('error'), error.message); return }
+      clientNoteSavedRef.current = !!noteFirst.guest_ready_note
+    }
     if (!(await clockOutActive())) { setSaving(false); return }
     const held = await askToHold(true, completedAt)
     // Landed meanwhile: an ordinary Complete.
@@ -1705,6 +1717,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // completeHeldJob's hold was refused and it went back through completeJob to
   // name what's left: that pass must not try to hold again.
   const holdRefusedRef = useRef(false)
+  // completeHeldJob saved the client's note and the clean didn't complete: the
+  // box is what counts on the next tap, cleared too.
+  const clientNoteSavedRef = useRef(false)
   async function clockOutActive(): Promise<boolean> {
     clockOutQueuedRef.current = false
     if (!activeEntry) return true
@@ -1780,6 +1795,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
         // A repair visit whose tech has to come back: the same write, so the
         // visit is never done without it, offline included.
         ...returnVisitValues(job, needsReturn),
+        // The same write again: the guest-ready email reads the note from it.
+        ...clientNoteValues(clientNote, clientNoteSavedRef.current),
         // Sign-off attribution (distinct from per-item completed_by = last ticker).
         ...(user?.id ? { completed_by_user_id: user.id } : {}),
       },
@@ -2602,7 +2619,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             clean's box took typing and kept none of it. */}
         {isStarted && !readOnly && (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>{t('notes_optional')}</Text>
+            <Text style={styles.sectionTitle}>{t('notes_for_office')}</Text>
             <TextInput style={styles.notesInput} value={notes} onChangeText={setNotes} placeholder={t(needsReturn ? 'needs_return_visit_ph' : 'notes_placeholder')} placeholderTextColor="#9CA3AF" multiline numberOfLines={3} />
             {isRepairVisit(job) && job.status !== 'completed' && (
               <TouchableOpacity onPress={() => setNeedsReturn(v => !v)} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 12 }}
@@ -2616,6 +2633,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                 </View>
               </TouchableOpacity>
             )}
+          </View>
+        )}
+
+        {/* The note for the client: said on the card, since it goes out as
+            typed and the card above stays with the office. */}
+        {isStarted && !readOnly && takesClientNote(job) && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>{t('client_note_title')}</Text>
+            <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>{t('client_note_hint')}</Text>
+            <TextInput style={styles.notesInput} value={clientNote} onChangeText={setClientNote} placeholder={t('client_note_ph')} placeholderTextColor="#9CA3AF" multiline numberOfLines={3} maxLength={CLIENT_NOTE_MAX} />
           </View>
         )}
 
