@@ -1,6 +1,6 @@
 // A laundry pickup's bag list on the job screen: the homes its crew are cleaning
 // that day, each with its bag label and whether it's packed. The list comes from
-// pickup_bag_list (web migration 20261030170000), the same one the web job panel
+// pickup_bag_list (web migration 20261030133005), the same one the web job panel
 // reads, so the two can't disagree about the day. Catherine's ask (CKS): a pickup
 // only named the office, so the runner couldn't see which bags to take.
 //
