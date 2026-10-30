@@ -68,7 +68,7 @@ check('the day pack saves what\'s owed, only for a company with videos on', /the
 check('…and the prune knows whose it is', /'crewNoteAck', 'videosowed'\]/.test(reads))
 const web = process.env.RINSEBASE_WEB_REPO
 if (web) {
-  const mig = readFileSync(join(web, 'supabase/migrations/20261030180000_walkthrough_videos_required.sql'), 'utf8')
+  const mig = readFileSync(join(web, 'supabase/migrations/20261030133710_walkthrough_videos_required.sql'), 'utf8')
   check('the web migration raises these codes', mig.includes("'no_arrival_video'") && mig.includes("'no_finished_video'"))
   check('…and counts from the same 10 seconds', (mig.match(/duration_seconds >= 10/g) ?? []).length, 2)
 }
