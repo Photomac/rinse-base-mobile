@@ -15,10 +15,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as FileSystem from 'expo-file-system/legacy'
 import { supabase, usableAccessToken } from './supabase'
-import { uuid4 } from './outbox'
+import { uuid4, onBeforeQueuedComplete } from './outbox'
+import { reportClientError } from './errorReporter'
 import type { UploadErrorKind } from './photoQueue'
 
 const QUEUE_KEY = 'rinsebase.videoQueue.v1'
+// The clips the server has been told about. Its own key: a flush pass rewrites
+// the queue from the copy it read when it started, which would drop a flag kept there.
+const ANNOUNCED_KEY = 'rinsebase.videoQueue.announced.v1'
 const DIR = FileSystem.documentDirectory + 'pending_videos/'
 const SUPABASE_URL = 'https://cbnbhwclbtowfbjylnph.supabase.co'
 const BUCKET = 'job-videos'
@@ -119,7 +123,95 @@ export async function enqueueVideo(p: {
   const q = await readQueue()
   q.push(entry)
   await writeQueue(q)
+  announceVideos().catch(() => {})
 }
+
+// ── Telling the server a clip is on its way ─────────────────────────────────
+// A company can require these videos before a clean can complete (lib/
+// videosOwed). A 40 MB file on one bar can take hours, and the crew who recorded
+// must not wait for it: a row in job_videos_on_the_way, a few hundred bytes,
+// counts as the video it will be, for anyone on the clean. Sent when the clip is
+// saved and on every pass for any the server hasn't heard of, separately from
+// the upload. The landing job_videos row removes it on the server.
+//   - No signal: tried again on the next save or pass, and before a queued
+//     Complete is sent (it would be refused without this).
+//   - A server without the table (the app updated before the migration):
+//     not tried again until the app restarts. The videos upload as always.
+//   - Refused (the server said no): not tried again for that clip; its upload
+//     is unaffected, it just doesn't count until it lands. A clip for a clean
+//     you're not on (42501) is expected and not reported; any other is.
+let onTheWayUnknown = false
+let announcing: Promise<void> | null = null
+let announceAgain = false
+
+/** Tell the server about every queued clip it hasn't heard of. Never throws; a
+ *  call while one runs makes it go round once more. */
+export function announceVideos(): Promise<void> {
+  if (onTheWayUnknown) return Promise.resolve()
+  if (announcing) { announceAgain = true; return announcing }
+  announcing = (async () => {
+    do {
+      announceAgain = false
+      await announceOnce()
+    } while (announceAgain && !onTheWayUnknown)
+  })().catch(() => {}).finally(() => { announcing = null })
+  return announcing
+}
+
+type RecordAnswer = 'ok' | 'offline' | 'unknown' | 'refused'
+
+async function sendRecords(rows: Record<string, unknown>[]): Promise<{ answer: RecordAnswer; code?: string; message?: string }> {
+  try {
+    const { error, status } = await supabase.from('job_videos_on_the_way')
+      .upsert(rows, { onConflict: 'id', ignoreDuplicates: true })
+    if (!error) return { answer: 'ok' }
+    if (status === 0) return { answer: 'offline' }
+    if (error.code === 'PGRST205' || error.code === '42P01') return { answer: 'unknown' }
+    return { answer: 'refused', code: error.code, message: error.message }
+  } catch {
+    return { answer: 'offline' }
+  }
+}
+
+async function readAnnounced(): Promise<string[]> {
+  try { const raw = await AsyncStorage.getItem(ANNOUNCED_KEY); return raw ? JSON.parse(raw) : [] }
+  catch { return [] }
+}
+
+async function announceOnce(): Promise<void> {
+  const told = new Set(await readAnnounced())
+  const due = (await readQueue()).filter(v => !told.has(v.id))
+  if (!due.length) return
+  const row = (v: PendingVideo) => ({
+    id: v.id, tenant_id: v.tenant_id, job_id: v.job_id, user_id: v.user_id,
+    video_type: v.video_type, duration_seconds: v.duration_seconds, recorded_at: v.recorded_at,
+  })
+  const first = await sendRecords(due.map(row))
+  if (first.answer === 'offline') return
+  if (first.answer === 'unknown') { onTheWayUnknown = true; return }
+  if (first.answer === 'ok') due.forEach(v => told.add(v.id))
+  else {
+    // A batch refused whole goes again one row at a time, so one clip for a
+    // clean this person isn't on can't sink the rest.
+    const refused: string[] = []
+    for (const v of due) {
+      const one = due.length > 1 ? await sendRecords([row(v)]) : first
+      if (one.answer === 'offline') break
+      if (one.answer === 'unknown') { onTheWayUnknown = true; break }
+      if (one.answer === 'refused' && one.code !== '42501') refused.push(one.message ?? '?')
+      told.add(v.id)
+    }
+    if (refused.length) {
+      reportClientError(`videoQueue: the server refused ${refused.length} video record(s): ${refused[0]}`, undefined, 'videoQueue')
+    }
+  }
+  // Only clips still queued: the list can't grow past what's on the phone.
+  const queued = new Set((await readQueue()).map(v => v.id))
+  try { await AsyncStorage.setItem(ANNOUNCED_KEY, JSON.stringify([...told].filter(id => queued.has(id)))) } catch { /* sent again: harmless */ }
+}
+
+// A queued Complete is refused unless the server has heard of its clips first.
+onBeforeQueuedComplete(announceVideos)
 
 // A slow-but-alive link must be allowed to finish: budget 20 KB/s (one weak
 // bar), never less than the photo queue's 4 minutes, never more than 45.
@@ -218,6 +310,8 @@ let flushing = false
 /** Upload every pending video. Safe to call often; overlapping calls no-op.
  *  force skips the server-rejection backoff (the manual retry button). */
 export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ uploaded: number; remaining: number }> {
+  // Not waited for: a few hundred bytes, never behind a file.
+  announceVideos().catch(() => {})
   if (flushing) return { uploaded: 0, remaining: (await readQueue()).length }
   flushing = true
   try {

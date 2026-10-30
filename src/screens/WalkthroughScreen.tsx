@@ -19,6 +19,7 @@ import {
   enqueueVideo, flushVideoQueue, queuedJobVideos, QueuedJobVideo, WalkthroughType,
   WALKTHROUGH_MAX_SECONDS, WALKTHROUGH_MAX_BYTES, WALKTHROUGH_BITRATE,
 } from '../lib/videoQueue'
+import { WALKTHROUGH_MIN_SECONDS } from '../lib/videosOwed'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -40,6 +41,8 @@ interface Props {
   user: any
   /** Arrival when the clean hasn't started (or just has), finished otherwise. */
   defaultType: WalkthroughType
+  /** The videos the company still needs for this clean: a clip too short for one says so. */
+  owed?: WalkthroughType[]
   onBack: () => void
 }
 
@@ -52,7 +55,7 @@ interface Row {
   lastError?: string | null
 }
 
-export function WalkthroughScreen({ job, user, defaultType, onBack }: Props) {
+export function WalkthroughScreen({ job, user, defaultType, owed = [], onBack }: Props) {
   const { t } = useLang()
   const cameraRef = useRef<CameraView>(null)
   const [perm, setPerm] = useState<'checking' | 'granted' | 'denied'>('checking')
@@ -280,6 +283,9 @@ export function WalkthroughScreen({ job, user, defaultType, onBack }: Props) {
           <View style={styles.reviewOverlay}>
             <Text style={styles.reviewTitle}>{ti(t('walkthrough_recorded'), { time: fmtClock(recorded.duration) })}</Text>
             <Text style={styles.reviewSub}>{typeLabel(videoType)}</Text>
+            {owed.includes(videoType) && recorded.duration < WALKTHROUGH_MIN_SECONDS && (
+              <Text style={styles.reviewWarn}>{t('walkthrough_too_short')}</Text>
+            )}
             <View style={styles.reviewBtns}>
               <TouchableOpacity style={styles.secondaryBtn} onPress={retake} disabled={saving}>
                 <Text style={styles.secondaryBtnText}>{t('walkthrough_retake')}</Text>
@@ -365,6 +371,7 @@ const styles = StyleSheet.create({
   reviewOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, top: 0, backgroundColor: 'rgba(15,23,42,0.92)', alignItems: 'center', justifyContent: 'center', padding: 24 },
   reviewTitle: { color: '#fff', fontSize: 20, fontWeight: '800' },
   reviewSub: { color: 'rgba(255,255,255,0.7)', fontSize: 13, marginTop: 4, marginBottom: 20 },
+  reviewWarn: { color: '#FCD34D', fontSize: 13, fontWeight: '700', textAlign: 'center', marginTop: -8, marginBottom: 16, paddingHorizontal: 16 },
   reviewBtns: { flexDirection: 'row', gap: 10, alignSelf: 'stretch' },
   primaryBtn: { backgroundColor: GOLD, paddingVertical: 13, paddingHorizontal: 18, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   primaryBtnText: { color: NAVY, fontSize: 15, fontWeight: '800' },

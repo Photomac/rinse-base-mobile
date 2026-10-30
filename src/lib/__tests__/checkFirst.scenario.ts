@@ -138,7 +138,7 @@ ok('Complete: the phone checks first, before asking the gate (offline the gate c
   complete.indexOf('localBlockers(cf.required,') > 0 && complete.indexOf('localBlockers(cf.required,') < rpcAt)
 ok('…from a fresh load (the copy on screen if it\'s slow), and a load that fails blocks nothing',
   complete.includes('loadCheckFirst().catch(() => null),') && complete.includes('setTimeout(() => resolve(checkFirst), 8_000)') && complete.includes('if (cf) {'))
-ok('…writes queued offline are sent before the gate is asked', complete.includes('Promise.all([flushQueue(), flushOutbox()])') && complete.indexOf('flushOutbox()') < rpcAt)
+ok('…writes queued offline are sent before the gate is asked', complete.includes('Promise.all([flushQueue(), flushOutbox(), announceVideos()])') && complete.indexOf('flushOutbox()') < rpcAt)
 ok('the gate\'s two codes get their own message, before the catch-all',
   complete.indexOf("b.code === 'check_first_unticked' || b.code === 'check_first_photo_missing'") > rpcAt &&
   complete.indexOf("b.code === 'check_first_unticked' || b.code === 'check_first_photo_missing'") < complete.indexOf("t('completion_blocked_generic')"))
