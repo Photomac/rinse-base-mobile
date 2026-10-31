@@ -813,6 +813,7 @@ export const translations = {
     walkthrough_arrival_title: 'Record the arrival video',
     walkthrough_arrival_msg: 'Your company needs a video of the property as you found it. Record it before you start cleaning.',
     walkthrough_not_now: 'Not now',
+    walkthrough_arrival_late: "This clean has no arrival video yet. Record Arrival only if the property is still as you found it. If you've already cleaned, switch to Finished.",
     walkthrough_too_short: 'Too short: a clip has to run at least 10 seconds to count as the required video.',
     walkthrough_discard: 'Discard',
     // Team today — the office's clock roster (screens/TeamTodayScreen)
@@ -1837,6 +1838,7 @@ export const translations = {
     walkthrough_arrival_title: 'Graba el video de llegada',
     walkthrough_arrival_msg: 'Tu empresa necesita un video de la propiedad tal como la encontraste. Grábalo antes de empezar a limpiar.',
     walkthrough_not_now: 'Ahora no',
+    walkthrough_arrival_late: 'Esta limpieza aún no tiene video de llegada. Graba Llegada solo si la propiedad sigue como la encontraste. Si ya limpiaste, cambia a Terminado.',
     walkthrough_too_short: 'Muy corto: el video tiene que durar al menos 10 segundos para contar como el video requerido.',
     walkthrough_discard: 'Descartar',
     // Equipo hoy — la lista de entradas de la oficina (screens/TeamTodayScreen)
@@ -2861,6 +2863,7 @@ export const translations = {
     walkthrough_arrival_title: 'Grave o vídeo de chegada',
     walkthrough_arrival_msg: 'Sua empresa precisa de um vídeo do imóvel como você o encontrou. Grave antes de começar a limpar.',
     walkthrough_not_now: 'Agora não',
+    walkthrough_arrival_late: 'Esta limpeza ainda não tem vídeo de chegada. Grave Chegada só se o imóvel ainda estiver como você encontrou. Se já limpou, mude para Concluído.',
     walkthrough_too_short: 'Muito curto: o vídeo precisa ter pelo menos 10 segundos para contar como o vídeo exigido.',
     walkthrough_discard: 'Descartar',
     // Equipe hoje — a lista de ponto do escritório (screens/TeamTodayScreen)

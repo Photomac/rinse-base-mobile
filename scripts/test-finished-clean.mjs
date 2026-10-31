@@ -66,6 +66,17 @@ check('a phone clock a little behind the start is still Arrival', def(true, star
 check('started, no time known: Guest ready, as before', [def(true, null, 0), def(true, undefined, 0), def(true, '', 0), def(true, 'not a time', 0)], ['after', 'after', 'after', 'after'])
 check('the window is 15 minutes', F.ARRIVAL_WINDOW_MS, 15 * 60_000)
 
+// What the clean has decides, once the recorder knows (CKS, 2026-10-30).
+const known = (hasArrival, min, extra = {}) => F.walkthroughDefault({ started: true, startedAt: start, now: at(min), hasArrival, ...extra })
+check('no arrival video: Arrival, however late', [0, 14, 15, 45, 240].map(m => known(false, m)), ['before', 'before', 'before', 'before', 'before'])
+check('has its arrival video: Guest ready, even inside the 15 minutes', [0, 14, 15, 240].map(m => known(true, m)), ['after', 'after', 'after', 'after'])
+check('unknown is the clock', [known(null, 5), known(null, 45), known(undefined, 5), known(undefined, 45)], ['before', 'after', 'before', 'after'])
+check('completed with none: Guest ready, an arrival video is no longer possible', known(false, 240, { completed: true }), 'after')
+check('not started stays Arrival whatever the clean has', [true, false, null].map(h => F.walkthroughDefault({ started: false, startedAt: null, now: at(0), hasArrival: h })), ['before', 'before', 'before'])
+const late = (started, startedAt, min) => F.arrivalIsLate({ started, startedAt, now: at(min) })
+check('late from 15 minutes on', [0, 14.99, 15, 240].map(m => late(true, start, m)), [false, false, true, true])
+check('not started is never late; started with no time known is', [late(false, null, 90), late(true, null, 0)], [false, true])
+
 // ── the screens ─────────────────────────────────────────────────────────────
 const detail = readFileSync(join(repo, 'src/screens/JobDetailScreen.tsx'), 'utf8')
 const photos = readFileSync(join(repo, 'src/screens/JobPhotosScreen.tsx'), 'utf8')
@@ -80,6 +91,16 @@ check('day shift hands the clean\'s Start to the recorder',
 check('the recorder starts on the shared default',
   has(detail, 'walkthroughDefault({ started: isStarted, startedAt: firstIn, now: Date.now() })') && has(detail, 'defaultType={walkthroughFor ?? defaultType}'), true)
 check('no 15-minute rule of its own left on the screen', /15 \* 60_000/.test(detail), false)
+const recorder = readFileSync(join(repo, 'src/screens/WalkthroughScreen.tsx'), 'utf8')
+check('a video the app asked for by name stays on it',
+  [has(detail, 'asked={walkthroughFor != null}'), has(recorder, 'const typeSettled = useRef(asked)')], [true, true])
+check('the recorder asks the shared default what the clean has, once',
+  has(recorder, 'if (arrival !== null && !typeSettled.current) {\n      typeSettled.current = true\n      setVideoType(walkthroughDefault({ started, startedAt: cleanStartedAt, now: Date.now(), hasArrival: arrival, completed: job.status === \'completed\' }))'), true)
+check('choosing or recording keeps the crew\'s choice',
+  [has(recorder, 'onPress={() => { typeSettled.current = true; setVideoType(tp) }}'), has(recorder, 'typeSettled.current = true\n    setJustSaved(false)')], [true, true])
+check('landed, announced and on this phone all count; a failed read is unknown',
+  has(recorder, "arrivalOnClean([serverRes.error ? null : ((serverRes.data as any[]) ?? []), announcedRes.error ? null : ((announcedRes.data as any[]) ?? []), queued])"), true)
+check('the late note has all three languages', (i18n.match(/walkthrough_arrival_late:/g) ?? []).length, 3)
 
 check('checklist answers and ticks are off',
   [has(detail, '<TouchableOpacity key={v} disabled={readOnly}'), has(detail, '<TouchableOpacity disabled={readOnly} onPress={() => {\n                                    const newVal = !checked[item.id]')], [true, true])
