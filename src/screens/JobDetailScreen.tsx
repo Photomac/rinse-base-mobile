@@ -1903,12 +1903,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   )
   if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} requiredOutstanding={Math.max(0, reqTotal - reqDone)} readOnly={readOnly} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
   if (showWalkthrough) {
-    // Arrival until the clean is ~15 minutes in, finished after that. The crew
-    // can switch it on the recorder. Day shift has no punch on the clean, so
-    // its Start is the clock (lib/finishedClean).
+    // Arrival until the clean is ~15 minutes in, finished after that, until the
+    // recorder reads whether the clean has its arrival video. The crew can switch
+    // it there. Day shift has no punch on the clean, so its Start is the clock
+    // (lib/finishedClean).
     const firstIn = timeEntries[0]?.clocked_in_at || activeEntry?.clocked_in_at || (dailyMode ? jobStartAt : null)
     const defaultType = walkthroughDefault({ started: isStarted, startedAt: firstIn, now: Date.now() })
-    return <WalkthroughScreen job={job} user={user} defaultType={walkthroughFor ?? defaultType} owed={videosOwed}
+    return <WalkthroughScreen job={job} user={user} defaultType={walkthroughFor ?? defaultType} asked={walkthroughFor != null}
+      started={isStarted} startedAt={firstIn} owed={videosOwed}
       onBack={() => { setShowWalkthrough(false); if (videoEnabled && !isTask) loadVideosOwed() }} />
   }
 
