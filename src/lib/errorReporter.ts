@@ -18,11 +18,13 @@ const seen = new Map<string, number>()
 let sent = 0
 const MAX_PER_SESSION = 25
 
-export function reportClientError(message?: string, stack?: string, source = 'app') {
+// keepKnownNoise: a failure a caller caught and means to report, whose reason
+// may be one of the IGNORE texts. The global handler never passes it.
+export function reportClientError(message?: string, stack?: string, source = 'app', opts?: { keepKnownNoise?: boolean }) {
   try {
     const msg = (message || '').trim()
     if (!msg) return
-    if (IGNORE.some((re) => re.test(msg))) return
+    if (!opts?.keepKnownNoise && IGNORE.some((re) => re.test(msg))) return
     if (sent >= MAX_PER_SESSION) return
     const key = `${source}|${msg.slice(0, 140)}`
     const now = Date.now()

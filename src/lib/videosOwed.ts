@@ -41,3 +41,16 @@ export function videosFromOwedRows(rows: unknown): WalkthroughType[] {
 export function videosStillOwed(owed: WalkthroughType[], onPhone: { video_type: WalkthroughType; duration_seconds: number }[]): WalkthroughType[] {
   return owed.filter(t => !onPhone.some(v => v.video_type === t && v.duration_seconds >= WALKTHROUGH_MIN_SECONDS))
 }
+
+type Clip = { video_type: string | null; duration_seconds: number | null }
+
+/**
+ * Does the clean have an arrival video, by the server's rule (10 seconds or more)?
+ * Landed, announced by a phone, or still on this one. Each list is null when it
+ * couldn't be read: one that has it is still an answer, otherwise null is "unknown".
+ */
+export function arrivalOnClean(lists: (Clip[] | null)[]): boolean | null {
+  const counts = (v: Clip) => v.video_type === 'before' && (v.duration_seconds ?? 0) >= WALKTHROUGH_MIN_SECONDS
+  if (lists.some(l => l?.some(counts))) return true
+  return lists.some(l => l === null) ? null : false
+}
