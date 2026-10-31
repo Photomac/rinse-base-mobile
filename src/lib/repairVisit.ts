@@ -22,6 +22,20 @@ export function returnVisitValues(job: any, ticked: boolean): { needs_return_vis
   return ticked && isRepairVisit(job) ? { needs_return_visit: true } : {}
 }
 
+// "Send for review" (rinse-base-app migration 20261031150000_repair_review_quote):
+// a look-and-quote visit starts its notes with 🔍, so the job screen knows it
+// offline too and doesn't offer "I need to come back". Its price and note go
+// through RepairQuoteCard. A copy lives in the web app (incidentRepair.ts).
+export const isLookAndQuoteNotes = (notes: string | null | undefined) => /^🔍/.test(String(notes || '').trimStart())
+
+/** A typed price: a number with at most two decimals, or null. */
+export function parseQuoteAmount(raw: string): number | null {
+  const t = String(raw || '').replace(/[$€£,\s]/g, '')
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) return null
+  const n = Number(t)
+  return Number.isFinite(n) && n < 10000000 ? n : null
+}
+
 // The block the web's repairVisitNotes writes into the visit's notes: this
 // header, then one link per line. A copy lives there (incidentRepair.ts):
 // change both.

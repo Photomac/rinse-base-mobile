@@ -51,7 +51,7 @@ check('the Schedule read carries it', /\.select\('[^']*\binternal_notes, source_
 check('Needs closing carries it', /\.select\('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, source_report_id,/.test(dash), true)
 const screen = read('src/screens/JobDetailScreen.tsx')
 check('the tick: on a repair visit not yet completed, in the Notes card',
-  /<TextInput style=\{styles\.notesInput\}[^\n]*\n\s*\{isRepairVisit\(job\) && job\.status !== 'completed' && \(/.test(screen), true)
+  /<TextInput style=\{styles\.notesInput\}[^\n]*\n\s*\{isRepairVisit\(job\) && job\.status !== 'completed' && !isLookAndQuoteNotes\(job\.internal_notes\) && \(/.test(screen), true)
 check('the tick says so to screen readers', screen.includes('accessibilityRole="checkbox" accessibilityState={{ checked: needsReturn }}'), true)
 const done = screen.slice(screen.indexOf('async function completeJobNoPhotoCheck'), screen.indexOf('const completedCount ='))
 check('Complete: the flag rides the one writeThrough that completes the visit',
@@ -73,6 +73,19 @@ check('any other link is left alone', photoThumb('https://x/1.jpg', 76), 'https:
 check('the screen hides the links from the note, and so from translation', /const jobNote = \(job\.job_type === 'task'\s*\? notesWithoutPhotoLinks\(job\.internal_notes\)/.test(screen), true)
 check('the screen shows the photos on a repair visit only', /\{isRepairVisit\(job\) && <RepairVisitPhotos reportId=\{job\.source_report_id\}/.test(screen), true)
 check('English, Spanish and Portuguese name them', (i18n.match(/\brepair_photos: '/g) || []).length, 3)
+
+// Send for review: a look-and-quote visit's price, note and empty days.
+const { isLookAndQuoteNotes, parseQuoteAmount } = await import(join(repo, 'src/lib/repairVisit.ts'))
+const card = read('src/components/RepairQuoteCard.tsx')
+check('a look and quote is told from its notes, offline too', [isLookAndQuoteNotes('🔍 RF · Look and quote: x\nmore'), isLookAndQuoteNotes('🔧 RF: x'), isLookAndQuoteNotes(null)], [true, false, false])
+check('a typed price', ['450', '$1,450.50', ' 12.5 ', '0'].map(parseQuoteAmount), [450, 1450.5, 12.5, 0])
+check('not a price', ['', 'abc', '-5', '1.234'].map(parseQuoteAmount), [null, null, null, null])
+check('the screen shows the quote card on a repair visit only', /\{isRepairVisit\(job\) && <RepairQuoteCard visitId=\{job\.id\}/.test(screen), true)
+check('the card shows nothing unless the visit has a review', card.includes("if (!review) return null"), true)
+check('the quote and the move go through their functions, never a table write', [/submit_repair_quote/.test(card), /move_repair_review_visit/.test(card), /repair_review_days/.test(card), /\.(update|insert|upsert|delete)\(/.test(card)], [true, true, true, false])
+check('moving is offered only before the visit starts', card.includes("status === 'scheduled' && !!addressId"), true)
+check('a moved visit updates the screen', /onMoved=\{start =>[\s\S]{0,300}onJobEdited\?\.\(patch\)/.test(screen), true)
+check('English, Spanish and Portuguese have the card', (i18n.match(/\bquote_title: '/g) || []).length, 3)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
