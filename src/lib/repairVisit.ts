@@ -30,7 +30,8 @@ export const isLookAndQuoteNotes = (notes: string | null | undefined) => /^🔍/
 
 /** A typed price: a number with at most two decimals, or null. */
 export function parseQuoteAmount(raw: string): number | null {
-  const t = String(raw || '').replace(/[$€£,\s]/g, '')
+  // Drops a typed currency symbol, thousands commas and spaces; a minus or letters stay, and fail below.
+  const t = String(raw || '').replace(/[^\d.a-zA-Z-]/g, '')
   if (!/^\d+(\.\d{1,2})?$/.test(t)) return null
   const n = Number(t)
   return Number.isFinite(n) && n < 10000000 ? n : null
