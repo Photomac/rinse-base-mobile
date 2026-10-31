@@ -64,8 +64,9 @@ import {
   type CheckFirstLine, type CheckFirstTick,
 } from '../lib/checkFirst'
 import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
-import { isRepairVisit, returnVisitValues, notesWithoutPhotoLinks } from '../lib/repairVisit'
+import { isRepairVisit, returnVisitValues, notesWithoutPhotoLinks, isLookAndQuoteNotes } from '../lib/repairVisit'
 import { RepairVisitPhotos } from '../components/RepairVisitPhotos'
+import { RepairQuoteCard } from '../components/RepairQuoteCard'
 import { CLIENT_NOTE_MAX, clientNoteValues, takesClientNote } from '../lib/clientNote'
 import { canEditClean } from '../lib/officeEdit'
 import { finishedCleanReadOnly, walkthroughDefault } from '../lib/finishedClean'
@@ -2151,6 +2152,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             </View>
           )}
           {isRepairVisit(job) && <RepairVisitPhotos reportId={job.source_report_id} notes={job.internal_notes} />}
+          {isRepairVisit(job) && <RepairQuoteCard visitId={job.id} addressId={job.client_addresses?.id || job.address_id} status={job.status}
+            onMoved={start => {
+              const length = new Date(job.scheduled_end).getTime() - new Date(job.scheduled_start).getTime()
+              const patch: EditedPatch = { scheduled_start: start, scheduled_end: new Date(new Date(start).getTime() + length).toISOString() }
+              onJobEdited?.(patch)
+              details.load({ ...job, ...patch }).catch(() => {})
+            }} />}
           {!!jobNote && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>📝</Text>
@@ -2690,7 +2698,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>{t('notes_for_office')}</Text>
             <TextInput style={styles.notesInput} value={notes} onChangeText={setNotes} placeholder={t(needsReturn ? 'needs_return_visit_ph' : 'notes_placeholder')} placeholderTextColor="#9CA3AF" multiline numberOfLines={3} />
-            {isRepairVisit(job) && job.status !== 'completed' && (
+            {isRepairVisit(job) && job.status !== 'completed' && !isLookAndQuoteNotes(job.internal_notes) && (
               <TouchableOpacity onPress={() => setNeedsReturn(v => !v)} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 12 }}
                 accessibilityRole="checkbox" accessibilityState={{ checked: needsReturn }}>
                 <View style={[styles.checkbox, needsReturn && { backgroundColor: '#D97706', borderColor: '#D97706' }]}>
