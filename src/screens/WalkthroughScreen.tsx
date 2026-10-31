@@ -19,7 +19,8 @@ import {
   enqueueVideo, flushVideoQueue, queuedJobVideos, QueuedJobVideo, WalkthroughType,
   WALKTHROUGH_MAX_SECONDS, WALKTHROUGH_MAX_BYTES, WALKTHROUGH_BITRATE,
 } from '../lib/videoQueue'
-import { WALKTHROUGH_MIN_SECONDS } from '../lib/videosOwed'
+import { WALKTHROUGH_MIN_SECONDS, arrivalOnClean } from '../lib/videosOwed'
+import { arrivalIsLate, walkthroughDefault } from '../lib/finishedClean'
 import { useLang } from '../contexts/LangContext'
 import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -41,6 +42,10 @@ interface Props {
   user: any
   /** Arrival when the clean hasn't started (or just has), finished otherwise. */
   defaultType: WalkthroughType
+  /** The app asked for this video by name (a required video), so keep to it. */
+  asked?: boolean
+  started?: boolean
+  startedAt?: string | null
   /** The videos the company still needs for this clean: a clip too short for one says so. */
   owed?: WalkthroughType[]
   onBack: () => void
@@ -57,7 +62,7 @@ interface Row {
 
 const rowTrouble = (r: Row) => r.state === 'failing' || r.state === 'stuck' || r.state === 'gone'
 
-export function WalkthroughScreen({ job, user, defaultType, owed = [], onBack }: Props) {
+export function WalkthroughScreen({ job, user, defaultType, asked = false, started = false, startedAt: cleanStartedAt = null, owed = [], onBack }: Props) {
   const { t } = useLang()
   const cameraRef = useRef<CameraView>(null)
   const [perm, setPerm] = useState<'checking' | 'granted' | 'denied'>('checking')
@@ -67,6 +72,10 @@ export function WalkthroughScreen({ job, user, defaultType, owed = [], onBack }:
   const [mode, setMode] = useState<'picture' | 'video'>('picture')
   const [videoReady, setVideoReady] = useState(false)
   const [videoType, setVideoType] = useState<WalkthroughType>(defaultType)
+  // defaultType is the clock's guess, until the list says what the clean has.
+  // Once the crew choose or start recording, it stays theirs.
+  const typeSettled = useRef(asked)
+  const [hasArrival, setHasArrival] = useState<boolean | null>(null)
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const startedAt = useRef(0)
@@ -85,12 +94,21 @@ export function WalkthroughScreen({ job, user, defaultType, owed = [], onBack }:
   }, [])
 
   const loadList = useCallback(async () => {
-    const [serverRes, queued] = await Promise.all([
+    const [serverRes, announcedRes, queued] = await Promise.all([
       supabase.from('job_videos')
         .select('id, video_type, duration_seconds, size_bytes, created_at')
         .eq('job_id', job.id).order('created_at', { ascending: false }),
+      supabase.from('job_videos_on_the_way')
+        .select('video_type, duration_seconds')
+        .eq('job_id', job.id),
       queuedJobVideos(job.id).catch((): QueuedJobVideo[] => []),
     ])
+    const arrival = arrivalOnClean([serverRes.error ? null : ((serverRes.data as any[]) ?? []), announcedRes.error ? null : ((announcedRes.data as any[]) ?? []), queued])
+    setHasArrival(arrival)
+    if (arrival !== null && !typeSettled.current) {
+      typeSettled.current = true
+      setVideoType(walkthroughDefault({ started, startedAt: cleanStartedAt, now: Date.now(), hasArrival: arrival, completed: job.status === 'completed' }))
+    }
     const server = ((serverRes.data as any[]) ?? [])
     const serverIds = new Set(server.map(r => r.id))
     // A queued entry whose row already landed (response lost) shows once, as uploaded.
@@ -105,7 +123,7 @@ export function WalkthroughScreen({ job, user, defaultType, owed = [], onBack }:
       key: r.id, video_type: r.video_type, duration_seconds: r.duration_seconds, size_bytes: r.size_bytes, state: 'uploaded',
     }))
     setRows([...onDevice, ...uploaded])
-  }, [job.id])
+  }, [job.id, job.status, started, cleanStartedAt])
 
   useEffect(() => {
     loadList().catch(() => {})
@@ -144,6 +162,7 @@ export function WalkthroughScreen({ job, user, defaultType, owed = [], onBack }:
 
   async function startRecording() {
     if (!cameraRef.current || !videoReady || recording) return
+    typeSettled.current = true
     setJustSaved(false)
     startedAt.current = Date.now()
     setElapsed(0)
@@ -253,12 +272,17 @@ export function WalkthroughScreen({ job, user, defaultType, owed = [], onBack }:
 
       <View style={styles.typeRow}>
         {(['before', 'after'] as const).map(tp => (
-          <TouchableOpacity key={tp} disabled={recording || !!recorded} onPress={() => setVideoType(tp)}
+          <TouchableOpacity key={tp} disabled={recording || !!recorded} onPress={() => { typeSettled.current = true; setVideoType(tp) }}
             style={[styles.typeBtn, videoType === tp && styles.typeBtnOn, (recording || !!recorded) && videoType !== tp && { opacity: 0.4 }]}>
             <Text style={[styles.typeBtnText, videoType === tp && styles.typeBtnTextOn]} numberOfLines={1}>{typeLabel(tp)}</Text>
           </TouchableOpacity>
         ))}
       </View>
+
+      {videoType === 'before' && hasArrival === false && job.status !== 'completed' && !recording && !recorded
+        && arrivalIsLate({ started, startedAt: cleanStartedAt, now: Date.now() }) && (
+        <Text style={styles.lateNote}>{t('walkthrough_arrival_late')}</Text>
+      )}
 
       <View style={styles.cameraWrap}>
         <CameraView
@@ -359,6 +383,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28, gap: 16 },
   permText: { fontSize: 15, color: '#374151', textAlign: 'center', lineHeight: 21 },
   typeRow: { flexDirection: 'row', gap: 8, padding: 10, backgroundColor: NAVY },
+  lateNote: { color: '#FCD34D', fontSize: 13, fontWeight: '700', paddingHorizontal: 12, paddingBottom: 10, backgroundColor: NAVY },
   typeBtn: { flex: 1, paddingVertical: 9, paddingHorizontal: 8, borderRadius: 20, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)', alignItems: 'center' },
   typeBtnOn: { backgroundColor: GOLD, borderColor: GOLD },
   typeBtnText: { fontSize: 12.5, fontWeight: '700', color: 'rgba(255,255,255,0.8)' },
