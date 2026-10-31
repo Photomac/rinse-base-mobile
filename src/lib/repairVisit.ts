@@ -22,7 +22,7 @@ export function returnVisitValues(job: any, ticked: boolean): { needs_return_vis
   return ticked && isRepairVisit(job) ? { needs_return_visit: true } : {}
 }
 
-// "Send for review" (rinse-base-app migration 20261031150000_repair_review_quote):
+// "Send for review" (rinse-base-app migration 20261031140206_repair_review_quote):
 // a look-and-quote visit starts its notes with 🔍, so the job screen knows it
 // offline too and doesn't offer "I need to come back". Its price and note go
 // through RepairQuoteCard. A copy lives in the web app (incidentRepair.ts).
