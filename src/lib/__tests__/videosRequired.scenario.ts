@@ -22,9 +22,17 @@ const recordFor = (job: string) => records().flatMap(a => a.values).filter((r: a
 let release: () => void = () => {}
 const holdUploads = () => { video.hold = new Promise<void>(r => { release = r }) }
 
-;(globalThis as any).fetch = async (url: string) => {
+;(globalThis as any).FormData = class { parts: any = {}; append(k: string, v: any) { this.parts[k] = v } }
+;(globalThis as any).fetch = async (url: string, init: any) => {
+  if (url.includes('/auth/v1/health')) {
+    if (!net.online) throw new TypeError('Network request failed')
+    return { ok: true, status: 200, text: async () => '' }
+  }
   video.uploads.push(url)
   if (video.hold) await video.hold
+  if ([...video.failUploads].some(id => url.includes(id))) throw new TypeError('Network request failed')
+  // A path from before iOS moved the app's folder: RN can't read the file.
+  if (!String(init?.body?.parts?.file?.uri).startsWith('file:///doc/')) throw new TypeError('Network request failed')
   return { ok: true, status: 200, text: async () => '' }
 }
 
@@ -129,6 +137,99 @@ const holdUploads = () => { video.hold = new Promise<void>(r => { release = r })
   ok('no table on the server: asked once, not again', video.requests.length === asked)
   await flushVideoQueue()
   ok('…the videos upload as always', (await queuedJobVideos('V7')).length === 0 && (await queuedJobVideos('V8')).length === 0)
+
+  // ── One clip can't hold up the rest (CKS, Anya, 10/23 to 10/30) ──────────
+  video.noTable = false
+  const idOf = async (job: string) => (await queuedJobVideos(job))[0].id
+  const left = async (job: string) => (await queuedJobVideos(job)).length
+  net.online = false
+  await save('B1', 'after', 83)
+  await save('B2', 'before', 6)
+  await save('B3', 'after', 8)
+  await settle()
+  net.online = true
+  const stuckClip = await idOf('B1')
+  video.failUploads.add(stuckClip)
+  await flushVideoQueue()
+  ok('a clip that fails with the server answering: the clips behind it still go', (await left('B2')) === 0 && (await left('B3')) === 0)
+  ok('…and it stays queued, still only "waiting"', (await left('B1')) === 1 && !(await queuedJobVideos('B1'))[0].stuck)
+  const reportedBeforeStuck = reported.length
+  await flushVideoQueue()
+  ok('…no report at two tries', reported.length === reportedBeforeStuck)
+  await flushVideoQueue()
+  ok('…three tries: the crew are told', (await queuedJobVideos('B1'))[0].stuck === true && !(await queuedJobVideos('B1'))[0].failing)
+  ok('…the reason reaches the error log, naming the clip', reported.length === reportedBeforeStuck + 1 && reported[reported.length - 1].includes(stuckClip) && /Network request failed/.test(reported[reported.length - 1]))
+  await flushVideoQueue({ force: true })
+  ok('…reported once', reported.length === reportedBeforeStuck + 1)
+  const uploadsBeforeWait = video.uploads.length
+  await flushVideoQueue()
+  ok('…it waits between tries now', video.uploads.length === uploadsBeforeWait)
+  net.online = false
+  await save('B4', 'after', 20)
+  await settle()
+  net.online = true
+  await flushVideoQueue()
+  ok('…and a new clip goes straight past it', (await left('B4')) === 0)
+  video.failUploads.delete(stuckClip)
+  await flushVideoQueue({ force: true })
+  ok('Retry: it lands once the trouble clears', (await left('B1')) === 0)
+
+  // ── Real no signal still stops the pass ──────────────────────────────────
+  net.online = false
+  await save('N1', 'after', 20)
+  await save('N2', 'after', 20)
+  await settle()
+  const uploadsOffline = video.uploads.length
+  await flushVideoQueue()
+  ok('no signal, token lapsed: nothing is tried, and nothing counts against a clip', video.uploads.length === uploadsOffline)
+  // Token still good, signal gone: the upload fails and so does the check.
+  video.tokenOffline = true
+  const n1 = await idOf('N1')
+  video.failUploads.add(n1)
+  video.failUploads.add(await idOf('N2'))
+  await flushVideoQueue()
+  ok('no signal, token good: one upload is tried, then the pass stops', video.uploads.length === uploadsOffline + 1)
+  await flushVideoQueue()
+  await flushVideoQueue()
+  await flushVideoQueue()
+  ok('…however many passes, no signal never counts against a clip', !(await queuedJobVideos('N1'))[0].stuck)
+  video.tokenOffline = false
+  video.failUploads.clear()
+  net.online = true
+  await flushVideoQueue()
+  ok('…signal back: they go', (await left('N1')) === 0 && (await left('N2')) === 0)
+
+  // ── A path from before iOS moved the app's folder ────────────────────────
+  net.online = false
+  await save('P1', 'before', 40)
+  await settle()
+  const raw = await AsyncStorage.getItem('rinsebase.videoQueue.v1')
+  await AsyncStorage.setItem('rinsebase.videoQueue.v1', raw!.replace(/file:\/\/\/doc\/pending_videos\//g, 'file:///old-folder/doc/pending_videos/'))
+  ok('(the stored path is stale)', (await AsyncStorage.getItem('rinsebase.videoQueue.v1'))!.includes('old-folder'))
+  net.online = true
+  await flushVideoQueue()
+  ok('a clip stored under the old folder uploads from today\'s', (await left('P1')) === 0)
+
+  // ── The file is gone ─────────────────────────────────────────────────────
+  net.online = false
+  await save('G1', 'before', 40)
+  await save('G2', 'after', 40)
+  await settle()
+  net.online = true
+  const gone = await idOf('G1')
+  video.missingFiles.add(gone)
+  const reportedBeforeGone = reported.length
+  const uploadsBeforeGone = video.uploads.length
+  await flushVideoQueue()
+  ok('a missing file: no upload is tried for it', !video.uploads.slice(uploadsBeforeGone).some(u => u.includes(gone)))
+  ok('…the clip behind it goes', (await left('G2')) === 0)
+  ok('…it stays listed, and the crew are told', (await queuedJobVideos('G1'))[0].fileGone === true)
+  ok('…reported', reported.length === reportedBeforeGone + 1 && reported[reported.length - 1].includes(gone))
+  await flushVideoQueue()
+  ok('…once', reported.length === reportedBeforeGone + 1)
+  video.missingFiles.delete(gone)
+  await flushVideoQueue()
+  ok('…and if the file is back, it goes', (await left('G1')) === 0)
 
   if (failures) { console.error(`\n${failures} assertion(s) failed`); process.exit(1) }
   console.log('\nAll required-video invariants hold.')

@@ -17,18 +17,24 @@ export const video = {
   uploads: [] as string[],
   /** An upload waits here until released. */
   hold: null as null | Promise<void>,
+  /** Clip ids whose upload fails the way a dead upload or bad path does. */
+  failUploads: new Set<string>(),
+  /** Clip ids whose file isn't on the phone. */
+  missingFiles: new Set<string>(),
+  /** The sign-in token is still good when the signal drops, so the upload itself gets tried. */
+  tokenOffline: false,
 }
 
 export const FileSystem = {
   documentDirectory: 'file:///doc/',
-  async getInfoAsync() { return { exists: true, size: 1_000_000 } },
+  async getInfoAsync(uri?: string) { return { exists: ![...video.missingFiles].some(id => String(uri).includes(id)), size: 1_000_000 } },
   async makeDirectoryAsync() {},
   async moveAsync() {},
   async copyAsync() {},
   async deleteAsync() {},
 }
 
-export const usableAccessToken = async () => (net.online ? 'token' : null)
+export const usableAccessToken = async () => (net.online || video.tokenOffline ? 'token' : null)
 
 export const supabase = {
   from: (table: string) => {
