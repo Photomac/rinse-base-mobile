@@ -57,6 +57,30 @@ export interface PendingVideo {
   lastErrorKind?: UploadErrorKind
   lastError?: string
   nextAttemptAt?: number
+  // Uploads that failed while the server was answering: this clip's own trouble,
+  // not the signal's.
+  failures?: number
+  // The reason has gone to the error log, once per clip.
+  reportedStuck?: boolean
+  // The file isn't on the phone. Kept, not dropped: it's evidence, the server's
+  // record still says it exists, and the office should hear about it.
+  fileGone?: boolean
+}
+
+// iOS can move the app's data folder when the app is updated, so the absolute
+// path stored with an older clip may no longer exist although the file does.
+// Same as photoQueue: resolve every queued file against today's folder.
+function resolveLocal(uri: string): string {
+  const marker = '/pending_videos/'
+  const i = uri.indexOf(marker)
+  return i >= 0 ? DIR + uri.slice(i + marker.length) : uri
+}
+
+// True only when the file is known to be gone. React Native fails an upload of
+// a missing file as "Network request failed", the same as no signal.
+async function fileMissing(uri: string): Promise<boolean> {
+  if (!uri.startsWith('file://')) return false
+  try { return !(await FileSystem.getInfoAsync(uri)).exists } catch { return false }
 }
 
 async function readQueue(): Promise<PendingVideo[]> {
@@ -220,7 +244,7 @@ function timeoutFor(sizeBytes: number | null): number {
   return Math.min(45 * 60_000, Math.max(240_000, Math.round((bytes / 20_000) * 1000)))
 }
 
-type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean }
+type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; noToken?: boolean }
 
 async function describeHttpError(res: Response): Promise<string> {
   let detail = `HTTP ${res.status}`
@@ -243,16 +267,16 @@ async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
     // signal) — same reasoning as photoQueue.
     token = await usableAccessToken()
   } catch (e: any) {
-    return { ok: false, kind: 'network', message: e?.message || 'Could not read session' }
+    return { ok: false, kind: 'network', message: e?.message || 'Could not read session', noToken: true }
   }
-  if (!token) return { ok: false, kind: 'network', message: 'No signed-in session yet' }
+  if (!token) return { ok: false, kind: 'network', message: 'No signed-in session yet', noToken: true }
 
   if (!entry.stored) {
     let res: Response
     try {
       const form = new FormData()
       const name = entry.storagePath.split('/').pop() || `${entry.id}.mp4`
-      form.append('file', { uri: entry.localUri, name, type: entry.mimeType } as any)
+      form.append('file', { uri: resolveLocal(entry.localUri), name, type: entry.mimeType } as any)
       const ac = new AbortController()
       const timer = setTimeout(() => ac.abort(), timeoutFor(entry.size_bytes))
       try {
@@ -297,13 +321,30 @@ async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
     return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
   }
 
-  try { await FileSystem.deleteAsync(entry.localUri, { idempotent: true }) } catch { /* ignore */ }
+  try { await FileSystem.deleteAsync(resolveLocal(entry.localUri), { idempotent: true }) } catch { /* ignore */ }
   return { ok: true }
 }
 
 function backoffMs(attempts: number): number {
   return Math.min(60_000 * 2 ** Math.min(attempts, 6), 3_600_000)
 }
+
+/** Does the server answer at all? Any answer counts; a small request with its own short limit. */
+async function serverAnswers(): Promise<boolean> {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), 8_000)
+  try {
+    await fetch(`${SUPABASE_URL}/auth/v1/health`, { signal: ac.signal })
+    return true
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** After this many failed uploads with the server answering, the crew are told and it waits between tries. */
+const STUCK_AFTER = 3
 
 let flushing = false
 
@@ -315,7 +356,11 @@ export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ upl
   if (flushing) return { uploaded: 0, remaining: (await readQueue()).length }
   flushing = true
   try {
-    const q = await readQueue()
+    // A clip that keeps failing goes after the ones that haven't. One sat at the
+    // head of a phone's queue for a week and nothing behind it ever went, down to
+    // 6-second clips (CKS, Anya, 2026-10-23 to 10-30), shown as "Waiting to upload".
+    const q = (await readQueue()).slice()
+      .sort((a, b) => (a.failures ?? 0) - (b.failures ?? 0) || a.created_at - b.created_at)
     if (!q.length) return { uploaded: 0, remaining: 0 }
     let uploaded = 0
     let noSignal = false
@@ -326,17 +371,36 @@ export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ upl
         survivors.push(entry)
         continue
       }
+      if (!entry.stored && await fileMissing(resolveLocal(entry.localUri))) {
+        if (!entry.fileGone) {
+          reportClientError(`videoQueue: clip ${entry.id} isn't on the phone (job ${entry.job_id}, ${entry.video_type}, ${entry.duration_seconds}s)`, undefined, 'videoQueue')
+        }
+        survivors.push({ ...entry, fileGone: true })
+        continue
+      }
       const result = await uploadOne(entry)
       if (result.ok) { uploaded++; continue }
-      if (result.kind === 'network') noSignal = true
+      // No signal stops the pass: the rest would fail the same way. The server
+      // answering means this clip is the trouble, so the next one gets its turn.
+      const clipFailed = result.kind === 'network' && !result.noToken && await serverAnswers()
+      if (result.kind === 'network' && !clipFailed) noSignal = true
       const attempts = (entry.attempts ?? 0) + 1
+      const failures = (entry.failures ?? 0) + (clipFailed ? 1 : 0)
+      const reportNow = clipFailed && attempts >= STUCK_AFTER && !entry.reportedStuck
+      if (reportNow) {
+        const mb = entry.size_bytes ? `${(entry.size_bytes / 1_048_576).toFixed(1)} MB` : 'size unknown'
+        reportClientError(`videoQueue: clip ${entry.id} keeps failing (${attempts} tries, ${mb}, file present): ${result.message}`, undefined, 'videoQueue', { keepKnownNoise: true })
+      }
       survivors.push({
         ...entry,
         stored: entry.stored || result.stored || undefined,
         attempts,
+        failures: failures || undefined,
+        reportedStuck: entry.reportedStuck || reportNow || undefined,
+        fileGone: undefined,
         lastErrorKind: result.kind,
         lastError: result.message,
-        nextAttemptAt: result.kind === 'server' ? Date.now() + backoffMs(attempts) : undefined,
+        nextAttemptAt: result.kind === 'server' || (clipFailed && failures >= STUCK_AFTER) ? Date.now() + backoffMs(Math.max(attempts, failures)) : undefined,
       })
     }
     // A video saved WHILE this pass was uploading is not in `q`. Writing
@@ -359,6 +423,10 @@ export interface QueuedJobVideo {
   created_at: number
   /** The server rejected it (not just no signal). */
   failing: boolean
+  /** Its uploads keep failing while the server answers. */
+  stuck: boolean
+  /** The file isn't on this phone. */
+  fileGone: boolean
   lastError: string | null
 }
 
@@ -368,7 +436,7 @@ export async function queuedJobVideos(jobId: string): Promise<QueuedJobVideo[]> 
     .filter(v => v.job_id === jobId)
     .map(v => ({
       id: v.id, video_type: v.video_type, duration_seconds: v.duration_seconds, size_bytes: v.size_bytes,
-      created_at: v.created_at, failing: v.lastErrorKind === 'server', lastError: v.lastError ?? null,
+      created_at: v.created_at, failing: v.lastErrorKind === 'server', stuck: (v.failures ?? 0) >= STUCK_AFTER, fileGone: !!v.fileGone, lastError: v.lastError ?? null,
     }))
 }
 

@@ -56,9 +56,11 @@ interface Row {
   video_type: WalkthroughType
   duration_seconds: number | null
   size_bytes: number | null
-  state: 'uploaded' | 'waiting' | 'failing'
+  state: 'uploaded' | 'waiting' | 'failing' | 'stuck' | 'gone'
   lastError?: string | null
 }
+
+const rowTrouble = (r: Row) => r.state === 'failing' || r.state === 'stuck' || r.state === 'gone'
 
 export function WalkthroughScreen({ job, user, defaultType, asked = false, started = false, startedAt: cleanStartedAt = null, owed = [], onBack }: Props) {
   const { t } = useLang()
@@ -115,7 +117,7 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
       .sort((a, b) => b.created_at - a.created_at)
       .map(v => ({
         key: `q:${v.id}`, video_type: v.video_type, duration_seconds: v.duration_seconds, size_bytes: v.size_bytes,
-        state: v.failing ? 'failing' : 'waiting', lastError: v.lastError,
+        state: v.fileGone ? 'gone' : v.failing ? 'failing' : v.stuck ? 'stuck' : 'waiting', lastError: v.lastError,
       }))
     const uploaded: Row[] = server.map(r => ({
       key: r.id, video_type: r.video_type, duration_seconds: r.duration_seconds, size_bytes: r.size_bytes, state: 'uploaded',
@@ -342,15 +344,17 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
           {rows.length === 0 ? (
             <Text style={styles.empty}>{t('walkthrough_none')}</Text>
           ) : rows.map(r => (
-            <View key={r.key} style={[styles.row, r.state === 'failing' && styles.rowFailing]}>
-              <Text style={styles.rowIcon}>{r.state === 'uploaded' ? '✅' : r.state === 'failing' ? '⚠️' : '⏳'}</Text>
+            <View key={r.key} style={[styles.row, rowTrouble(r) && styles.rowFailing]}>
+              <Text style={styles.rowIcon}>{r.state === 'uploaded' ? '✅' : rowTrouble(r) ? '⚠️' : '⏳'}</Text>
               <View style={{ flex: 1 }}>
                 <Text style={styles.rowTitle} numberOfLines={1}>
                   {typeLabel(r.video_type)}{r.duration_seconds != null ? ` · ${fmtClock(r.duration_seconds)}` : ''}
                 </Text>
-                <Text style={[styles.rowSub, r.state === 'failing' && { color: '#B91C1C' }]} numberOfLines={2}>
+                <Text style={[styles.rowSub, rowTrouble(r) && { color: '#B91C1C' }]} numberOfLines={3}>
                   {r.state === 'uploaded' ? t('walkthrough_status_uploaded')
                     : r.state === 'failing' ? `${t('walkthrough_status_rejected')}${r.lastError ? ` (${r.lastError})` : ''}`
+                    : r.state === 'gone' ? t('walkthrough_status_gone')
+                    : r.state === 'stuck' ? `${t('walkthrough_status_stuck')}${r.lastError ? ` (${r.lastError})` : ''}`
                     : `${t('walkthrough_status_waiting')}${r.size_bytes ? ` · ${fmtMb(r.size_bytes)}` : ''}`}
                 </Text>
               </View>
