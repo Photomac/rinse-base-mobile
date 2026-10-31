@@ -1,7 +1,7 @@
 // src/components/RepairQuoteCard.tsx
 // A look-and-quote visit's card on the job screen: one price and a note, which
 // land on the incident for the office, and the property's upcoming empty days to
-// move the visit to (rinse-base-app migration 20261031150000_repair_review_quote).
+// move the visit to (rinse-base-app migration 20261031140206_repair_review_quote).
 // Shows nothing on any other visit, on a database without repair_reviews, or
 // offline, where the notes still say it's a look and quote. The web crew view has
 // its own copy (src/components/RepairQuoteCard.tsx).
