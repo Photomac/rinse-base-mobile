@@ -10,6 +10,8 @@ import React, { useEffect, useState } from 'react'
 import { View, Text, TextInput, TouchableOpacity, Alert, StyleSheet } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
+import { localeFor } from '../lib/i18n'
+import { currencySymbol, formatMoney } from '../lib/money'
 import { parseQuoteAmount } from '../lib/repairVisit'
 
 type Review = { id: string; amount: number | null; note: string | null; submitted_at: string | null; decision: string | null }
@@ -22,7 +24,7 @@ export function RepairQuoteCard({ visitId, addressId, status, onMoved }: {
   /** The visit's new start. */
   onMoved?: (start: string) => void
 }) {
-  const { t, lang } = useLang() as any
+  const { t, lang } = useLang()
   const [review, setReview] = useState<Review | null>(null)
   const [price, setPrice] = useState('')
   const [note, setNote] = useState('')
@@ -87,8 +89,8 @@ export function RepairQuoteCard({ visitId, addressId, status, onMoved }: {
     }
   }
 
-  const dayLabel = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString(lang === 'es' ? 'es' : lang === 'pt' ? 'pt' : 'en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-  const shownPrice = review.amount == null ? '' : Number(review.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const dayLabel = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString(localeFor(lang), { weekday: 'short', month: 'short', day: 'numeric' })
+  const shownPrice = review.amount == null ? '' : formatMoney(Number(review.amount))
 
   return (
     <View style={styles.card} testID="repair-quote-card">
@@ -101,7 +103,7 @@ export function RepairQuoteCard({ visitId, addressId, status, onMoved }: {
       ) : (
         <>
           <Text style={styles.hint}>{t('quote_hint')}</Text>
-          <Text style={styles.label}>{t('quote_price')}</Text>
+          <Text style={styles.label}>{t('quote_price')} ({currencySymbol()})</Text>
           <TextInput style={styles.input} value={price} onChangeText={setPrice} keyboardType="decimal-pad" placeholder="450" placeholderTextColor="#9CA3AF" />
           <Text style={styles.label}>{t('quote_note')}</Text>
           <TextInput style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]} value={note} onChangeText={setNote} multiline maxLength={2000} placeholder={t('quote_note_ph')} placeholderTextColor="#9CA3AF" />
