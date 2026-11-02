@@ -21,7 +21,7 @@ import { useAwaitingAnswers } from '../lib/useCrewAnswers'
 // Which day a clean falls on is the TENANT's day, not the phone's — see
 // src/lib/timezone.ts. Grid cells are local calendar Dates whose literal Y/M/D
 // is what's drawn, so they key off localDayKey and jobs key off dayKey.
-import { fmtTimeAt, dayKey, localDayKey, todayKey, todayAsLocalDate } from '../lib/timezone'
+import { fmtTimeAt, fmtClockAt, zoneTag, noteDayCleans, dayKey, localDayKey, todayKey, todayAsLocalDate } from '../lib/timezone'
 
 const STATUS_COLORS: Record<string, string> = {
   scheduled:   '#3B82F6',
@@ -88,6 +88,8 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const myJobs = isOwner
       ? (data ?? [])
       : (data ?? []).filter((j: any) => isMyJob(j, user.id))
+    // Before the rows land: a day that crosses a zone line names every clean's zone.
+    noteDayCleans(myJobs as any[])
     // Queued offline status changes overlay the cached/live rows.
     // Same order the Dashboard uses — a crew opening Schedule for today must
     // see the sequence they see on the day screen, not a second opinion.
@@ -258,8 +260,12 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       <View key={i} style={[styles.weekJobBlock, { backgroundColor: STATUS_COLORS[job.status] || GOLD }]}>
                         {/* "10:30 a.m." is wider than "10:30 AM": shrink, don't cut. */}
                         <Text style={styles.weekJobText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-                          {fmtTimeAt(job.scheduled_start, job.client_addresses, locale)}
+                          {fmtClockAt(job.scheduled_start, job.client_addresses, locale)}
                         </Text>
+                        {/* A week cell is too narrow for the zone on the time's line. */}
+                        {!!zoneTag(job.client_addresses, job.scheduled_start) && (
+                          <Text style={styles.weekJobName} numberOfLines={1}>{zoneTag(job.client_addresses, job.scheduled_start)}</Text>
+                        )}
                         <Text style={styles.weekJobName} numberOfLines={1}>
                           {cellName(job)}
                         </Text>

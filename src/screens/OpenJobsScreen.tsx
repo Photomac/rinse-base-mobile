@@ -22,7 +22,7 @@
 // disabled while the list is rendering from cache, and nothing is queued in
 // the outbox. Showing the cached list is still useful (what was open when I
 // last had signal), just not actionable.
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, RefreshControl } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
@@ -30,7 +30,7 @@ import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD, SLATE } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
-import { fmtTimeAt, fmtDate, fmtDatePart } from '../lib/timezone'
+import { fmtTimeAt, fmtDate, fmtDatePart, dayClocksOf } from '../lib/timezone'
 import { boardQuery, boardJobsFor, offeredFirstTo } from '../lib/openJobs'
 
 const RESULT_KEY: Record<string, string> = {
@@ -54,6 +54,9 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const [refreshing, setRefreshing] = useState(false)
   const [offline, setOffline] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+
+  // A day on this board that crosses a zone line names every clean's zone.
+  const boardDays = useMemo(() => dayClocksOf([...jobs, ...mine]), [jobs, mine])
 
   // Crew see the property, not the homeowner — client names are for admins.
   const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
@@ -150,7 +153,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       {addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street)}
                       {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
                     </Text>
-                    <Text style={styles.jobMeta}>{fmtDate(job.scheduled_start, localeFor(lang), { weekday: 'short', month: 'short', day: 'numeric' })} · {fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang))}</Text>
+                    <Text style={styles.jobMeta}>{fmtDate(job.scheduled_start, localeFor(lang), { weekday: 'short', month: 'short', day: 'numeric' })} · {fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang), boardDays)}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[styles.releaseBtn, (offline || busy === job.id) && { opacity: 0.5 }]}
@@ -199,7 +202,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
                     {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
                   </Text>
                   <Text style={styles.jobMeta}>
-                    {fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang))} · {ti(t('open_jobs_hours'), { h: String(hrs) })}
+                    {fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang), boardDays)} · {ti(t('open_jobs_hours'), { h: String(hrs) })}
                     {addr?.city ? ` · ${addr.city}` : ''}
                   </Text>
                   <View style={styles.badges}>

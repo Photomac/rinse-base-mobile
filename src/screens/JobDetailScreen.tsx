@@ -6,7 +6,7 @@ import { noteAtRisk } from '../lib/issueNoteGuard'
 import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 // Job times render in the tenant's zone, not the phone's — src/lib/timezone.ts.
-import { fmtTimeAt, fmtTimeRangeAt } from '../lib/timezone'
+import { fmtTimeAt, fmtTimeRangeAt, zoneTag } from '../lib/timezone'
 import { fmtWallTime, type NextArrival } from '../lib/nextArrival'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { WalkthroughScreen } from './WalkthroughScreen'
@@ -2051,7 +2051,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             const day = n.sameDay ? t('next_arrival_same_day')
               : new Date(n.date + 'T12:00:00').toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })
             const time = fmtWallTime(n.time, locale)
-            const when = time ? `${day} · ${time}` : day
+            // A bare time at this home: it names the clock as the clean's own time does.
+            const tag = zoneTag(job.client_addresses, job.scheduled_start)
+            const when = time ? `${day} · ${time}${tag ? ` ${tag}` : ''}` : day
             if (n.kind === 'hold') {
               return (
                 <View style={{ backgroundColor: '#FFFBEB', borderRadius: 10, padding: 10, marginTop: 8 }}>

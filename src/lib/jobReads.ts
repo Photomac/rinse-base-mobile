@@ -473,7 +473,7 @@ export function prepReads(user: any, cleans: any[], ymd: string) {
     addresses: {
       key: `prep:addr:${user.id}:${ymd}`,
       q: () => supabase.from('client_addresses')
-        .select('id, lockbox_code, arrival_instructions, laundry_bag_color, default_checkin_time').in('id', addrIds),
+        .select('id, lockbox_code, arrival_instructions, laundry_bag_color, default_checkin_time, timezone').in('id', addrIds),
     } as CacheRead,
     // Yesterday → tomorrow, blocks included: a block is only noise when the
     // stay it echoes or buffers is in view (see lib/nextArrival).

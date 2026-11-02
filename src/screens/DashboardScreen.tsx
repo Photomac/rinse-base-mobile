@@ -29,7 +29,7 @@ import { JobClock } from '../components/JobClock'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
 // src/lib/timezone.ts.
-import { fmtTime, fmtTimeAt, fmtTimeRangeAt, fmtDate, fmtDateTime, dayKey, todayKey, startOfDayInTz, startOfMonthInTz } from '../lib/timezone'
+import { fmtTime, fmtTimeAt, fmtTimeRangeAt, fmtDate, fmtDateTime, dayKey, todayKey, startOfDayInTz, startOfMonthInTz, noteDayCleans } from '../lib/timezone'
 import { shiftYmd } from '../lib/nextArrival'
 import { useAwaitingAnswers } from '../lib/useCrewAnswers'
 
@@ -235,6 +235,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // whichever one Postgres happened to hand back first — and could change on
     // a refresh. Next now means next in the order they actually work.
     // (dayView picks active/next from this order.)
+    // Before the rows land: a day that crosses a zone line names every clean's zone.
+    noteDayCleans(myTodayAll)
     setDayRows([...myTodayAll].sort(byCrewDayOrder))
     sameDayInspections(user, 'home', myTodayAll).then(ids => setDayRows(rows => markSameDay(rows, ids))).catch(() => {})
 
