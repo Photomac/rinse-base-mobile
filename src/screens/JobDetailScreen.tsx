@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, Alert, Linking, ActivityIndicator, Modal, Image } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
+import { noteAtRisk } from '../lib/issueNoteGuard'
 import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 // Job times render in the tenant's zone, not the phone's — src/lib/timezone.ts.
@@ -2512,7 +2513,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                           <TouchableOpacity key={v} disabled={readOnly}
                                             onPress={() => {
                                               if (v === 'issue' && !on) { setIssueForId(item.id); setIssueText(item.issue_note || ''); return }
-                                              saveVerify(item, on ? null : v)
+                                              const next = on ? null : v
+                                              const risk = noteAtRisk(item.result, next, item.issue_note)
+                                              if (!risk) { saveVerify(item, next); return }
+                                              Alert.alert(t('issue_remove_title'), ti(t('issue_remove_msg'), { note: risk }), [
+                                                { text: t('cancel'), style: 'cancel' },
+                                                { text: t('issue_remove_btn'), style: 'destructive', onPress: () => saveVerify(item, next) },
+                                              ])
                                             }}
                                             style={{ paddingVertical: 3, paddingHorizontal: 8, borderRadius: 10, borderWidth: 1,
                                               borderColor: on ? col : '#E5E7EB', backgroundColor: on ? col : '#fff' }}>

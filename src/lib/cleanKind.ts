@@ -28,6 +28,8 @@ export interface KindJob {
   job_type?: string | null
   is_turnover?: boolean | null
   window_minutes?: number | null
+  /** An inspection a guest arrives on: lib/sameDayCheckin. */
+  same_day_checkin?: boolean
   service_types?: { name?: string | null } | null
 }
 
@@ -63,6 +65,6 @@ export function kindParts(
   } else if (service) {
     parts.push(service)
   }
-  if (job.window_minutes != null) parts.push(`↔ ${labels.backToBack}`)
+  if (job.window_minutes != null || job.same_day_checkin) parts.push(`↔ ${labels.backToBack}`)
   return parts
 }
