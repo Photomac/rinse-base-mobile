@@ -18,7 +18,8 @@ import { refreshArrivalGeofences, quickGpsStamp } from '../lib/arrivalGeofence'
 import { arrivalForStart } from '../lib/siteVisits'
 import { cachedQuery, cachedRead, readSoon, writeCacheEntry, cacheEpoch } from '../lib/dataCache'
 import { lastTripFailed } from '../lib/netFetch'
-import { dashTodayRead, dashShiftRead, homeDayRows } from '../lib/jobReads'
+import { dashTodayRead, dashShiftRead, homeDayRows, sameDayInspections } from '../lib/jobReads'
+import { markSameDay } from '../lib/sameDayCheckin'
 import { prefetchDays, loadDayPack, onDayPackChange, stopsAhead, type DayPack } from '../lib/offlinePrefetch'
 import { writeThrough, overlayPending, flushOutbox, onOutboxDrained, uuid4, isQueued } from '../lib/outbox'
 import { byCrewDayOrder } from '../lib/jobOrder'
@@ -235,6 +236,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // a refresh. Next now means next in the order they actually work.
     // (dayView picks active/next from this order.)
     setDayRows([...myTodayAll].sort(byCrewDayOrder))
+    sameDayInspections(user, 'home', myTodayAll).then(ids => setDayRows(rows => markSameDay(rows, ids))).catch(() => {})
 
     setLoading(false)
     setRefreshing(false)

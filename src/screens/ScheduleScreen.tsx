@@ -5,6 +5,8 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { CrewLine } from '../components/CrewLine'
 import { kindParts } from '../lib/cleanKind'
+import { sameDayInspections } from '../lib/jobReads'
+import { markSameDay } from '../lib/sameDayCheckin'
 import { JobScopeToggle } from '../components/JobScopeToggle'
 import { CrewGroupHeader } from '../components/CrewGroupHeader'
 import { useJobScope } from '../lib/useJobScope'
@@ -90,6 +92,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     // Same order the Dashboard uses — a crew opening Schedule for today must
     // see the sequence they see on the day screen, not a second opinion.
     setJobs((await overlayPending('jobs', myJobs)).sort(byCrewDayOrder))
+    sameDayInspections(user, 'sched', myJobs).then(ids => setJobs(rows => markSameDay(rows, ids))).catch(() => {})
     setLoading(false)
     setRefreshing(false)
     setLoads(n => n + 1)
