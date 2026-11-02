@@ -15,6 +15,8 @@ import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { currencySymbol } from '../lib/money'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences, quickGpsStamp } from '../lib/arrivalGeofence'
+import { clockInFields, daySites, fmtClockInDistance, notCheckedRole } from '../lib/clockInGate'
+import { checkClockIn, clockInRule, recordRefusal } from '../lib/clockInLocation'
 import { arrivalForStart } from '../lib/siteVisits'
 import { cachedQuery, cachedRead, readSoon, writeCacheEntry, cacheEpoch } from '../lib/dataCache'
 import { lastTripFailed } from '../lib/netFetch'
@@ -376,10 +378,23 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       // today: "📍 Started at SILEX"); it waits at most 2.5 s and never holds
       // up the start (no fix, no stamp).
       const tappedAt = new Date().toISOString()
+      // Clock-in only at the property, when the company has it on: against
+      // today's cleans and the office (lib/clockInGate). Refused = told why,
+      // nothing written. The office starts the day for them from Team today.
+      const rule = notCheckedRole(user.role) ? null : await clockInRule(user.tenant_id)
+      const gate = rule?.required
+        ? await checkClockIn({ sites: daySites(dayRows, rule.office), jobId: null, userId: user.id })
+        : null
+      if (gate && !gate.allow) {
+        await recordRefusal(gate, { tenantId: user.tenant_id, jobId: null, userId: user.id })
+        Alert.alert(t('clock_in_refused_title'), ti(t('day_start_refused_body'), { distance: fmtClockInDistance(gate.distanceM) }))
+        return
+      }
+      if (gate?.check === 'no_permission') Alert.alert('📍', t('clock_in_location_off'))
       const arrival = await arrivalForStart()
       const fromArrival = arrival ? await askStartFrom(arrival, tappedAt) : null
       const startedAt = fromArrival ?? tappedAt
-      const stamp = await quickGpsStamp()
+      const stamp = (gate?.allow ? gate.stamp : null) ?? await quickGpsStamp()
       // Client-minted id: offline the punch queues in the outbox (a shift IS the
       // day's pay) and replays idempotently when signal returns. The server
       // allows one open shift per person (job_time_entries_one_open_shift), so
@@ -391,6 +406,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         entry_type: 'shift', clocked_in_at: startedAt,
         clock_in_lat: stamp?.lat ?? null, clock_in_lng: stamp?.lng ?? null,
         ...(fromArrival ? { source: 'prompted', arrived_at: fromArrival } : {}),
+        ...clockInFields(gate),
       }
       const { error, queued } = await writeThrough({
         table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
