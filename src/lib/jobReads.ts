@@ -17,6 +17,8 @@ import { dayKey, startOfDayInTz, endOfTomorrowInTz } from './timezone'
 import { shiftYmd } from './nextArrival'
 import { WALKTHROUGH_BAND, isWalkthroughJob } from './walkthrough'
 import { isOfficeRole, isMyJob } from './jobScope'
+import { inspectionDays, sameDayIds } from './sameDayCheckin'
+import { cachedRead } from './dataCache'
 
 /** The property a job is at, however the screen that opened it shaped the row. */
 export function jobAddressId(job: any): string | null {
@@ -72,6 +74,31 @@ export function dashShiftRead(user: any): CacheRead {
 export function homeDayRows(rows: any[] | null | undefined, user: any, ymd: string): any[] {
   return (isOfficeRole(user.role) ? (rows ?? []) : (rows ?? []).filter(j => isMyJob(j, user.id)))
     .filter(j => dayKey(j.scheduled_start) === ymd)
+}
+
+/**
+ * The inspections on this list that a guest arrives on. Never in the way of the
+ * list: no inspections asks nothing, and a failed read marks nothing. Only dates
+ * are read, no guest details. Soonest first from today, so at PostgREST's
+ * 1,000-row cap what falls off is the far end of Schedule's window.
+ */
+export async function sameDayInspections(user: any, list: string, jobs: any[]): Promise<Set<string>> {
+  const { addressIds, from, to } = inspectionDays(jobs, j => dayKey(j.scheduled_start))
+  if (!addressIds.length || !from || !to) return new Set()
+  const today = dayKey(new Date().toISOString())
+  const { data, error } = await cachedRead<any[]>({
+    key: `arrivals:${list}:${user.id}`,
+    q: () => supabase.from('property_reservations')
+      .select('address_id, checkin_date')
+      .eq('tenant_id', user.tenant_id)
+      .in('address_id', addressIds)
+      .gte('checkin_date', from > today ? from : today)
+      .lte('checkin_date', to)
+      .neq('platform', 'owner_block')
+      .neq('status', 'cancelled')
+      .order('checkin_date'),
+  })
+  return error ? new Set() : sameDayIds(jobs, data ?? [], j => dayKey(j.scheduled_start))
 }
 
 // ── A job's screen (JobDetailScreen) ────────────────────────────────────────

@@ -25,6 +25,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator, Image, Modal } from 'react-native'
+import { noteAtRisk } from '../lib/issueNoteGuard'
 import { writeThrough } from '../lib/outbox'
 // The reads (the shared builders the offline day pack saves), and how soon the
 // saved copy shows on a weak signal.
@@ -179,7 +180,15 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
             const on = l.result === v
             return (
               <TouchableOpacity key={v} disabled={busy === l.id}
-                onPress={() => answer(l, on ? null : v)}
+                onPress={() => {
+                  const next = on ? null : v
+                  const risk = noteAtRisk(l.result, next, notes[l.id] ?? l.issue_note)
+                  if (!risk) { answer(l, next); return }
+                  Alert.alert(t('issue_remove_title'), ti(t('issue_remove_msg'), { note: risk }), [
+                    { text: t('cancel'), style: 'cancel' },
+                    { text: t('issue_remove_btn'), style: 'destructive', onPress: () => answer(l, next) },
+                  ])
+                }}
                 style={[styles.chip, on && { backgroundColor: c, borderColor: c }]}>
                 <Text style={[styles.chipText, on && { color: '#fff' }]}>{label}</Text>
               </TouchableOpacity>
