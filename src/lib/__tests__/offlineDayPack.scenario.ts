@@ -94,7 +94,7 @@ function jobRow(id: string, start: string, status: string, crew: string[], addr:
     seam_access_code: null, laundry_done_onsite: false, pet_fee_applied: false, checkout_time: null, checkin_time: null, urgency: null,
     crew_note: null, crew_note_at_clock_in: false, started_at: null,
     clients: { full_name: 'Red Rock Rentals', phone: '555-0100', client_type: 'property_manager' },
-    client_addresses: { id: a.id, street: a.street, city: 'Sedona', nickname: a.nickname, lockbox_code: a.lockbox_code, lat: 34.87, lng: -111.76, photo_url: addressRow(a).photo_url },
+    client_addresses: { id: a.id, street: a.street, city: 'Sedona', nickname: a.nickname, lockbox_code: a.lockbox_code, timezone: null, lat: 34.87, lng: -111.76, photo_url: addressRow(a).photo_url },
     job_assignments: crew.map(u => ({ user_id: u })),
     crew: crew.map((u, i) => ({ user_id: u, is_lead: i === 0, users: { full_name: NAMES[u] } })),
     property_reservations: { guest_count: 4, pet_count: 0 },

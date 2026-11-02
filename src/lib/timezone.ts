@@ -63,6 +63,86 @@ export function getCurrentTz(): string {
   return deviceTz()
 }
 
+// A clean's own clock. A company with tenants.multi_market_enabled on times each
+// clean on its property's zone (server: _shared/property-clock.ts, web:
+// src/lib/timezone.ts). With it off there is one clock, and every helper below
+// answers exactly what fmtTime does, with no zone name.
+//
+// Pass the job's client_addresses row, and select `timezone` in that embed: a row
+// without it (a copy saved before this shipped, say) reads as the company clock.
+type HasClock = { timezone?: string | null } | null | undefined
+
+let _multiMarket = false
+
+/** Set whether this company's properties keep their own clocks. Called beside setCurrentTz. */
+export function setMultiMarket(on: boolean | null | undefined) {
+  _multiMarket = on === true
+}
+
+/** The zone for a property's cleans: its own with the switch on, else the company's. */
+export function clockOf(address: HasClock): string {
+  const own = address?.timezone?.trim()
+  if (!_multiMarket || !own || !supportsIanaZones()) return getCurrentTz()
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: own })
+    return own
+  } catch {
+    return getCurrentTz()
+  }
+}
+
+/** The zone's short name ('EST') when the time reads differently on this property's
+ *  clock than on the company's at that moment, else ''. By the wall clock, not the
+ *  name: America/Detroit on a New York company names nothing. */
+export function zoneTag(address: HasClock, at: Date | string | null | undefined): string {
+  const d = toDate(at)
+  if (!d) return ''
+  const clock = clockOf(address)
+  const company = getCurrentTz()
+  if (clock === company) return ''
+  try {
+    const wall = (tz: string) => new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(d)
+    if (wall(clock) === wall(company)) return ''
+    return new Intl.DateTimeFormat('en-US', { timeZone: clock, timeZoneName: 'short' })
+      .formatToParts(d).find(p => p.type === 'timeZoneName')?.value ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/** A time at this property, with no zone name, for a range or a sentence that names it once. */
+function timeOnClock(d: Date, clock: string, locale: string): string {
+  try {
+    return d.toLocaleTimeString(locale, { timeZone: clock, hour: 'numeric', minute: '2-digit' })
+  } catch {
+    return d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })
+  }
+}
+
+/** A clean's time on its property's clock: '11:00 AM', or '11:00 AM EST' when that isn't the company's. */
+export function fmtTimeAt(input: Date | string | null | undefined, address: HasClock, locale = 'en-US'): string {
+  const d = toDate(input)
+  if (!d) return ''
+  const time = timeOnClock(d, clockOf(address), locale)
+  const tag = zoneTag(address, d)
+  return tag ? `${time} ${tag}` : time
+}
+
+/** A clean's start and end on its property's clock, naming the zone once: '11:00 AM – 2:00 PM EST'. */
+export function fmtTimeRangeAt(
+  start: Date | string | null | undefined,
+  end: Date | string | null | undefined,
+  address: HasClock,
+  locale = 'en-US',
+): string {
+  const s = toDate(start)
+  const e = toDate(end)
+  const clock = clockOf(address)
+  const range = `${s ? timeOnClock(s, clock, locale) : ''} – ${e ? timeOnClock(e, clock, locale) : ''}`
+  const tag = zoneTag(address, s)
+  return tag ? `${range} ${tag}` : range
+}
+
 /** True when we are rendering the tenant's zone and it differs from the
  *  phone's — the case worth telling the crew about on a job screen. */
 export function isForeignTz(): boolean {
@@ -205,10 +285,9 @@ const pad = (n: number) => (n < 10 ? `0${n}` : String(n))
 
 /** 'YYYY-MM-DD' for an instant, in the tenant's zone. The key both sides of a
  *  day comparison must be built with. */
-export function dayKey(input: Date | string | null | undefined): string {
+export function dayKey(input: Date | string | null | undefined, tz: string = getCurrentTz()): string {
   const d = toDate(input)
   if (!d) return ''
-  const tz = getCurrentTz()
   try {
     const { y, m, d: day } = partsInTz(d, tz)
     return `${y}-${pad(m)}-${pad(day)}`
@@ -257,11 +336,10 @@ export function startOfDayInTz(date: Date): Date {
 /** The instant that reads `h`:`mi` on calendar day `ymd` ('YYYY-MM-DD') on the
  *  tenant's clock — what an owner means by "she clocked in at 8:21". Invalid
  *  Date for an unreadable day. */
-export function wallTimeInTz(ymd: string, h: number, mi: number): Date {
+export function wallTimeInTz(ymd: string, h: number, mi: number, tz: string = getCurrentTz()): Date {
   const m = DATE_ONLY_RE.exec(ymd)
   if (!m) return new Date(NaN)
   const naive = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), h, mi, 0, 0)
-  const tz = getCurrentTz()
   try {
     // As startOfDayInTz: guess with the offset at the naive instant, then
     // correct once for a DST change between the two.
@@ -273,10 +351,10 @@ export function wallTimeInTz(ymd: string, h: number, mi: number): Date {
 }
 
 /** Hour (0-23) and minute of an instant on the tenant's clock. */
-export function clockInTz(input: Date | string): { h: number; mi: number } {
+export function clockInTz(input: Date | string, tz: string = getCurrentTz()): { h: number; mi: number } {
   const d = toDate(input) ?? new Date(NaN)
   try {
-    const { h, mi } = partsInTz(d, getCurrentTz())
+    const { h, mi } = partsInTz(d, tz)
     return { h, mi }
   } catch {
     return { h: d.getHours(), mi: d.getMinutes() }

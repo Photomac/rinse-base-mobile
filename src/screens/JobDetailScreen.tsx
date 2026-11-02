@@ -6,7 +6,7 @@ import { noteAtRisk } from '../lib/issueNoteGuard'
 import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 // Job times render in the tenant's zone, not the phone's — src/lib/timezone.ts.
-import { fmtTime } from '../lib/timezone'
+import { fmtTimeAt, fmtTimeRangeAt } from '../lib/timezone'
 import { fmtWallTime, type NextArrival } from '../lib/nextArrival'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { WalkthroughScreen } from './WalkthroughScreen'
@@ -780,9 +780,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   }
 
   function crewClockLabel(c: CrewClock): string {
-    if (c.state === 'on') return `🟢 ${ti(t('crew_clock_on'), { time: fmtTime(c.at, locale) })}`
+    if (c.state === 'on') return `🟢 ${ti(t('crew_clock_on'), { time: fmtTimeAt(c.at, job?.client_addresses, locale) })}`
     if (c.state === 'paused') return `⏸ ${t('paused')}`
-    if (c.state === 'out') return c.at ? ti(t('crew_clock_out'), { time: fmtTime(c.at, locale) }) : t('crew_clock_out_plain')
+    if (c.state === 'out') return c.at ? ti(t('crew_clock_out'), { time: fmtTimeAt(c.at, job?.client_addresses, locale) }) : t('crew_clock_out_plain')
     return t('crew_clock_none')
   }
 
@@ -1163,14 +1163,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     if (running) {
       // Its start stands; this tap's arrival record is spent either way.
       if (arrival) clearPendingArrival(job.id)
-      Alert.alert('⏱', ti(t('already_clocked_in_since'), { time: fmtTime(running.clocked_in_at, locale) }))
+      Alert.alert('⏱', ti(t('already_clocked_in_since'), { time: fmtTimeAt(running.clocked_in_at, job?.client_addresses, locale) }))
     } else if (arrival) {
       clearPendingArrival(job.id)
       // Tell them the backdate happened — the timer starting "in the past"
       // without explanation reads as a bug.
       if (Date.now() - clockedInAt.getTime() > 90_000) {
         Alert.alert('📍', ti(t('clocked_in_from_arrival'), {
-          time: fmtTime(clockedInAt, locale),
+          time: fmtTimeAt(clockedInAt, job?.client_addresses, locale),
         }))
       }
     }
@@ -2012,7 +2012,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
               <Text style={styles.routeStopText}>🧭 {ti(t('route_stop_of'), { k: String(routeStop.k), m: String(routeStop.m) })}</Text>
             </View>
           )}
-          <Text style={styles.timeRow}>🕐 {fmtTime(job.scheduled_start, locale)} – {fmtTime(job.scheduled_end, locale)}</Text>
+          <Text style={styles.timeRow}>🕐 {fmtTimeRangeAt(job.scheduled_start, job.scheduled_end, job.client_addresses, locale)}</Text>
           {/* The office moves the clean or changes its crew from the road. */}
           {canEditClean(user.role, job) && (
             <TouchableOpacity style={styles.editBtn} onPress={() => setShowEdit(true)}>
@@ -2021,9 +2021,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           )}
           {turnover?.checkout && (
             <View style={{ backgroundColor: turnover.urgency === 'rapid' ? '#FEF2F2' : turnover.urgency === 'tight' ? '#FFFBEB' : '#EFF6FF', borderRadius: 10, padding: 10, marginTop: 8, marginBottom: 4 }}>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827' }}>🧳 {t('guest_checkout')}: {fmtTime(turnover.checkout, locale)}</Text>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827' }}>🧳 {t('guest_checkout')}: {fmtTimeAt(turnover.checkout, job.client_addresses, locale)}</Text>
               {turnover.checkin && (
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827', marginTop: 3 }}>🔑 {t('next_checkin')}: {fmtTime(turnover.checkin, locale)}</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#111827', marginTop: 3 }}>🔑 {t('next_checkin')}: {fmtTimeAt(turnover.checkin, job.client_addresses, locale)}</Text>
               )}
               {guestCount != null && (
                 <Text style={{ fontSize: 12, fontWeight: '600', color: '#374151', marginTop: 3 }}>👥 {ti(t('guests_stayed'), { n: String(guestCount) })}</Text>
@@ -2280,7 +2280,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           {!dailyMode && timeEntries.filter(e => e.clocked_out_at).map((entry, i) => (
             <View key={entry.id} style={styles.timeEntry}>
               <Text style={styles.timeEntryText}>
-                {entryOwnerLabel(entry)}{t('session')} {i + 1}: {fmtTime(entry.clocked_in_at, locale)} – {fmtTime(entry.clocked_out_at, locale)}
+                {entryOwnerLabel(entry)}{t('session')} {i + 1}: {fmtTimeAt(entry.clocked_in_at, job.client_addresses, locale)} – {fmtTimeAt(entry.clocked_out_at, job.client_addresses, locale)}
               </Text>
               <Text style={styles.timeEntryDuration}>{fmtDuration(entry.duration_minutes || 0)}</Text>
               {entry.pause_reason && <Text style={styles.timeEntryReason}>⏸ {pauseReasonLabel(entry.pause_reason, t)}</Text>}
@@ -2291,7 +2291,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           {!dailyMode && isClockedIn && (
             <View style={[styles.timeEntry, { backgroundColor: '#ECFDF5', borderColor: TEAL }]}>
               <Text style={[styles.timeEntryText, { color: '#065F46' }]}>
-                🟢 {entryOwnerLabel(activeEntry)}{t('active_since')} {fmtTime(activeEntry.clocked_in_at, locale)}
+                🟢 {entryOwnerLabel(activeEntry)}{t('active_since')} {fmtTimeAt(activeEntry.clocked_in_at, job.client_addresses, locale)}
               </Text>
             </View>
           )}
@@ -2305,7 +2305,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           {/* Day shift: when this job started, beside its clock. */}
           {dailyMode && jobStartAt && jobClockMs({ status: job.status, started_at: jobStartAt }, Date.now()) != null && (
             <View style={[styles.timeEntry, { backgroundColor: '#ECFDF5', borderColor: TEAL }]}>
-              <Text style={[styles.timeEntryText, { color: '#065F46' }]}>🟢 {t('active_since')} {fmtTime(jobStartAt, locale)}</Text>
+              <Text style={[styles.timeEntryText, { color: '#065F46' }]}>🟢 {t('active_since')} {fmtTimeAt(jobStartAt, job.client_addresses, locale)}</Text>
             </View>
           )}
 

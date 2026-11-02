@@ -12,7 +12,7 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor, type TranslationKey } from '../lib/i18n'
 import { GOLD, SLATE, ROLE_COLORS } from '../lib/theme'
-import { fmtDate, fmtTime, todayKey, tomorrowKey, dayKey } from '../lib/timezone'
+import { fmtDate, fmtTimeAt, clockOf, todayKey, tomorrowKey, dayKey } from '../lib/timezone'
 import { parseClock, clockText, addDays, type Meridiem } from '../lib/teamDay'
 import { linkAnswering } from '../lib/netFetch'
 import { uuid4 } from '../lib/outbox'
@@ -102,14 +102,14 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
 
   const nameOf = (id: string) => people.find(p => p.id === id)?.full_name || '—'
   const dayLabel = (ymd: string) => fmtDate(ymd, locale, { weekday: 'short' })
-  const whenLabel = (iso: string) => `${fmtDate(iso, locale, { weekday: 'short' })} · ${fmtTime(iso, locale)}`
+  const whenLabel = (iso: string) => `${fmtDate(iso, locale, { weekday: 'short' })} · ${fmtTimeAt(iso, base?.client_addresses, locale)}`
   const lengthLabel = (min: number) => {
     const h = Math.floor(min / 60), m = min % 60
     return h && m ? ti(t('oe_len_hm'), { h: String(h), m: String(m) }) : h ? ti(t('oe_len_h'), { h: String(h) }) : ti(t('oe_len_m'), { m: String(m) })
   }
 
   // Its own day, or one the guests allow.
-  const canMoveTo = (ymd: string) => !!base && !!limits && (ymd === dayKey(base.scheduled_start) || dayAllowed(limits, ymd))
+  const canMoveTo = (ymd: string) => !!base && !!limits && (ymd === dayKey(base.scheduled_start, clockOf(base.client_addresses)) || dayAllowed(limits, ymd))
   function setDay(ymd: string) { if (canMoveTo(ymd)) setDraft(d => (d ? { ...d, ymd } : d)) }
   // ‹ / ›: greyed out where the guests rule the next day out.
   function dayStep(dir: -1 | 1) {
@@ -132,8 +132,8 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
 
   function warningText(w: EditWarning): string {
     switch (w.code) {
-      case 'before_checkout': return ti(t('oe_w_before_checkout'), { time: fmtTime(w.at, locale) })
-      case 'after_checkin': return ti(t('oe_w_after_checkin'), { time: fmtTime(w.at, locale) })
+      case 'before_checkout': return ti(t('oe_w_before_checkout'), { time: fmtTimeAt(w.at, base?.client_addresses, locale) })
+      case 'after_checkin': return ti(t('oe_w_after_checkin'), { time: fmtTimeAt(w.at, base?.client_addresses, locale) })
       case 'off_hours': return t('oe_w_off_hours')
       case 'past': return t('oe_w_past')
       case 'time_off': return ti(t('oe_w_time_off'), { names: w.ids.map(nameOf).join(', ') })
@@ -285,7 +285,7 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
                   </TouchableOpacity>
                 </View>
                 {plan?.newStart && plan.newEnd && (
-                  <Text style={styles.ends}>{ti(t('oe_runs'), { from: fmtTime(plan.newStart, locale), to: fmtTime(plan.newEnd, locale) })}</Text>
+                  <Text style={styles.ends}>{ti(t('oe_runs'), { from: fmtTimeAt(plan.newStart, base?.client_addresses, locale), to: fmtTimeAt(plan.newEnd, base?.client_addresses, locale) })}</Text>
                 )}
 
                 <Text style={styles.label}>{t('oe_crew')}</Text>

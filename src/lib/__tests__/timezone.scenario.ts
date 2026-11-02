@@ -17,7 +17,7 @@
 //   · the day a clean is bucketed into must agree with the time printed on it,
 //     or we have traded one wrong answer for a different one.
 import {
-  setCurrentTz, fmtTime, fmtDate, fmtDatePart, dayKey, localDayKey,
+  setCurrentTz, setMultiMarket, clockOf, fmtTimeAt, fmtTimeRangeAt, clockInTz, wallTimeInTz, fmtTime, fmtDate, fmtDatePart, dayKey, localDayKey,
   startOfDayInTz, endOfDayInTz, startOfMonthInTz, isForeignTz,
 } from '../timezone'
 import type { DatePart } from '../timezone'
@@ -111,6 +111,38 @@ ok('fmtDate still adds month and day', fmtDate(thu, 'en-US', { weekday: 'short' 
 // ── Empties render empty, not "Invalid Date" ────────────────────────────────
 ok('null time', fmtTime(null), '')
 ok('unparseable time', fmtTime('not a date'), '')
+
+// ── A clean on its property's clock ─────────────────────────────────────────
+// A Chicago company with an Atlanta property. 16:00Z on Nov 3 is 10:00 in Chicago
+// and 11:00 in Atlanta, and the crew in Atlanta has to read 11:00.
+const nov3 = '2026-11-03T16:00:00Z'
+const nov3End = '2026-11-03T19:00:00Z'
+const atlanta = { timezone: 'America/New_York' }
+setCurrentTz('America/Chicago')
+
+setMultiMarket(false)
+ok('switch off: the company clock, whatever the property holds', clockOf(atlanta), 'America/Chicago')
+ok('switch off: reads exactly what fmtTime reads', fmtTimeAt(nov3, atlanta), fmtTime(nov3))
+ok('switch off: a range names no zone', fmtTimeRangeAt(nov3, nov3End, atlanta), '10:00 AM – 1:00 PM')
+
+setMultiMarket(true)
+ok('switch on: the property clock', clockOf(atlanta), 'America/New_York')
+ok('switch on: reads the home\'s time and names it', fmtTimeAt(nov3, atlanta), '11:00 AM EST')
+ok('switch on: a range names the zone once', fmtTimeRangeAt(nov3, nov3End, atlanta), '11:00 AM – 2:00 PM EST')
+ok('switch on, no zone on the row: the company clock, unnamed', fmtTimeAt(nov3, { timezone: null }), '10:00 AM')
+ok('switch on, no address at all: the company clock', fmtTimeAt(nov3, null), '10:00 AM')
+ok('switch on, a zone Intl can\'t name: the company clock, no throw', fmtTimeAt(nov3, { timezone: 'Mars/Olympus' }), '10:00 AM')
+ok('a blank time stays blank', fmtTimeAt(null, atlanta), '')
+
+setCurrentTz('America/New_York')
+ok('Detroit on a New York company is one clock: names nothing', fmtTimeAt(nov3, { timezone: 'America/Detroit' }), '11:00 AM')
+setCurrentTz('America/Chicago')
+
+const home = 'America/New_York'
+ok('the day and the hour can be read on the property\'s clock', [dayKey('2026-11-04T04:30:00Z', home), clockInTz(nov3, home).h], ['2026-11-03', 11])
+ok('and an hour typed on it lands on the right instant', wallTimeInTz('2026-11-03', 11, 0, home).toISOString(), '2026-11-03T16:00:00.000Z')
+ok('with no zone passed these stay on the company clock', [dayKey('2026-11-04T04:30:00Z'), clockInTz(nov3).h, wallTimeInTz('2026-11-03', 10, 0).toISOString()], ['2026-11-03', 10, '2026-11-03T16:00:00.000Z'])
+setMultiMarket(false)
 
 console.log(failures === 0 ? '\nAll timezone invariants hold.' : `\n${failures} FAILURE(S)`)
 process.exit(failures ? 1 : 0)
