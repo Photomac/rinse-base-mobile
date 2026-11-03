@@ -43,7 +43,7 @@
 // Online only. A move queued offline and replayed hours later would be worse
 // than no move, so nothing here goes through the outbox.
 import { isOfficeRole } from './jobScope'
-import { dayKey, wallTimeInTz, clockInTz } from './timezone'
+import { dayKey, wallTimeInTz, clockInTz, clockOf } from './timezone'
 
 /** Statuses a clean can be edited in: not started. */
 export const EDITABLE_STATUSES = ['pending_approval', 'scheduled', 'en_route']
@@ -171,7 +171,7 @@ export interface EditBase {
   /** The departing guest's checkout and the next guest's check-in, when the sync knows them. */
   checkout_time: string | null
   checkin_time: string | null
-  client_addresses: { id?: string; nickname?: string | null; street?: string | null; max_cleaners?: number | null; min_cleaners?: number | null } | null
+  client_addresses: { id?: string; nickname?: string | null; street?: string | null; max_cleaners?: number | null; min_cleaners?: number | null; timezone?: string | null } | null
   /** Who is on it now: user ids in lead-first order, and the lead ('' for none). */
   crew: string[]
   lead: string
@@ -192,9 +192,11 @@ export interface EditDraft {
 /** The sheet's starting values for a clean. */
 export function draftFrom(base: EditBase): EditDraft {
   const ms = Date.parse(base.scheduled_end) - Date.parse(base.scheduled_start)
+  // The sheet reads and takes times on the property's clock, as the web does.
+  const clock = clockOf(base.client_addresses)
   return {
-    ymd: dayKey(base.scheduled_start),
-    start: clockInTz(base.scheduled_start),
+    ymd: dayKey(base.scheduled_start, clock),
+    start: clockInTz(base.scheduled_start, clock),
     minutes: ms > 0 ? Math.round(ms / 60_000) : 120,
     crew: [...base.crew],
     lead: base.lead,
@@ -229,14 +231,15 @@ export interface EditPlan {
 
 /** What saving the draft would change. With `limits`, a new day they rule out is a problem. */
 export function planEdit(base: EditBase, d: EditDraft, limits?: DayLimits): EditPlan {
-  const startMs = d.start ? wallTimeInTz(d.ymd, d.start.h, d.start.mi).getTime() : NaN
+  const clock = clockOf(base.client_addresses)
+  const startMs = d.start ? wallTimeInTz(d.ymd, d.start.h, d.start.mi, clock).getTime() : NaN
   if (!Number.isFinite(startMs)) {
     return { problem: 'no_time', newStart: null, newEnd: null, timeChanged: false, dayChanged: false, crewChanged: false }
   }
   const endMs = startMs + d.minutes * 60_000
   // Instants, never strings: PostgREST spells a time '+00:00', toISOString '.000Z'.
   const timeChanged = startMs !== Date.parse(base.scheduled_start) || endMs !== Date.parse(base.scheduled_end)
-  const dayChanged = d.ymd !== dayKey(base.scheduled_start)
+  const dayChanged = d.ymd !== dayKey(base.scheduled_start, clock)
   const crewChanged = !sameSet(d.crew, base.crew) || (d.crew.length > 0 && d.lead !== base.lead)
   const dayRuledOut = !!limits && dayChanged && !dayAllowed(limits, d.ymd)
   return {
@@ -273,7 +276,8 @@ export interface DayLimits { lo: string | null; hi: string | null; locked: DayLo
 export function dayLimits(base: EditBase, w: BookingWindow | null): DayLimits {
   const day = dayKey(base.scheduled_start)
   if (base.window_minutes != null) return { lo: day, hi: day, locked: 'back_to_back' }
-  const arrival = base.checkin_time ? dayKey(base.checkin_time) : null
+  const clock = clockOf(base.client_addresses)
+  const arrival = base.checkin_time ? dayKey(base.checkin_time, clock) : null
   if (arrival === day || w?.hi === day) return { lo: day, hi: day, locked: 'arrival_day' }
   // The next arrival closes the window, whichever source knows it first.
   let hi = w?.hi ?? null
@@ -311,14 +315,15 @@ export interface WarningInputs {
  *  only when the time changes, crew ones only for people on the clean after
  *  the save (a time change moves the people already on it too). */
 export function editWarnings(base: EditBase, d: EditDraft, plan: EditPlan, inp: WarningInputs): EditWarning[] {
+  const clock = clockOf(base.client_addresses)
   if (plan.problem || !plan.newStart) return []
   const out: EditWarning[] = []
   if (plan.timeChanged && plan.newEnd) {
     // On the day a guest leaves or arrives: start after they leave, finish before the next one comes.
-    if (base.checkout_time && dayKey(base.checkout_time) === d.ymd && Date.parse(plan.newStart) < Date.parse(base.checkout_time)) {
+    if (base.checkout_time && dayKey(base.checkout_time, clock) === d.ymd && Date.parse(plan.newStart) < Date.parse(base.checkout_time)) {
       out.push({ code: 'before_checkout', at: base.checkout_time })
     }
-    if (base.checkin_time && dayKey(base.checkin_time) === d.ymd && Date.parse(plan.newEnd) > Date.parse(base.checkin_time)) {
+    if (base.checkin_time && dayKey(base.checkin_time, clock) === d.ymd && Date.parse(plan.newEnd) > Date.parse(base.checkin_time)) {
       out.push({ code: 'after_checkin', at: base.checkin_time })
     }
     if (d.start && (d.start.h < 7 || d.start.h >= 19)) out.push({ code: 'off_hours' })
@@ -348,7 +353,7 @@ export function editWarnings(base: EditBase, d: EditDraft, plan: EditPlan, inp: 
 
 // Every FK hinted: an unhinted embed turns into a 300 the day a second FK
 // appears. One literal, so scripts/test-task-pay.mjs can read the columns.
-const BASE_SELECT = 'id, tenant_id, status, job_type, scheduled_start, scheduled_end, manually_retimed_at, min_crew, max_crew, is_turnover, reservation_id, address_id, window_minutes, checkout_time, checkin_time, client_addresses!jobs_address_id_fkey(id, nickname, street, max_cleaners, min_cleaners), job_assignments!job_assignments_job_id_fkey(user_id, is_lead)'
+const BASE_SELECT = 'id, tenant_id, status, job_type, scheduled_start, scheduled_end, manually_retimed_at, min_crew, max_crew, is_turnover, reservation_id, address_id, window_minutes, checkout_time, checkin_time, client_addresses!jobs_address_id_fkey(id, nickname, street, max_cleaners, min_cleaners, timezone), job_assignments!job_assignments_job_id_fkey(user_id, is_lead)'
 
 /** The clean, read fresh. null + error when it can't be read. */
 export async function loadEditBase(db: any, jobId: string): Promise<{ base: EditBase | null; error: string | null }> {

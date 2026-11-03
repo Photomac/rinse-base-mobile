@@ -42,7 +42,7 @@ import { cachedRead } from '../lib/dataCache'
 import { prepJobs, prepReads } from '../lib/jobReads'
 import { pickNextArrival, fmtWallTime, type ArrivalRow } from '../lib/nextArrival'
 import { linesByProperty } from '../lib/checkFirst'
-import { todayKey } from '../lib/timezone'
+import { todayKey, zoneTag } from '../lib/timezone'
 import { GOLD, GOLD_MUTED, SLATE, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
 
 type Prop = { job: any; name: string }
@@ -175,7 +175,10 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
       const arrivalLines = Object.entries(arrivals)
         .sort((a, b) => (a[1].time || '99').localeCompare(b[1].time || '99'))
         .map(([id, a]) => {
-          const when = fmtWallTime(a.time, locale)
+          const time = fmtWallTime(a.time, locale)
+          // A bare time at this home: it names the clock as the clean's own time does.
+          const tag = zoneTag(addrById[id], jobByAddr[id]?.scheduled_start)
+          const when = time && tag ? `${time} ${tag}` : time
           const what = a.hold
             ? (when ? ti(t('prep_blocked_from'), { time: when }) : t('prep_blocked_today'))
             : (when ? ti(t('prep_guest_arrives'), { time: when }) : t('prep_arrives_today'))

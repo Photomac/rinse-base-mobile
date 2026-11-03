@@ -46,7 +46,7 @@ export function dashTodayRead(user: any, now: Date): CacheRead {
   return {
     key: `dash:today:${user.id}`,
     q: () => supabase.from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, started_at, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
+      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, started_at, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, timezone), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', from.toISOString())
       .lte('scheduled_start', to.toISOString())
@@ -473,7 +473,7 @@ export function prepReads(user: any, cleans: any[], ymd: string) {
     addresses: {
       key: `prep:addr:${user.id}:${ymd}`,
       q: () => supabase.from('client_addresses')
-        .select('id, lockbox_code, arrival_instructions, laundry_bag_color, default_checkin_time').in('id', addrIds),
+        .select('id, lockbox_code, arrival_instructions, laundry_bag_color, default_checkin_time, timezone').in('id', addrIds),
     } as CacheRead,
     // Yesterday → tomorrow, blocks included: a block is only noise when the
     // stay it echoes or buffers is in view (see lib/nextArrival).
