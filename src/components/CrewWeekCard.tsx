@@ -6,6 +6,9 @@
 //
 // Every write asks for its rows back: RLS refuses by matching zero rows, with
 // no error (crew_time_off's silent no-op, 2026-07-31).
+//
+// Switching a day off they're already on cleans for asks first, then takes them
+// off those cleans and tells the office (release_my_cleans_on_day_off).
 import React, { useCallback, useEffect, useState } from 'react'
 import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native'
 import { supabase } from '../lib/supabase'
@@ -13,7 +16,7 @@ import { useLang } from '../contexts/LangContext'
 import { localeFor, ti } from '../lib/i18n'
 import { dayKey } from '../lib/timezone'
 import { GOLD, SLATE_DARK } from '../lib/theme'
-import { cleansOnWeekday, planDayTap, worksDay, type ScheduleRow } from '../lib/crewSchedule'
+import { cleansOnWeekday, planDayTap, worksDay, type DayTap, type ScheduleRow } from '../lib/crewSchedule'
 
 const SELECT = 'id, day_of_week, is_available, every_other_week, week_anchor'
 const DAYS = [0, 1, 2, 3, 4, 5, 6]
@@ -37,32 +40,52 @@ export function CrewWeekCard({ tenantId, userId }: { tenantId: string; userId: s
 
   useEffect(() => { load() }, [load])
 
-  async function warnIfStillOn(dow: number) {
-    const { data } = await supabase.from('job_assignments')
+  // Upcoming cleans this person is on that fall on this weekday (company clock).
+  async function cleansOn(dow: number): Promise<number> {
+    const { data, error } = await supabase.from('job_assignments')
       .select('jobs!inner(scheduled_start, status)')
       .eq('user_id', userId)
       .in('jobs.status', ['pending_approval', 'scheduled'])
       .gte('jobs.scheduled_start', new Date().toISOString())
-    const days = ((data as any[]) || []).map(r => dayKey(r.jobs.scheduled_start))
-    const count = cleansOnWeekday(days, dow)
-    if (count > 0) Alert.alert(t('my_week'), ti(t('my_week_still_on'), { count: String(count) }))
+    if (error) return 0
+    return cleansOnWeekday(((data as any[]) || []).map(r => dayKey(r.jobs.scheduled_start)), dow)
   }
 
   async function tap(dow: number) {
     if (saving) return
     const plan = planDayTap(rows, dow)
     if (plan.kind === 'last_day') { Alert.alert(t('my_week'), t('my_week_last_day')); return }
-    const turningOff = worksDay(rows, dow)
+    if (!worksDay(rows, dow)) { save(dow, plan, false); return }
+    // Switching a day off takes them off that day's cleans and tells the office
+    // (release_my_cleans_on_day_off, web migration 20261103200000): ask first.
+    const count = await cleansOn(dow).catch(() => 0)
+    if (count === 0) { save(dow, plan, true); return }
+    Alert.alert(t('my_week'), ti(t('my_week_off_confirm'), { count: String(count) }), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('my_week_turn_off'), style: 'destructive', onPress: () => { save(dow, plan, true) } },
+    ])
+  }
+
+  async function save(dow: number, plan: Exclude<DayTap, { kind: 'last_day' }>, turningOff: boolean) {
     setSaving(true)
     const { data, error } = plan.kind === 'insert'
       ? await supabase.from('crew_availability')
           .insert(plan.days.map(d => ({ tenant_id: tenantId, user_id: userId, day_of_week: d, start_time: '08:00', end_time: '17:00', is_available: true })))
           .select(SELECT)
       : await supabase.from('crew_availability').update(plan.patch).eq('id', plan.id).select(SELECT)
+    if (error || !data?.length) { setSaving(false); Alert.alert(t('error'), t('my_week_save_failed')); load(); return }
+    let released = 0
+    if (turningOff) {
+      const { data: n } = await supabase.rpc('release_my_cleans_on_day_off', { p_dow: dow })
+      released = typeof n === 'number' ? n : 0
+    }
     setSaving(false)
-    if (error || !data?.length) { Alert.alert(t('error'), t('my_week_save_failed')); load(); return }
     await load()
-    if (turningOff) warnIfStillOn(dow).catch(() => {})
+    if (!turningOff) return
+    // Still on some (offline, or a server without the function): say so.
+    const left = await cleansOn(dow).catch(() => 0)
+    if (left > 0) Alert.alert(t('my_week'), ti(t('my_week_still_on'), { count: String(left) }))
+    else if (released > 0) Alert.alert(t('my_week'), ti(t('my_week_released'), { count: String(released) }))
   }
 
   if (!allowed) return null
