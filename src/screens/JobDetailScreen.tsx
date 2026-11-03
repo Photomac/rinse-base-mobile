@@ -18,6 +18,7 @@ import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard } from '../components/StayRatingCard'
 import { PhotoViewer } from '../components/PhotoViewer'
 import { ShotThumb } from '../components/ShotThumb'
+import { ClockInOfficeCard } from '../components/ClockInOfficeCard'
 import { StagingPhotoGroups, stagingViewerPhotos } from '../components/StagingPhotoGroups'
 import type { StagingPhotoRow } from '../lib/stagingRooms'
 import { IncidentReportCard } from '../components/IncidentReportCard'
@@ -40,6 +41,8 @@ import { currencySymbol } from '../lib/money'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { linkAnswering } from '../lib/netFetch'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
+import { clockInFields, fmtClockInDistance, notCheckedRole, type ClockInDecision } from '../lib/clockInGate'
+import { checkClockIn, clockInRule, clockInSite, recordRefusal } from '../lib/clockInLocation'
 import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, photosOnPhone, photosOnTheWay, queuedShots } from '../lib/photoQueue'
 import { withShotStates, type ShotState } from '../lib/roomShots'
 import { completeWhileUploading, type WhileUploading } from '../lib/photoBlockers'
@@ -302,6 +305,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null; lockbox_code?: string | null; wifi_name?: string | null; wifi_password?: string | null; arrival_instructions?: string | null } | null>(null)
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
+  // What the clock-in location check decided, for the punch that follows it.
+  const clockInGate = useRef<ClockInDecision | null>(null)
   // The tracker's loads and this screen's punches (lib/timeTracker): the
   // saved copy within a few seconds on a weak signal, and never a copy that
   // predates a punch made here.
@@ -1037,13 +1042,44 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
 
   // Owner/manager on a clean they aren't crew on: ask whose hours these are
   // before anything is written. Everyone else clocks themselves in directly.
-  function handleClockIn() {
+  async function handleClockIn() {
     if (recordsForOthers) { setRecordForOpen(true); return }
+    if (!(await passClockInLocation(handleClockIn))) return
     // The office asked for this note to be read at clock-in: the punch waits
     // for "Got it" (once per wording; an edited note asks again). Then the
     // property's Check first window, when it has a list; then the punch.
     if (crewNoteNeedsAck) { setNotePrompt({ then: () => askCheckFirst(() => clockInAs(null)) }); return }
     askCheckFirst(() => clockInAs(null))
+  }
+
+  // Clock-in only at the property, when the company has it on (lib/clockInGate):
+  // false = refused and told why, nothing written. Ahead of the note and the
+  // Check first windows, so nobody reads them and is then turned away. What it
+  // decided goes on the punch. retry is the tap that brought them here: the
+  // office may have let them in, or they may have walked up to the door.
+  async function passClockInLocation(retry: () => void | Promise<void>): Promise<boolean> {
+    clockInGate.current = null
+    if (notCheckedRole(user.role)) return true
+    setSaving(true)
+    try {
+      const rule = await clockInRule(user.tenant_id)
+      if (!rule.required) return true
+      const decision = await checkClockIn({ sites: [await clockInSite(job)], jobId: job.id, userId: user.id })
+      if (!decision.allow) {
+        await recordRefusal(decision, { tenantId: user.tenant_id, jobId: job.id, userId: user.id })
+        Alert.alert(t('clock_in_refused_title'), ti(t('clock_in_refused_body'), { distance: fmtClockInDistance(decision.distanceM) }), [
+          { text: t('cancel'), style: 'cancel' },
+          ...(user._contact?.dispatchPhone ? [{ text: t('clock_in_call_office'), onPress: () => { Linking.openURL(`tel:${user._contact.dispatchPhone}`) } }] : []),
+          { text: t('clock_in_try_again'), onPress: () => { void retry() } },
+        ])
+        return false
+      }
+      clockInGate.current = decision
+      if (decision.check === 'no_permission') Alert.alert('📍', t('clock_in_location_off'))
+      return true
+    } finally {
+      setSaving(false)
+    }
   }
 
   // Daily mode's "start" is its clock-in: same windows.
@@ -1111,6 +1147,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     const proxy = !!forUserId && forUserId !== user.id
     setRecordForOpen(false)
     setSaving(true)
+    const gate = proxy ? null : clockInGate.current
+    clockInGate.current = null
+    // Desk staff recording for someone: not checked (the phone is theirs, not
+    // the cleaner's), but with the company's switch on the entry says who did it.
+    const officeMark = proxy && (await clockInRule(user.tenant_id)).required
+      ? { clock_in_check: 'office', edited_by: user.id, edited_at: new Date().toISOString() } : {}
     // GPS-verified time tracking: if the arrival geofence recorded a fence
     // entry for this job, backdate the punch to that instant (QB Time
     // pattern — human confirms, no minutes lost), floored at 30min before the
@@ -1127,7 +1169,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       if (clockedInAt > new Date()) clockedInAt = new Date() // never in the future
       stamp = { lat: arrival.lat, lng: arrival.lng }
     } else if (!proxy) {
-      stamp = await quickGpsStamp()
+      // The check's fix when it got one, so no second wait. It doesn't ask the
+      // phone at a property with no pin, and those punches still get their stamp.
+      stamp = (gate?.allow ? gate.stamp : null) ?? await quickGpsStamp()
     }
 
     // Create time entry — this row IS the crew member's pay. The id is minted
@@ -1144,6 +1188,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       arrived_at: arrival?.at ?? null,
       clock_in_lat: stamp?.lat ?? null,
       clock_in_lng: stamp?.lng ?? null,
+      ...clockInFields(gate),
+      ...officeMark,
     }
     const { error: entryErr, queued } = await writeThrough({
       table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
@@ -1327,6 +1373,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   }
 
   async function handleResume() {
+    if (!(await passClockInLocation(handleResume))) return
+    const gate = clockInGate.current
+    clockInGate.current = null
     setSaving(true)
     // Client-minted id, same as clock-in: offline the resume queues instead of
     // failing, and replays idempotently.
@@ -1334,6 +1383,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       id: uuid4(),
       tenant_id: user.tenant_id, job_id: job.id, user_id: user.id,
       clocked_in_at: new Date().toISOString(), entry_type: 'work',
+      ...clockInFields(gate),
     }
     const { error: resumeErr } = await writeThrough({
       table: 'job_time_entries', op: 'upsert', onConflict: 'id', values: entry,
@@ -2277,6 +2327,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             {/* Day shift: time on this job so far, from its Start (lib/jobTimer). */}
             {dailyMode && <JobClock job={{ status: job.status, started_at: jobStartAt }} style={{ fontSize: 18, fontWeight: '900', color: TEAL, fontVariant: ['tabular-nums'] }} />}
           </View>
+
+          {/* The office lets a refused crew member clock in here. Nothing shows
+              with the company's clock-in location switch off. A dispatcher is
+              checked as crew, so they can't let themselves in. */}
+          {isAdminRole && !dailyMode && !readOnly && (
+            <ClockInOfficeCard
+              jobId={job.id}
+              tenantId={user.tenant_id}
+              crew={crewOnJob.filter(c => c.id !== user.id || notCheckedRole(user.role))}
+            />
+          )}
 
           {/* Time entries history */}
           {!dailyMode && timeEntries.filter(e => e.clocked_out_at).map((entry, i) => (

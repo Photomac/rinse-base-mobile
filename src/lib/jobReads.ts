@@ -46,7 +46,7 @@ export function dashTodayRead(user: any, now: Date): CacheRead {
   return {
     key: `dash:today:${user.id}`,
     q: () => supabase.from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, started_at, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, timezone), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
+      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, started_at, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, geocode_precision, photo_url, timezone), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', from.toISOString())
       .lte('scheduled_start', to.toISOString())
@@ -356,6 +356,21 @@ export const checkFirstTenantRead = (tenantId: string): CacheRead => ({
     .select('check_first_required').eq('id', tenantId).maybeSingle(),
 })
 
+/** The company's clock-in location switch and office pin (lib/clockInLocation).
+ *  On its own: before its migration this read errors, which means off. */
+export const clockInRuleRead = (tenantId: string): CacheRead => ({
+  key: `cilrule:${tenantId}`,
+  q: () => supabase.from('tenants')
+    .select('clock_in_location_required, lat, lng').eq('id', tenantId).maybeSingle(),
+})
+
+/** The clean's property and how far its pin can be trusted. */
+export const clockInSiteRead = (jobId: string): CacheRead => ({
+  key: `cilsite:${jobId}`,
+  q: () => supabase.from('jobs')
+    .select('client_addresses!jobs_address_id_fkey(nickname, street, lat, lng, geocode_precision)').eq('id', jobId).maybeSingle(),
+})
+
 // ── Supplies (JobInventoryScreen) ───────────────────────────────────────────
 
 export const inventoryItemsRead = (addrId: string): CacheRead => ({
@@ -520,7 +535,7 @@ export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^
 // card's day keys) is never dropped there. A new per-job or per-property
 // builder must be listed here, or its keys are kept for ever:
 // scripts/test-cache-prune.mjs fails until it is.
-const JOB_KEYS = new Set(['chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
+const JOB_KEYS = new Set(['cilsite', 'chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
   'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'wtcarry', 'cfticks', 'cfphotos', 'cfstart',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
   'crewNoteAck', 'videosowed'])
@@ -581,6 +596,9 @@ export function jobPackReads(job: any, user: any): PackRead[] {
     jobMetaRead(job.id),
     jobCrewRead(job.id),
     ...(addrId ? [propMetaRead(addrId), leadNotesRead(addrId)] : []),
+    // The clock-in location check, so it still works in a dead zone.
+    clockInRuleRead(user.tenant_id),
+    clockInSiteRead(job.id),
     // loadCrewNote
     crewNoteRead(job.id),
     crewNoteAckRead(job.id, user.id),
