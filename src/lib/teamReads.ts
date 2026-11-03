@@ -51,7 +51,7 @@ export function teamCleansRead(tenantId: string, dayStartMs: number, dayEndMs: n
   return {
     key: `team:cleans:${tenantId}`,
     q: () => supabase.from('jobs')
-      .select('id, status, job_type, scheduled_start, scheduled_end, completed_at, completed_by_user_id, client_addresses!jobs_address_id_fkey(nickname, street, lat, lng, geocode_precision), job_assignments!job_assignments_job_id_fkey(user_id)')
+      .select('id, status, job_type, scheduled_start, scheduled_end, completed_at, completed_by_user_id, client_addresses!jobs_address_id_fkey(nickname, street, lat, lng, geocode_precision, timezone), job_assignments!job_assignments_job_id_fkey(user_id)')
       .eq('tenant_id', tenantId)
       .gte('scheduled_start', new Date(dayStartMs).toISOString())
       .lt('scheduled_start', new Date(dayEndMs).toISOString())

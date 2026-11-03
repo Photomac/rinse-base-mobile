@@ -417,5 +417,28 @@ if (['leadSelection.ts', 'weeklySchedule.ts', 'jobQueue.ts'].every(f => existsSy
   console.log(`–  web parity skipped (no current leadSelection/weeklySchedule/jobQueue under ${WEB}/src/lib)`)
 }
 
+// ── a clean on its property's clock ──────────────────────────────────────────
+// A Chicago company, an Atlanta home. The sheet shows 11:00 for the 16:00Z clean,
+// and an hour picked there is meant on the home's clock.
+{
+  const ATL = {
+    ...base,
+    scheduled_start: '2026-11-03T16:00:00Z', scheduled_end: '2026-11-03T18:00:00Z',
+    client_addresses: { ...(base.client_addresses || {}), timezone: 'America/New_York' },
+  }
+  Z.setCurrentTz('America/Chicago')
+  check('switch off: the sheet reads the company clock', E.draftFrom(ATL).start, { h: 10, mi: 0 })
+  Z.setMultiMarket(true)
+  const d = E.draftFrom(ATL)
+  check('switch on: the sheet reads the home\'s clock', d.start, { h: 11, mi: 0 })
+  check('switch on: untouched is nothing to save', E.planEdit(ATL, d).problem, 'nothing')
+  check('switch on: noon picked there lands at noon in Atlanta',
+    E.planEdit(ATL, { ...d, start: { h: 12, mi: 0 } }).newStart, '2026-11-03T17:00:00.000Z')
+  check('switch on: a late-evening clean keeps the home\'s day',
+    E.draftFrom({ ...ATL, scheduled_start: '2026-11-04T04:30:00Z', scheduled_end: '2026-11-04T05:30:00Z' }).ymd, '2026-11-03')
+  Z.setMultiMarket(false)
+  Z.setCurrentTz('America/New_York')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

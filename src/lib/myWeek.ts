@@ -93,6 +93,7 @@ export type WeekJob = {
   id: string
   status: string
   job_type?: string | null
+  client_addresses?: { timezone?: string | null } | null
   scheduled_start?: string | null
   scheduled_end?: string | null
 }

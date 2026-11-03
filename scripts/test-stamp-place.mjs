@@ -123,7 +123,7 @@ check("Team today's office start stamps nothing", /clock_in_lat|quickGpsStamp|ge
 check('Team today takes no GPS fix anywhere', /quickGpsStamp|getCurrentPosition/.test(team), false)
 const reads = read('src/lib/teamReads.ts')
 check('Team today reads the stamps', /clock_in_lat, clock_in_lng, clock_out_lat, clock_out_lng/.test(reads), true)
-check("…and the homes' pins", /client_addresses!jobs_address_id_fkey\(nickname, street, lat, lng, geocode_precision\)/.test(reads), true)
+check("…and the homes' pins", /client_addresses!jobs_address_id_fkey\(nickname, street, lat, lng, geocode_precision, timezone\)/.test(reads), true)
 check('…and shows both ends of an entry', /\{stampLine\(e, false\)\}/.test(team) && /\{!open && stampLine\(e, true\)\}/.test(team), true)
 check('…naming homes only from the day on screen', /dayKey\(at\) === ymd/.test(team), true)
 

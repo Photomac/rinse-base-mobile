@@ -82,7 +82,7 @@ export function myWeekRead(user: { id: string; tenant_id: string }, days: DayBou
           .order('clocked_in_at')
           .limit(500),
         supabase.from('jobs')
-          .select('id, status, job_type, scheduled_start, scheduled_end, job_assignments!inner(user_id)')
+          .select('id, status, job_type, scheduled_start, scheduled_end, client_addresses!jobs_address_id_fkey(timezone), job_assignments!inner(user_id)')
           .eq('tenant_id', user.tenant_id)
           .eq('job_assignments.user_id', user.id)
           .in('status', SCHEDULED_STATUSES)
@@ -105,7 +105,7 @@ export function myWeekRead(user: { id: string; tenant_id: string }, days: DayBou
         weekStart,
         entries: (e.data ?? []) as TeamEntry[],
         jobs: ((j.data ?? []) as any[]).map(x => ({
-          id: x.id, status: x.status, job_type: x.job_type, scheduled_start: x.scheduled_start, scheduled_end: x.scheduled_end,
+          id: x.id, status: x.status, job_type: x.job_type, scheduled_start: x.scheduled_start, scheduled_end: x.scheduled_end, client_addresses: x.client_addresses,
         })),
         payThrough: payFailed ? null : days.map((_, i) => (i < payDays ? payTotals(pays[i].data) : null)),
         payError: payFailed ? (payFailed.error?.message || String(payFailed.error)) : null,
