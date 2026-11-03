@@ -187,6 +187,9 @@ const scenarios: Record<string, () => Promise<void>> = {
       trashDaysRead: () => R.trashDaysRead(A),
       carriedLinesRead: () => R.carriedLinesRead(J),
       prepReads: () => R.prepReads(CREW, [j], '2026-10-13'),
+      // The linen driver's week: one key per person, kept (not a job's or a property's).
+      driverStopsRead: () => R.driverStopsRead(CREW, new Date()),
+      driverLinenReads: () => R.driverLinenReads(CREW, [j]),
       jobPackReads: () => [
         ...R.jobPackReads(j, CREW),
         ...R.jobPackReads({ ...j, job_type: 'inspection' }, { ...CREW, _timeMode: 'daily' }),

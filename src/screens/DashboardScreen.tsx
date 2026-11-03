@@ -26,6 +26,7 @@ import { prefetchDays, loadDayPack, onDayPackChange, stopsAhead, type DayPack } 
 import { writeThrough, overlayPending, flushOutbox, onOutboxDrained, uuid4, isQueued } from '../lib/outbox'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { PrepCard } from '../components/PrepCard'
+import { DriverStopsCard } from '../components/DriverStopsCard'
 import { SentBackCard } from '../components/SentBackCard'
 import { JobClock } from '../components/JobClock'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
@@ -633,6 +634,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
 
             {/* Get ready for today — renders nothing when there's nothing to prep */}
             <PrepCard user={user} jobs={todayJobs} onJobPress={onJobPress} />
+
+            {/* The linen driver's stops — renders nothing for anyone who drives no clean */}
+            <DriverStopsCard user={user} reloadKey={todayJobs} />
 
             {/* Next job */}
             {nextJob && !activeJob && (
