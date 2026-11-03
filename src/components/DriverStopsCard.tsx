@@ -160,15 +160,18 @@ function TickButton({ label, at, addr, locale, busy, primary, onPress }: {
       style={[styles.btn, done ? styles.btnDone : primary ? styles.btnPrimary : styles.btnPlain]}>
       {busy
         ? <ActivityIndicator size="small" color={done || primary ? '#fff' : SLATE} />
-        : <Text style={[styles.btnText, (done || primary) && styles.btnTextOn]}>
-            {done ? `✓ ${label} ${fmtTimeAt(at, addr, locale)}` : label}
-          </Text>}
+        : <>
+            <Text style={[styles.btnText, (done || primary) && styles.btnTextOn]} numberOfLines={1}>
+              {done ? `✓ ${label}` : label}
+            </Text>
+            {done && <Text style={styles.btnTime} numberOfLines={1}>{fmtTimeAt(at, addr, locale)}</Text>}
+          </>}
     </TouchableOpacity>
   )
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: '#F0F9FF', borderRadius: 14, borderWidth: 1, borderColor: '#BAE6FD', padding: 14, marginHorizontal: 16, marginTop: 16 },
+  card: { backgroundColor: '#F0F9FF', borderRadius: 14, borderWidth: 1, borderColor: '#BAE6FD', padding: 14, margin: 16 },
   title: { fontSize: 16, fontWeight: '700', color: SLATE, marginBottom: 4 },
   dayHead: { fontSize: 13, fontWeight: '700', color: GOLD_MUTED, marginTop: 10, marginBottom: 2 },
   stop: { borderTopWidth: 1, borderTopColor: BORDER, paddingVertical: 10 },
@@ -178,10 +181,11 @@ const styles = StyleSheet.create({
   line: { fontSize: 13, color: TEXT, marginTop: 4 },
   muted: { fontSize: 12, color: TEXT_MUTED, marginTop: 4 },
   buttons: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  btn: { flex: 1, borderRadius: 10, paddingVertical: 10, alignItems: 'center', borderWidth: 1 },
+  btn: { flex: 1, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 1, minHeight: 48 },
   btnPrimary: { backgroundColor: SLATE, borderColor: SLATE },
   btnDone: { backgroundColor: '#15803D', borderColor: '#15803D' },
   btnPlain: { backgroundColor: '#fff', borderColor: BORDER },
   btnText: { fontSize: 13, fontWeight: '700', color: SLATE },
   btnTextOn: { color: '#fff' },
+  btnTime: { fontSize: 11, fontWeight: '600', color: '#fff', marginTop: 2, opacity: 0.9 },
 })
