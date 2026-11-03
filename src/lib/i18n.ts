@@ -4,6 +4,17 @@ export type Language = 'en' | 'es' | 'pt'
 
 export const translations = {
   en: {
+    // Dashboard "Your linen drops" card: the linen driver's stops (DriverStopsCard)
+    driver_title: 'Your linen drops',
+    driver_n_drops: '{n} drops',
+    driver_n_drops_one: '1 drop',
+    driver_none_today: 'No linen drops today.',
+    driver_cleaning: 'Cleaning: {names}',
+    driver_no_linen_list: 'No linen list for this property yet. Ask the office what to bring.',
+    driver_dropped: 'Dropped off',
+    driver_picked_up: 'Picked up',
+    driver_tick_failed_title: "Couldn't save",
+    driver_tick_failed: 'Check your signal and tap again.',
     // Dashboard "Get ready for today" prep card
     prep_title: 'Get ready for today',
     prep_all_set: 'All set for today',
@@ -1061,6 +1072,17 @@ export const translations = {
     oe_err_crew_time_saved: "The new time is saved, but the crew couldn't be changed ({why}). Check who is on this clean."
   },
   es: {
+    // Tarjeta "Tus entregas de ropa de cama" (DriverStopsCard)
+    driver_title: 'Tus entregas de ropa de cama',
+    driver_n_drops: '{n} entregas',
+    driver_n_drops_one: '1 entrega',
+    driver_none_today: 'Hoy no tienes entregas de ropa de cama.',
+    driver_cleaning: 'Limpian: {names}',
+    driver_no_linen_list: 'Esta propiedad aún no tiene lista de ropa de cama. Pregunta a la oficina qué llevar.',
+    driver_dropped: 'Entregada',
+    driver_picked_up: 'Recogida',
+    driver_tick_failed_title: 'No se pudo guardar',
+    driver_tick_failed: 'Revisa tu señal y vuelve a tocar.',
     // Tarjeta "Prepárate para hoy"
     prep_title: 'Prepárate para hoy',
     prep_all_set: 'Todo listo para hoy',
@@ -2110,6 +2132,17 @@ export const translations = {
     oe_err_crew_time_saved: "La nueva hora quedó guardada, pero no se pudo cambiar el equipo ({why}). Revisa quién está en esta limpieza."
   },
   pt: {
+    // Cartão "Suas entregas de roupa de cama" (DriverStopsCard)
+    driver_title: 'Suas entregas de roupa de cama',
+    driver_n_drops: '{n} entregas',
+    driver_n_drops_one: '1 entrega',
+    driver_none_today: 'Nenhuma entrega de roupa de cama hoje.',
+    driver_cleaning: 'Limpando: {names}',
+    driver_no_linen_list: 'Esta propriedade ainda não tem lista de roupa de cama. Pergunte ao escritório o que levar.',
+    driver_dropped: 'Entregue',
+    driver_picked_up: 'Recolhida',
+    driver_tick_failed_title: 'Não foi possível salvar',
+    driver_tick_failed: 'Verifique o sinal e toque de novo.',
     // Cartão "Prepare-se para hoje"
     prep_title: 'Prepare-se para hoje',
     prep_all_set: 'Tudo pronto para hoje',
