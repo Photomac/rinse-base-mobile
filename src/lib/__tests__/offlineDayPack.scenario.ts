@@ -94,7 +94,7 @@ function jobRow(id: string, start: string, status: string, crew: string[], addr:
     seam_access_code: null, laundry_done_onsite: false, pet_fee_applied: false, checkout_time: null, checkin_time: null, urgency: null,
     crew_note: null, crew_note_at_clock_in: false, started_at: null,
     clients: { full_name: 'Red Rock Rentals', phone: '555-0100', client_type: 'property_manager' },
-    client_addresses: { id: a.id, street: a.street, city: 'Sedona', nickname: a.nickname, lockbox_code: a.lockbox_code, timezone: null, lat: 34.87, lng: -111.76, photo_url: addressRow(a).photo_url },
+    client_addresses: { id: a.id, street: a.street, city: 'Sedona', nickname: a.nickname, lockbox_code: a.lockbox_code, timezone: null, lat: 34.87, lng: -111.76, geocode_precision: 'exact', photo_url: addressRow(a).photo_url },
     job_assignments: crew.map(u => ({ user_id: u })),
     crew: crew.map((u, i) => ({ user_id: u, is_lead: i === 0, users: { full_name: NAMES[u] } })),
     property_reservations: { guest_count: 4, pet_count: 0 },
@@ -118,7 +118,7 @@ function seedServer() {
   server.tables = {
     jobs,
     client_addresses: Object.values(ADDR).map(addressRow),
-    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true, crew_supply_counts: true }],
+    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true, crew_supply_counts: true, clock_in_location_required: false, lat: 34.87, lng: -111.76 }],
     job_assignments: jobs.flatMap(j => j.crew.map((c: any) => ({ job_id: j.id, user_id: c.user_id, is_lead: c.is_lead, users: { id: c.user_id, full_name: NAMES[c.user_id] } }))),
     address_checklist_templates: [
       { id: 'tp1', address_id: 'A2', room: 'Kitchen', title: 'Wipe counters', sort_order: 1, requires_photo: false },
