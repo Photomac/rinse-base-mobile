@@ -9,6 +9,7 @@ import { useLang } from '../contexts/LangContext'
 import { localeFor, ti } from '../lib/i18n'
 import { pendingOpCount, rejectedOps, clearRejected, flushOutbox } from '../lib/outbox'
 import { SLATE_DARK, GOLD } from '../lib/theme'
+import { CrewWeekCard } from '../components/CrewWeekCard'
 import { currencySymbol } from '../lib/money'
 // JS API only — expo-updates is already in the native binary (it is what
 // delivers OTAs), so reading these adds no native dependency and this screen
@@ -360,6 +361,8 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
             )}
           </View>
         )}
+
+        <CrewWeekCard tenantId={user.tenant_id} userId={user.id} />
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>{t('time_off')}</Text>
