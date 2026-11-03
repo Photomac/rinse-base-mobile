@@ -31,7 +31,7 @@ import { JobClock } from '../components/JobClock'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
 // src/lib/timezone.ts.
-import { fmtTime, fmtDate, fmtDateTime, dayKey, todayKey, startOfDayInTz, startOfMonthInTz } from '../lib/timezone'
+import { fmtTime, fmtTimeAt, fmtTimeRangeAt, fmtDate, fmtDateTime, dayKey, todayKey, startOfDayInTz, startOfMonthInTz, noteDayCleans } from '../lib/timezone'
 import { shiftYmd } from '../lib/nextArrival'
 import { useAwaitingAnswers } from '../lib/useCrewAnswers'
 
@@ -198,7 +198,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       // until it is closed. The status filter keeps this empty for a crew with
       // nothing outstanding.
       cachedQuery(`dash:stranded:${user.id}`, supabase.from('jobs')
-        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, source_report_id, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url), job_assignments(user_id)')
+        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, source_report_id, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, timezone), job_assignments(user_id)')
         .eq('tenant_id', user.tenant_id)
         .in('status', ['in_progress', 'en_route'])
         .lt('scheduled_start', todayStart.toISOString())
@@ -237,6 +237,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // whichever one Postgres happened to hand back first — and could change on
     // a refresh. Next now means next in the order they actually work.
     // (dayView picks active/next from this order.)
+    // Before the rows land: a day that crosses a zone line names every clean's zone.
+    noteDayCleans(myTodayAll)
     setDayRows([...myTodayAll].sort(byCrewDayOrder))
     sameDayInspections(user, 'home', myTodayAll).then(ids => setDayRows(rows => markSameDay(rows, ids))).catch(() => {})
 
@@ -356,10 +358,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const askStartFrom = (arrival: { jobId: string; at: string }, tappedAt: string) => new Promise<string | null>(resolve => {
     const row = dayRows.find((r: any) => r.id === arrival.jobId)
     const home = (row?.client_addresses as any)?.nickname || (row?.client_addresses as any)?.street || t('arrival_generic_property')
-    const arrived = fmtTime(arrival.at, localeFor(lang))
+    const arrived = fmtTimeAt(arrival.at, row?.client_addresses, localeFor(lang))
     Alert.alert(t('start_from_arrival_title'), ti(t('start_from_arrival_body'), { home, arrived }), [
       { text: ti(t('start_from_arrival_then'), { arrived }), onPress: () => resolve(arrival.at) },
-      { text: ti(t('start_from_arrival_now'), { now: fmtTime(tappedAt, localeFor(lang)) }), onPress: () => resolve(null) },
+      { text: ti(t('start_from_arrival_now'), { now: fmtTimeAt(tappedAt, row?.client_addresses, localeFor(lang)) }), onPress: () => resolve(null) },
     ], { cancelable: false })
   })
 
@@ -618,7 +620,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   <Text style={styles.activeClient}>
                     {(activeJob.client_addresses as any)?.nickname || (canSeeClientNames ? (activeJob.clients as any)?.full_name : (activeJob.client_addresses as any)?.street)}
                   </Text>
-                  <Text style={styles.activeTime}>{fmtTime(activeJob.scheduled_start, localeFor(lang))} – {fmtTime(activeJob.scheduled_end, localeFor(lang))}</Text>
+                  <Text style={styles.activeTime}>{fmtTimeRangeAt(activeJob.scheduled_start, activeJob.scheduled_end, activeJob.client_addresses, localeFor(lang))}</Text>
                 </View>
                 {/* Day shift: time on this job so far, from its Start (lib/jobTimer). */}
                 {dailyMode && <JobClock job={activeJob} prefix="⏱ " style={styles.activeClock} />}
@@ -637,7 +639,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               <TouchableOpacity style={styles.nextJobCard} onPress={() => onJobPress(nextJob)}>
                 <View style={styles.nextJobHeader}>
                   <Text style={styles.nextJobLabel}>⏰ {t('next_job')}</Text>
-                  <Text style={styles.nextJobTime}>{fmtTime(nextJob.scheduled_start, localeFor(lang))}</Text>
+                  <Text style={styles.nextJobTime}>{fmtTimeAt(nextJob.scheduled_start, nextJob.client_addresses, localeFor(lang))}</Text>
                 </View>
                 <Text style={styles.nextJobClient}>
                   {(nextJob.client_addresses as any)?.nickname || (canSeeClientNames ? (nextJob.clients as any)?.full_name : (nextJob.client_addresses as any)?.street)}
@@ -732,7 +734,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     <View style={[styles.jobDot, { backgroundColor: isDone ? '#10B981' : isActive ? '#F59E0B' : '#3B82F6' }]} />
                     <View style={styles.jobInfo}>
                       <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}</Text>
-                      <Text style={styles.jobTime}>{[fmtTime(job.scheduled_start, localeFor(lang)), ...kindParts(job, kindLabels)].join(' · ')}</Text>
+                      <Text style={styles.jobTime}>{[fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang)), ...kindParts(job, kindLabels)].join(' · ')}</Text>
                       <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                     </View>
                     {dailyMode && isActive && <JobClock job={job} prefix="⏱ " style={styles.jobClock} />}

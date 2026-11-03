@@ -21,7 +21,7 @@ import { GOLD, SLATE_DARK } from '../lib/theme'
 import { formatMoney } from '../lib/money'
 import { cachedRead } from '../lib/dataCache'
 import { flushOutbox, onOutboxDrained, overlayPending } from '../lib/outbox'
-import { dayKey, fmtDate, fmtDatePart, fmtTime, todayKey, wallTimeInTz } from '../lib/timezone'
+import { dayKey, fmtDate, fmtDatePart, fmtTime, noteDayCleans, todayKey, wallTimeInTz } from '../lib/timezone'
 import {
   addDays, daysBetween, weekDays, weekStartFor, buildWeek, overUnderMinutes, weekPaydays, stillScheduledMs, stillToComePay,
   type DayBounds, type PaySchedule, type WeekDay,
@@ -94,6 +94,7 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
         setOffline(false)
         setNothingSaved(false)
       } else if (res.data && res.data.weekStart === start) {
+        noteDayCleans(res.data.jobs)
         // A Start / End queued on this phone (no signal) shows as made.
         const entries = await overlayPending('job_time_entries', res.data.entries,
           v => v.user_id === user.id && typeof v.clocked_in_at === 'string')

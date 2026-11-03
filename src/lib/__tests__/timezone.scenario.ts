@@ -17,10 +17,13 @@
 //   · the day a clean is bucketed into must agree with the time printed on it,
 //     or we have traded one wrong answer for a different one.
 import {
-  setCurrentTz, fmtTime, fmtDate, fmtDatePart, dayKey, localDayKey,
+  setCurrentTz, setMultiMarket, clockOf, fmtTimeAt, fmtTimeRangeAt, fmtClockAt, zoneTag, sameClock, noteDayCleans, dayClocksOf, deviceTz, fmtDateTime, clockInTz, wallTimeInTz, fmtTime, fmtDate, fmtDatePart, dayKey, localDayKey,
   startOfDayInTz, endOfDayInTz, startOfMonthInTz, isForeignTz,
 } from '../timezone'
 import type { DatePart } from '../timezone'
+
+// The phone's own zone, for the scenarios about it. Node re-reads TZ when it's set.
+const phoneIn = (tz: string) => { (globalThis as any).process.env.TZ = tz }
 
 let failures = 0
 const ok = (name: string, got: unknown, want: unknown) => {
@@ -111,6 +114,182 @@ ok('fmtDate still adds month and day', fmtDate(thu, 'en-US', { weekday: 'short' 
 // ── Empties render empty, not "Invalid Date" ────────────────────────────────
 ok('null time', fmtTime(null), '')
 ok('unparseable time', fmtTime('not a date'), '')
+
+// ── A clean on its property's clock ─────────────────────────────────────────
+// A Chicago company with an Atlanta property. 16:00Z on Nov 3 is 10:00 in Chicago
+// and 11:00 in Atlanta, and the crew in Atlanta has to read 11:00.
+const nov3 = '2026-11-03T16:00:00Z'
+const nov3End = '2026-11-03T19:00:00Z'
+const atlanta = { timezone: 'America/New_York' }
+setCurrentTz('America/Chicago')
+
+setMultiMarket(false)
+ok('switch off: the company clock, whatever the property holds', clockOf(atlanta), 'America/Chicago')
+ok('switch off: reads exactly what fmtTime reads', fmtTimeAt(nov3, atlanta), fmtTime(nov3))
+ok('switch off: a range names no zone', fmtTimeRangeAt(nov3, nov3End, atlanta), '10:00 AM – 1:00 PM')
+
+setMultiMarket(true)
+phoneIn('America/Chicago')
+ok('switch on: the property clock', clockOf(atlanta), 'America/New_York')
+ok('switch on: reads the home\'s time and names it', fmtTimeAt(nov3, atlanta), '11:00 AM EST')
+ok('switch on: a range names the zone once', fmtTimeRangeAt(nov3, nov3End, atlanta), '11:00 AM – 2:00 PM EST')
+ok('switch on, no zone on the row: the company clock, unnamed', fmtTimeAt(nov3, { timezone: null }), '10:00 AM')
+ok('switch on, no address at all: the company clock', fmtTimeAt(nov3, null), '10:00 AM')
+ok('switch on, a zone Intl can\'t name: the company clock, no throw', fmtTimeAt(nov3, { timezone: 'Mars/Olympus' }), '10:00 AM')
+ok('a blank time stays blank', fmtTimeAt(null, atlanta), '')
+
+setCurrentTz('America/New_York')
+phoneIn('America/New_York')
+ok('Detroit on a New York company is one clock: names nothing', fmtTimeAt(nov3, { timezone: 'America/Detroit' }), '11:00 AM')
+phoneIn('America/Chicago')
+setCurrentTz('America/Chicago')
+
+const home = 'America/New_York'
+ok('the day and the hour can be read on the property\'s clock', [dayKey('2026-11-04T04:30:00Z', home), clockInTz(nov3, home).h], ['2026-11-03', 11])
+ok('and an hour typed on it lands on the right instant', wallTimeInTz('2026-11-03', 11, 0, home).toISOString(), '2026-11-03T16:00:00.000Z')
+ok('with no zone passed these stay on the company clock', [dayKey('2026-11-04T04:30:00Z'), clockInTz(nov3).h, wallTimeInTz('2026-11-03', 10, 0).toISOString()], ['2026-11-03', 10, '2026-11-03T16:00:00.000Z'])
+setMultiMarket(false)
+phoneIn('Europe/Lisbon')
+
+// ── A crew member who crosses a zone line ───────────────────────────────────
+// Five Star Hospitality: a Chicago company with crew crossing the Central/Eastern
+// line several times a day. Michigan City IN is Central; New Buffalo MI and South
+// Bend IN are Eastern. The wrong answer this holds off, from PR #233 as first
+// written: 10:30 AM EST, 10:00 AM, 11:00 AM EST, 12:00 PM EST, 11:30 AM. The bare
+// ones are Central, and nothing on the screen said so.
+const michiganCity = { timezone: 'America/Chicago' }
+const michiganCityKnox = { timezone: 'America/Indiana/Knox' } // the same clock, another name
+const newBuffalo = { timezone: 'America/Detroit' }
+const southBend = { timezone: 'America/Indiana/Indianapolis' }
+const noPin = { timezone: null }
+const row = (at: string, address: any, status = 'scheduled') => ({ scheduled_start: at, status, client_addresses: address })
+
+// One crossing day, in the order they're worked. A fresh start each time.
+const winter = [
+  row('2026-11-04T15:30:00Z', newBuffalo),
+  row('2026-11-04T16:00:00Z', michiganCity),
+  row('2026-11-04T16:00:00Z', southBend),
+  row('2026-11-04T17:00:00Z', newBuffalo),
+  row('2026-11-04T17:30:00Z', michiganCity),
+]
+const summer = [
+  row('2026-07-15T14:30:00Z', newBuffalo),
+  row('2026-07-15T15:00:00Z', michiganCity),
+  row('2026-07-15T15:00:00Z', southBend),
+  row('2026-07-15T16:00:00Z', newBuffalo),
+  row('2026-07-15T16:30:00Z', michiganCity),
+]
+const reads = (rows: any[], days?: any) => rows.map(r => fmtTimeAt(r.scheduled_start, r.client_addresses, 'en-US', days)).join(' | ')
+const start = (company: string, phone: string, multi = true) => {
+  setMultiMarket(false) // forgets the days
+  setMultiMarket(multi)
+  setCurrentTz(company)
+  phoneIn(phone)
+}
+
+start('America/Chicago', 'America/Chicago')
+ok('the phone\'s zone is what the test says it is', deviceTz(), 'America/Chicago')
+noteDayCleans(winter)
+const namedWinter = '10:30 AM EST | 10:00 AM CST | 11:00 AM EST | 12:00 PM EST | 11:30 AM CST'
+ok('a crossing day names every clean, Central ones too', reads(winter), namedWinter)
+ok('a range names it once', fmtTimeRangeAt('2026-11-04T16:00:00Z', '2026-11-04T19:00:00Z', michiganCity), '10:00 AM – 1:00 PM CST')
+ok('a company-clock time on that day says which clock', fmtTime('2026-11-04T16:00:00Z'), '10:00 AM CST')
+ok('and with a date', fmtDateTime('2026-11-04T16:00:00Z'), 'Nov 4, 10:00 AM CST')
+ok('another language keeps the zone\'s short name', fmtTimeAt('2026-11-04T16:00:00Z', michiganCity, 'es-MX').replace(/[  ]/g, ' '), '10:00 a.m. CST')
+ok('a cell can have the time and the zone apart', [fmtClockAt('2026-11-04T15:30:00Z', newBuffalo), zoneTag(newBuffalo, '2026-11-04T15:30:00Z')], ['10:30 AM', 'EST'])
+
+start('America/Chicago', 'America/Detroit')
+noteDayCleans(winter)
+ok('the same day on a phone already over the line reads the same', reads(winter), namedWinter)
+
+start('America/Chicago', 'America/Chicago')
+noteDayCleans(summer)
+ok('summer: CDT and EDT', reads(summer), '10:30 AM EDT | 10:00 AM CDT | 11:00 AM EDT | 12:00 PM EDT | 11:30 AM CDT')
+
+// A day on one clock, with the phone on it: as it has always read.
+start('America/Chicago', 'America/Chicago')
+noteDayCleans([row('2026-11-05T16:00:00Z', michiganCity), row('2026-11-05T18:00:00Z', michiganCityKnox)])
+ok('a one-clock day on its own phone names nothing', [fmtTimeAt('2026-11-05T16:00:00Z', michiganCity), fmtTimeAt('2026-11-05T18:00:00Z', michiganCityKnox)], ['10:00 AM', '12:00 PM'])
+ok('Knox and Chicago are one clock by wall time', sameClock('America/Indiana/Knox', 'America/Chicago', new Date('2026-11-05T16:00:00Z')), true)
+ok('and the day beside it has its own answer', [fmtTimeAt('2026-11-04T16:00:00Z', michiganCity)], ['10:00 AM'])
+noteDayCleans(winter)
+ok('a crossing Wednesday leaves a one-clock Thursday alone', [fmtTimeAt('2026-11-04T16:00:00Z', michiganCity), fmtTimeAt('2026-11-05T16:00:00Z', michiganCity)], ['10:00 AM CST', '10:00 AM'])
+
+// The phone is the other thing that makes a bare time a guess.
+start('America/Chicago', 'America/Detroit')
+noteDayCleans([row('2026-11-05T16:00:00Z', michiganCity)])
+ok('a one-clock Central day on a phone over the line names it', fmtTimeAt('2026-11-05T16:00:00Z', michiganCity), '10:00 AM CST')
+start('America/New_York', 'America/Chicago')
+ok('a phone behind its New York company names the company\'s own clock', fmtTimeAt('2026-11-05T16:00:00Z', { timezone: 'America/Detroit' }), '11:00 AM EST')
+start('America/Chicago', 'America/Chicago')
+noteDayCleans([row('2026-11-05T16:00:00Z', newBuffalo)])
+ok('all-Eastern day, phone in Chicago: named', fmtTimeAt('2026-11-05T16:00:00Z', newBuffalo), '11:00 AM EST')
+start('America/Chicago', 'America/Detroit')
+noteDayCleans([row('2026-11-05T16:00:00Z', newBuffalo)])
+ok('all-Eastern day, phone in Michigan: off the company\'s clock, so still named', fmtTimeAt('2026-11-05T16:00:00Z', newBuffalo), '11:00 AM EST')
+
+// A property with no pin has no zone: it reads the company clock, and says so.
+start('America/Chicago', 'America/Chicago')
+noteDayCleans([row('2026-11-05T16:00:00Z', noPin)])
+ok('no pin, alone, phone on the company clock: as it always read', fmtTimeAt('2026-11-05T16:00:00Z', noPin), '10:00 AM')
+noteDayCleans([...winter, row('2026-11-04T18:00:00Z', noPin)])
+ok('no pin on a crossing day names the clock it was read on', fmtTimeAt('2026-11-04T18:00:00Z', noPin), '12:00 PM CST')
+ok('no address at all, the same', fmtTimeAt('2026-11-04T18:00:00Z', null), '12:00 PM CST')
+start('America/Chicago', 'America/Detroit')
+ok('no pin, phone over the line: named', fmtTimeAt('2026-11-05T16:00:00Z', noPin), '10:00 AM CST')
+start('America/Chicago', 'America/Chicago')
+noteDayCleans([row('2026-11-05T16:00:00Z', noPin), row('2026-11-05T18:00:00Z', michiganCity)])
+ok('no pin beside a Central clean is one clock', fmtTimeAt('2026-11-05T16:00:00Z', noPin), '10:00 AM')
+
+// By wall clock, never by name.
+start('America/New_York', 'America/New_York')
+noteDayCleans([row('2026-11-05T16:00:00Z', { timezone: 'America/Detroit' }), row('2026-11-05T18:00:00Z', { timezone: 'America/New_York' })])
+ok('Detroit on a New York company, New York phone: names nothing', [fmtTimeAt('2026-11-05T16:00:00Z', { timezone: 'America/Detroit' }), fmtTimeAt('2026-11-05T18:00:00Z', { timezone: 'America/New_York' })], ['11:00 AM', '1:00 PM'])
+start('America/New_York', 'America/Detroit')
+ok('and on a Detroit phone', fmtTimeAt('2026-11-05T16:00:00Z', { timezone: 'America/New_York' }), '11:00 AM')
+start('America/Denver', 'America/Denver')
+noteDayCleans([row('2026-01-14T17:00:00Z', { timezone: 'America/Phoenix' }), row('2026-01-14T19:00:00Z', { timezone: 'America/Denver' })])
+ok('Phoenix beside Denver in winter is one clock', fmtTimeAt('2026-01-14T19:00:00Z', { timezone: 'America/Denver' }), '12:00 PM')
+noteDayCleans([row('2026-07-15T17:00:00Z', { timezone: 'America/Phoenix' }), row('2026-07-15T19:00:00Z', { timezone: 'America/Denver' })])
+ok('and two in summer', [fmtTimeAt('2026-07-15T17:00:00Z', { timezone: 'America/Phoenix' }), fmtTimeAt('2026-07-15T19:00:00Z', { timezone: 'America/Denver' })], ['10:00 AM MST', '1:00 PM MDT'])
+
+// A cancelled clean isn't happening, and shouldn't start naming the rest.
+start('America/Chicago', 'America/Chicago')
+noteDayCleans([row('2026-11-05T16:00:00Z', michiganCity), row('2026-11-05T18:00:00Z', newBuffalo, 'cancelled')])
+ok('a cancelled Eastern clean doesn\'t name a Central day', fmtTimeAt('2026-11-05T16:00:00Z', michiganCity), '10:00 AM')
+
+// A board spans the company, so it speaks only for its own cards.
+start('America/Chicago', 'America/Chicago')
+noteDayCleans([row('2026-11-05T16:00:00Z', michiganCity)])
+const board = dayClocksOf([row('2026-11-05T16:00:00Z', michiganCity), row('2026-11-05T17:00:00Z', newBuffalo)])
+ok('a mixed board day names its cards', reads([row('2026-11-05T16:00:00Z', michiganCity), row('2026-11-05T17:00:00Z', newBuffalo)], board), '10:00 AM CST | 12:00 PM EST')
+ok('and leaves this person\'s own one-clock day as it read', fmtTimeAt('2026-11-05T16:00:00Z', michiganCity), '10:00 AM')
+
+// A clean opened from a crossing list reads the same on its own screen, with no list handed to it.
+start('America/Chicago', 'America/Chicago')
+ok('before the day is read there\'s nothing to go on', fmtTimeAt('2026-11-04T16:00:00Z', michiganCity), '10:00 AM')
+noteDayCleans(winter)
+ok('after it, the job\'s own screen agrees with the list', fmtTimeRangeAt('2026-11-04T16:00:00Z', '2026-11-04T19:00:00Z', michiganCity), '10:00 AM – 1:00 PM CST')
+const mid = new Date('2026-11-04T16:00:00Z')
+
+// The switch off, and a single-clock company: today's look, on any phone.
+start('America/Chicago', 'America/Detroit', false)
+noteDayCleans(winter)
+ok('switch off: no name on a crossing day, with the phone over the line', reads(winter), '9:30 AM | 10:00 AM | 10:00 AM | 11:00 AM | 11:30 AM')
+ok('switch off: fmtTime is bare', fmtTime(mid), '10:00 AM')
+ok('switch off: a bare date and time', fmtDateTime(mid), 'Nov 4, 10:00 AM')
+ok('switch off: the helper has nothing to say', zoneTag(newBuffalo, mid), '')
+ok('switch off: no days kept', dayClocksOf(winter).size, 0)
+
+// Signing out forgets the days.
+start('America/Chicago', 'America/Chicago')
+noteDayCleans(winter)
+setMultiMarket(false)
+setMultiMarket(true)
+ok('a shared phone: the last person\'s day is gone', fmtTimeAt('2026-11-04T16:00:00Z', michiganCity), '10:00 AM')
+
+setMultiMarket(false)
+phoneIn('Europe/Lisbon')
 
 console.log(failures === 0 ? '\nAll timezone invariants hold.' : `\n${failures} FAILURE(S)`)
 process.exit(failures ? 1 : 0)
