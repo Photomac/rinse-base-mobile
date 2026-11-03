@@ -524,6 +524,52 @@ export function prepReads(user: any, cleans: any[], ymd: string) {
   }
 }
 
+// ── The linen driver's stops ───────────────────────────────────────────────
+
+/**
+ * The cleans this person DRIVES (jobs.driver_user_id, web migration
+ * 20261103214000_driver_on_clean): they drop off the clean linen and pick up
+ * the soiled. A driver is not on the clean's crew (job_assignments), so none of
+ * Home's crew reads find these. Today and the next six days; a finished clean
+ * stays, because pick-up comes after it.
+ */
+export function driverStopsRead(user: any, now: Date): CacheRead {
+  const from = startOfDayInTz(now)
+  const to = new Date(from.getTime() + 7 * 86_400_000)
+  return {
+    key: `driver:stops:${user.id}`,
+    q: () => supabase.from('jobs')
+      .select('id, tenant_id, status, scheduled_start, scheduled_end, linen_dropped_at, linen_collected_at, client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, timezone, laundry_bag_color), crew:job_assignments!job_assignments_job_id_fkey(user_id, users!job_assignments_user_id_fkey(full_name))')
+      .eq('tenant_id', user.tenant_id)
+      .eq('driver_user_id', user.id)
+      .eq('job_type', 'clean')
+      .not('status', 'in', '(cancelled,no_show)')
+      .gte('scheduled_start', from.toISOString())
+      .lt('scheduled_start', to.toISOString())
+      .order('scheduled_start'),
+  }
+}
+
+/** The linen to bring to those stops: each property's Linens list and each
+ *  clean's extras, the same rows the Pull Sheet and PrepCard read. */
+export function driverLinenReads(user: any, stops: any[]) {
+  const addrIds = [...new Set(stops.map((j: any) => j.client_addresses?.id).filter(Boolean))] as string[]
+  const jobIds = stops.map((j: any) => j.id as string)
+  return {
+    linen: {
+      key: `driver:linen:${user.id}`,
+      q: () => supabase.from('address_inventory')
+        .select('id, address_id, item_name, par_level, sort_order').in('address_id', addrIds)
+        .eq('category', 'Linens').gt('par_level', 0),
+    } as CacheRead,
+    extras: {
+      key: `driver:extras:${user.id}`,
+      q: () => supabase.from('turnover_linen_extras')
+        .select('job_id, inventory_id, extra_qty').in('job_id', jobIds),
+    } as CacheRead,
+  }
+}
+
 /** The prep card's day-keyed reads carry the day as their last segment. */
 export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^:]+)(?::(\d{4}-\d{2}-\d{2}))?$/
 
