@@ -196,7 +196,7 @@ export const jobCrewRead = (jobId: string): CacheRead => ({
 export const propMetaRead = (addrId: string): CacheRead => ({
   key: `propmeta:${addrId}`,
   q: () => supabase.from('client_addresses')
-    .select('bedrooms, bathrooms, sqft, beds, sleeps, crew_notes, lockbox_code, wifi_name, wifi_password, arrival_instructions, laundry_bag_color, staging_photos, pet_friendly, pet_fee')
+    .select('bedrooms, bathrooms, sqft, beds, sleeps, crew_notes, lockbox_code, wifi_name, wifi_password, arrival_instructions, laundry_bag_color, laundry_bag_count, staging_photos, pet_friendly, pet_fee')
     .eq('id', addrId)
     .maybeSingle(),
 })
@@ -539,7 +539,7 @@ export function driverStopsRead(user: any, now: Date): CacheRead {
   return {
     key: `driver:stops:${user.id}`,
     q: () => supabase.from('jobs')
-      .select('id, tenant_id, status, scheduled_start, scheduled_end, linen_dropped_at, linen_collected_at, client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, timezone, laundry_bag_color), crew:job_assignments!job_assignments_job_id_fkey(user_id, users!job_assignments_user_id_fkey(full_name))')
+      .select('id, tenant_id, status, scheduled_start, scheduled_end, linen_dropped_at, linen_collected_at, client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, timezone, laundry_bag_color, laundry_bag_count), crew:job_assignments!job_assignments_job_id_fkey(user_id, users!job_assignments_user_id_fkey(full_name))')
       .eq('tenant_id', user.tenant_id)
       .eq('driver_user_id', user.id)
       .eq('job_type', 'clean')

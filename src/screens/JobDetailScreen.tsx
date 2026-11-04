@@ -33,6 +33,7 @@ import { jobClockMs } from '../lib/jobTimer'
 import { useLang } from '../contexts/LangContext'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { ti, localeFor } from '../lib/i18n'
+import { bagLine } from '../lib/laundryBags'
 import { PAUSE_REASONS, pauseReasonLabel } from '../lib/pauseReason'
 import { captureRequiredPhoto, captureCheckFirstPhoto } from '../lib/requiredPhotoCapture'
 
@@ -375,6 +376,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // because the button on screen kept saying otherwise).
   const [recordForOpen, setRecordForOpen] = useState(false)
   const [bagColor, setBagColor] = useState<string | null>(null)
+  const [bagCount, setBagCount] = useState<number | null>(null)
   // The job's extras, its crew and the property's notes (lib/stopDetails):
   // read at once, each saved copy within a few seconds on a weak signal, the
   // live answer replacing it when it comes.
@@ -671,6 +673,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     if (data) {
       setPropMeta(data as any)
       setBagColor((data as any).laundry_bag_color ?? null)
+      setBagCount((data as any).laundry_bag_count ?? null)
       // Entries with no image yet are the owner's shot-list placeholders — a
       // labelled empty slot is a task for whoever visits next, not something
       // crew can work from. Filtered at the source so the chip count, the
@@ -2200,10 +2203,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
               </View>
             </View>
           )}
-          {!isTask && bagColor && (
+          {!isTask && (bagColor || bagCount) && (
             <View style={styles.infoRow}>
               <Text style={styles.infoIcon}>🧺</Text>
-              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('laundry_bags_label')}</Text><Text style={styles.infoValue}>{tx(bagColor)}</Text></View>
+              <View style={{ flex: 1 }}><Text style={styles.infoLabel}>{t('laundry_bags_label')}</Text><Text style={styles.infoValue}>{bagLine(bagCount, bagColor ? tx(bagColor) : '', n => n === 1 ? t('bags_one') : ti(t('bags_n'), { n: String(n) }))}</Text></View>
             </View>
           )}
           {isRepairVisit(job) && <RepairVisitPhotos reportId={job.source_report_id} notes={job.internal_notes} />}
