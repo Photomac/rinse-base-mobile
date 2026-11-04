@@ -5,10 +5,8 @@ import type { Language } from './i18n'
 // are about 3 MB each and are served by the site, not bundled, so this stays an
 // OTA-only change and a re-filmed episode needs no app release.
 //
-// Portuguese has no episodes filmed yet. Its page has everything in Portuguese
-// around the English videos (English captions), and the Profile row's
-// Portuguese subtitle says "legendas em inglês", so nobody taps expecting
-// Portuguese video.
+// Portuguese plays the English footage with Portuguese captions (the screens
+// show the app in English; captions name buttons by their Portuguese labels).
 const BASE = 'https://www.rinsebase.com'
 
 export const CREW_TRAINING_PATH: Record<Language, string> = {

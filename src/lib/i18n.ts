@@ -2990,9 +2990,9 @@ export const translations = {
     walkthrough_too_short: 'Muito curto: o vídeo precisa ter pelo menos 10 segundos para contar como o vídeo exigido.',
     walkthrough_discard: 'Descartar',
     // Vídeos de treinamento — linha do Perfil que abre a página de treinamento em português em rinsebase.com
-    // (lib/trainingVideos). Os vídeos ainda são os em inglês, com legendas em inglês: o subtítulo diz isso.
+    // (lib/trainingVideos). Os vídeos têm legendas em português (as telas foram gravadas com o app em inglês).
     training_videos: 'Vídeos de treinamento',
-    training_videos_sub: 'Vídeos curtos sobre como usar o app (legendas em inglês)',
+    training_videos_sub: 'Vídeos curtos sobre como usar o app',
     // Equipe hoje — a lista de ponto do escritório (screens/TeamTodayScreen)
     team_tab: 'Equipe',
     team_title: 'Equipe hoje',
