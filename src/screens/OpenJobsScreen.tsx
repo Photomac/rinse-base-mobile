@@ -59,7 +59,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const boardDays = useMemo(() => dayClocksOf([...jobs, ...mine]), [jobs, mine])
 
   // Crew see the property, not the homeowner — client names are for admins.
-  const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
+  const canSeeClientNames = ['owner', 'admin', 'manager', 'dispatcher'].includes(user.role)
 
   const load = useCallback(async () => {
     const now = new Date()

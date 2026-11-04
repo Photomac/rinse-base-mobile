@@ -56,7 +56,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   const [anchor, setAnchor] = useState(todayAsLocalDate)
   const [view, setView] = useState<ViewMode>('month')
   // Crew see the property, not the homeowner — client names are for admins.
-  const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
+  const canSeeClientNames = ['owner', 'admin', 'manager', 'dispatcher'].includes(user.role)
   // Mine / Everyone (lib/jobScope), the same choice as Home's. Crew rows are
   // already only their own (load() filters them), so for crew it changes nothing.
   const isOffice = isOfficeRole(user.role)
@@ -73,7 +73,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const now = new Date()
     const start = new Date(now); start.setMonth(now.getMonth() - 1); start.setHours(0,0,0,0)
     const end = new Date(now); end.setMonth(now.getMonth() + 2); end.setHours(23,59,59,999)
-    const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
+    const isOwner = ['owner', 'admin', 'manager', 'dispatcher'].includes(user.role)
     // Cached read: an offline crew member still sees the schedule they loaded
     // online. Cached rows carry scheduled_start, so day placement stays right
     // even when the cache is a day or two old.
