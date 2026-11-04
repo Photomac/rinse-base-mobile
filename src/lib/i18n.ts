@@ -2989,10 +2989,10 @@ export const translations = {
     walkthrough_arrival_late: 'Esta limpeza ainda não tem vídeo de chegada. Grave Chegada só se o imóvel ainda estiver como você encontrou. Se já limpou, mude para Concluído.',
     walkthrough_too_short: 'Muito curto: o vídeo precisa ter pelo menos 10 segundos para contar como o vídeo exigido.',
     walkthrough_discard: 'Descartar',
-    // Vídeos de treinamento — linha do Perfil que abre a página de treinamento em rinsebase.com (lib/trainingVideos).
-    // Ainda não há vídeos em português: a linha abre os vídeos em inglês e diz isso.
+    // Vídeos de treinamento — linha do Perfil que abre a página de treinamento em português em rinsebase.com
+    // (lib/trainingVideos). Os vídeos ainda são os em inglês, com legendas em inglês: o subtítulo diz isso.
     training_videos: 'Vídeos de treinamento',
-    training_videos_sub: 'Vídeos curtos sobre como usar o app (em inglês)',
+    training_videos_sub: 'Vídeos curtos sobre como usar o app (legendas em inglês)',
     // Equipe hoje — a lista de ponto do escritório (screens/TeamTodayScreen)
     team_tab: 'Equipe',
     team_title: 'Equipe hoje',
