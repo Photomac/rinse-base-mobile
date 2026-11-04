@@ -92,7 +92,7 @@ export function daySites(jobs: any[], office: ClockInSite | null): ClockInSite[]
 
 // Owners and managers can let themselves in, so they aren't checked. Dispatchers
 // clock in as crew at some companies (gate_settings_office_only), so they are.
-export const notCheckedRole = (role: string | null | undefined) => role === 'owner' || role === 'manager'
+export const notCheckedRole = (role: string | null | undefined) => role === 'owner' || role === 'admin' || role === 'manager'
 
 export interface ClockInGateDeps {
   /** The property, or for Start my day every place the day could start. */

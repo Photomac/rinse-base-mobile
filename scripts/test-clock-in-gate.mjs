@@ -69,9 +69,9 @@ check('refused here: note, even if a roster still lists them',
 // ── the screen ───────────────────────────────────────────────────────────────
 const screen = readFileSync(join(repo, 'src/screens/JobDetailScreen.tsx'), 'utf8')
 const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
-check('the screen gates with notAssignedHere, the office being owner/manager/dispatcher',
+check('the screen gates with notAssignedHere, the office being owner/admin/manager/dispatcher',
   [/const notOnThisClean = notAssignedHere\(job, user\.id, \{ office: isAdminRole, roster, refused: refusedHere \}\)/.test(screen),
-   /const isAdminRole = \['owner', 'manager', 'dispatcher'\]\.includes\(user\.role\)/.test(screen)], [true, true])
+   /const isAdminRole = \['owner', 'admin', 'manager', 'dispatcher'\]\.includes\(user\.role\)/.test(screen)], [true, true])
 check('Clock in and Resume are hidden when not on the clean; the note shows in their place',
   [/\{!isStarted && !notOnThisClean && \(\s*<TouchableOpacity[^>]*onPress=\{handleClockIn\}/.test(screen),
    /\{isPaused && !notOnThisClean && \(\s*<TouchableOpacity[^>]*onPress=\{handleResume\}/.test(screen),

@@ -90,7 +90,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const startingDay = useRef(false)
 
   // Crew see the property, not the homeowner — client names are for admins.
-  const canSeeClientNames = ['owner', 'manager', 'dispatcher'].includes(user.role)
+  const canSeeClientNames = ['owner', 'admin', 'manager', 'dispatcher'].includes(user.role)
 
   // Mine / Everyone (lib/jobScope). The office loads the whole company's day
   // and can narrow it to the cleans they're on; crew rows are already only
@@ -140,7 +140,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     // another zone must not report a different month's earnings than payroll.
     const monthStart = startOfMonthInTz(now)
 
-    const isOwner = ['owner', 'manager', 'dispatcher'].includes(user.role)
+    const isOwner = ['owner', 'admin', 'manager', 'dispatcher'].includes(user.role)
     const gen = ++loadGen.current
     setLoads(n => n + 1)
 

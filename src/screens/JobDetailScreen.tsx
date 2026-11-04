@@ -387,7 +387,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const [leadNotes, setLeadNotes] = useState<string | null>(null)
   const [details] = useState(() => stopDetails({ job: showJobMeta, crew: showCrew, roster: setRoster, property: showPropMeta, leadNotes: setLeadNotes }))
   // Crew see the property, not the homeowner — client names are for admins.
-  const isAdminRole = ['owner', 'manager', 'dispatcher'].includes(user.role)
+  const isAdminRole = ['owner', 'admin', 'manager', 'dispatcher'].includes(user.role)
   const propLabel = addr?.nickname || (isAdminRole ? client?.full_name : addr?.street)
   // Desk staff on somebody else's clean. An admin who IS on the roster is just
   // crew here and keeps the normal self-clock-in path.
@@ -1411,7 +1411,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // DB gate remains the source of truth for the photo requirements. With the
   // link not answering it isn't asked at all (the same answer, 15 s sooner).
   async function canSignOffAsViewer(answering: boolean): Promise<boolean> {
-    if (user?.role === 'owner' || user?.role === 'manager') return true
+    if (user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager') return true
     if (!answering) return true
     const { data: roster, error } = await supabase
       .from('job_assignments')

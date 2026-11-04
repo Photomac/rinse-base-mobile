@@ -69,12 +69,12 @@ export function canSeeTeam(role: string | null | undefined): boolean {
   return isOfficeRole(role)
 }
 
-/** Only the owner fixes times from the phone. Managers and dispatchers see
+/** Only the owner (or an admin, 2026-11-04) fixes times from the phone. Managers and dispatchers see
  *  who's in and out (CKS: Nichole, a manager, may see that, not what anyone
  *  makes) with no edit buttons. The database would let them (job_time_entries
  *  policies are owner/manager/dispatcher); widening this is a one-line change. */
 export function canFixTeamTime(role: string | null | undefined): boolean {
-  return role === 'owner'
+  return role === 'owner' || role === 'admin'
 }
 
 /** The roster takes Mileage's tab slot for the office of a day-shift company

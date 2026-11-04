@@ -70,7 +70,7 @@ const MAX_PUSH_ERRORS = 5
 const SERVER_GRACE_MS = 30_000
 // An alert that sat on the phone longer than this says so in the office push.
 const LATE_AFTER_MS = 2 * 60 * 1000
-const DISPATCH_ROLES = ['owner', 'manager', 'dispatcher']
+const DISPATCH_ROLES = ['owner', 'admin', 'manager', 'dispatcher']
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
 export interface QueuedSOS {

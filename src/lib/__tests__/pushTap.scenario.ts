@@ -372,7 +372,7 @@ async function main() {
   ok('SCHEDULE_JOB_SELECT is exactly ScheduleScreen\'s select', schedSelect === SCHEDULE_JOB_SELECT, schedSelect ? '' : 'Schedule\'s select not found')
   ok('Schedule still leaves cancelled cleans out and shows crew only their own (what openable() mirrors)',
     schedule.includes(".neq('status', 'cancelled')") && /isOwner\s*\?\s*\(data \?\? \[\]\)\s*:\s*\(data \?\? \[\]\)\.filter\(\(j: any\) => isMyJob\(j, user\.id\)\)/.test(schedule) &&
-    /const isOwner = \['owner', 'manager', 'dispatcher'\]\.includes\(user\.role\)/.test(schedule))
+    /const isOwner = \['owner', 'admin', 'manager', 'dispatcher'\]\.includes\(user\.role\)/.test(schedule))
   ok('the saved keys are the ones Home and Schedule write',
     savedKeys('U').join() === 'dash:today:U,sched:U' &&
     src('src/lib/jobReads.ts').includes('key: `dash:today:${user.id}`') && schedule.includes('cachedQuery(`sched:${user.id}`'))

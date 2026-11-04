@@ -20,7 +20,7 @@
 export type JobScope = 'mine' | 'everyone'
 
 /** The roles that see the whole company's day, and so the only ones offered the toggle. */
-export const OFFICE_ROLES = ['owner', 'manager', 'dispatcher']
+export const OFFICE_ROLES = ['owner', 'admin', 'manager', 'dispatcher']
 
 export function isOfficeRole(role: string | null | undefined): boolean {
   return OFFICE_ROLES.includes(String(role ?? ''))
