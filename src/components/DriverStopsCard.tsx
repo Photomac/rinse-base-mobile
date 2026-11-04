@@ -6,8 +6,10 @@
 // clean's crew: they don't clock in to it, so this card opens no job. Each stop
 // says when and where, who's cleaning, the door code, and the linen to bring
 // (the property's Linens par plus this clean's extras, as on the Pull Sheet),
-// with two buttons: Dropped off, then Picked up (driver_mark_linen, which the
-// office sees on the clean). Today is open; the next six days are listed below.
+// with two buttons: Picked up and Dropped off (driver_mark_linen, which the
+// office sees on the clean). A finished stop folds to one line so the next one
+// is on screen; a tap opens it again. Today is open; the next six days are
+// listed below.
 //
 // Renders nothing for anyone who drives no clean this week, so it costs crew
 // who aren't drivers one small read.
@@ -21,7 +23,7 @@ import { tv } from '../lib/vocab'
 import { translateTexts, normalizeText } from '../lib/machineTranslate'
 import { cachedRead } from '../lib/dataCache'
 import { driverStopsRead, driverLinenReads } from '../lib/jobReads'
-import { linenFor, stopsByDay, nextStep, primaryTick, crewFirstNames, type LinenRow, type ExtraRow } from '../lib/driverStops'
+import { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames, type LinenRow, type ExtraRow } from '../lib/driverStops'
 import { bagLine } from '../lib/laundryBags'
 import { fmtTimeAt, fmtDate, dayKey, todayKey } from '../lib/timezone'
 import { GOLD_MUTED, SLATE, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
@@ -42,6 +44,8 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
   const [openDays, setOpenDays] = useState<Record<string, boolean>>({})
   // A stop's item list, folded: crews move whole bags (CKS, 2026-11-04).
   const [openItems, setOpenItems] = useState<Record<string, boolean>>({})
+  // A finished stop the driver opened again (to check it or untick a slip).
+  const [openDone, setOpenDone] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -81,6 +85,8 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
       return
     }
     setTicked(prev => ({ ...prev, [stop.id]: data as Ticks }))
+    // A tick that finishes the stop folds it, even one opened by hand.
+    setOpenDone(prev => ({ ...prev, [stop.id]: false }))
   }
 
   function openMaps(addr: any) {
@@ -94,7 +100,22 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
   const renderStop = (s: any) => {
     const addr = s.client_addresses ?? {}
     const tk = ticksOf(s)
-    const step = nextStep(tk)
+    const finished = stopFinished({ status: s.status, ...tk })
+    const when = fmtTimeAt(s.scheduled_start, addr, locale)
+    const where = addr.nickname || addr.street || '—'
+    // Finished: one line, so the next stop isn't pushed off the screen (CKS,
+    // 2026-11-04). A tap opens it again.
+    if (finished && !openDone[s.id]) {
+      return (
+        <TouchableOpacity key={s.id} onPress={() => setOpenDone(p => ({ ...p, [s.id]: true }))} activeOpacity={0.7}
+          accessibilityRole="button" accessibilityState={{ expanded: false }} style={[styles.stop, styles.stopFolded]}>
+          <Text style={styles.foldedText} numberOfLines={1}>
+            <Text style={styles.foldedTick}>✓</Text>  {when}  ·  {where}
+          </Text>
+          <Text style={styles.foldedChevron}>▸</Text>
+        </TouchableOpacity>
+      )
+    }
     const items = linenFor(s, linen, extras)
     const crew = crewFirstNames(s)
     // Which bags and how many first: that is what a crew carrying closed bags
@@ -102,10 +123,15 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
     const bags = bagLine(addr.laundry_bag_count, addr.laundry_bag_color, n => n === 1 ? t('bags_one') : ti(t('bags_n'), { n: String(n) }))
     const primary = primaryTick(tk)
     return (
-      <View key={s.id} style={[styles.stop, step === 'done' && styles.stopDone]}>
-        <Text style={styles.stopHead}>
-          {fmtTimeAt(s.scheduled_start, addr, locale)}  ·  {addr.nickname || addr.street || '—'}
-        </Text>
+      <View key={s.id} style={[styles.stop, finished && styles.stopDone]}>
+        {finished
+          ? (
+            <TouchableOpacity onPress={() => setOpenDone(p => ({ ...p, [s.id]: false }))} activeOpacity={0.7}
+              accessibilityRole="button" accessibilityState={{ expanded: true }}>
+              <Text style={styles.stopHead}>▾ ✓  {when}  ·  {where}</Text>
+            </TouchableOpacity>
+          )
+          : <Text style={styles.stopHead}>{when}  ·  {where}</Text>}
         {!!(addr.street || addr.city) && (
           <TouchableOpacity onPress={() => openMaps(addr)} activeOpacity={0.6}>
             <Text style={styles.link}>{[addr.street, addr.city].filter(Boolean).join(', ')}  ·  {t('directions')} ›</Text>
@@ -192,6 +218,10 @@ const styles = StyleSheet.create({
   dayHead: { fontSize: 13, fontWeight: '700', color: GOLD_MUTED, marginTop: 10, marginBottom: 2 },
   stop: { borderTopWidth: 1, borderTopColor: BORDER, paddingVertical: 10 },
   stopDone: { opacity: 0.55 },
+  stopFolded: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
+  foldedText: { flex: 1, fontSize: 13, fontWeight: '600', color: TEXT_MUTED },
+  foldedTick: { color: '#15803D', fontWeight: '700' },
+  foldedChevron: { fontSize: 13, color: TEXT_MUTED, marginLeft: 8 },
   stopHead: { fontSize: 14, fontWeight: '700', color: TEXT },
   link: { fontSize: 13, color: SLATE, marginTop: 4, textDecorationLine: 'underline' },
   line: { fontSize: 13, color: TEXT, marginTop: 4 },

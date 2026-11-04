@@ -34,11 +34,14 @@ export function stopsByDay<T extends { id: string; scheduled_start: string }>(st
   return out
 }
 
-/** What's left at a stop: drop the clean linen, pick up the soiled, or nothing. */
-export function nextStep(stop: { linen_dropped_at?: string | null; linen_collected_at?: string | null }): 'drop' | 'pickup' | 'done' {
-  if (stop.linen_collected_at) return 'done'
-  if (stop.linen_dropped_at) return 'pickup'
-  return 'drop'
+/** Nothing left at this stop, so the card folds it to one line (CKS,
+ *  2026-11-04: finished stops pushed the next one off the screen). Picked up
+ *  alone is NOT finished: crews tap it at the office for the houses they're
+ *  carrying bags to (CKS 11/4 09:31, three houses in nine seconds), so the drop
+ *  is still ahead. Finished = picked up, and either dropped off or the clean
+ *  itself is done: the office stop gets only Picked up and is completed. */
+export function stopFinished(stop: { status?: string | null; linen_dropped_at?: string | null; linen_collected_at?: string | null }): boolean {
+  return !!stop.linen_collected_at && (!!stop.linen_dropped_at || stop.status === 'completed')
 }
 
 /** Which tick to highlight. None until one is ticked: the card shows Picked
