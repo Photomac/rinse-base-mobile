@@ -855,6 +855,9 @@ export const translations = {
     walkthrough_arrival_late: "This clean has no arrival video yet. Record Arrival only if the property is still as you found it. If you've already cleaned, switch to Finished.",
     walkthrough_too_short: 'Too short: a clip has to run at least 10 seconds to count as the required video.',
     walkthrough_discard: 'Discard',
+    // Training videos — Profile row that opens the crew training page on rinsebase.com (lib/trainingVideos)
+    training_videos: 'Training videos',
+    training_videos_sub: 'Short videos on using the app',
     // Team today — the office's clock roster (screens/TeamTodayScreen)
     team_tab: 'Team',
     team_title: 'Team today',
@@ -1919,6 +1922,9 @@ export const translations = {
     walkthrough_arrival_late: 'Esta limpieza aún no tiene video de llegada. Graba Llegada solo si la propiedad sigue como la encontraste. Si ya limpiaste, cambia a Terminado.',
     walkthrough_too_short: 'Muy corto: el video tiene que durar al menos 10 segundos para contar como el video requerido.',
     walkthrough_discard: 'Descartar',
+    // Videos de capacitación — fila del Perfil que abre la página de capacitación en rinsebase.com (lib/trainingVideos)
+    training_videos: 'Videos de capacitación',
+    training_videos_sub: 'Videos cortos sobre cómo usar la app',
     // Equipo hoy — la lista de entradas de la oficina (screens/TeamTodayScreen)
     team_tab: 'Equipo',
     team_title: 'Equipo hoy',
@@ -2983,6 +2989,10 @@ export const translations = {
     walkthrough_arrival_late: 'Esta limpeza ainda não tem vídeo de chegada. Grave Chegada só se o imóvel ainda estiver como você encontrou. Se já limpou, mude para Concluído.',
     walkthrough_too_short: 'Muito curto: o vídeo precisa ter pelo menos 10 segundos para contar como o vídeo exigido.',
     walkthrough_discard: 'Descartar',
+    // Vídeos de treinamento — linha do Perfil que abre a página de treinamento em português em rinsebase.com
+    // (lib/trainingVideos). Os vídeos ainda são os em inglês, com legendas em inglês: o subtítulo diz isso.
+    training_videos: 'Vídeos de treinamento',
+    training_videos_sub: 'Vídeos curtos sobre como usar o app (legendas em inglês)',
     // Equipe hoje — a lista de ponto do escritório (screens/TeamTodayScreen)
     team_tab: 'Equipe',
     team_title: 'Equipe hoje',
