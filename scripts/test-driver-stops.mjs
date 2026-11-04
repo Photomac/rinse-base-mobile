@@ -7,7 +7,7 @@
 //   • linen to bring = the property's Linens par + this clean's extra, floored
 //     at 0, in the property's order, zero lines dropped, another property's
 //     and another clean's rows ignored (the Pull Sheet's math);
-//   • stops grouped by day in time order; the next step after each tick;
+//   • stops grouped by day in time order; when a stop is finished (folds to one line);
 //   • crew first names;
 // and, in the source, that the card reads only through jobReads' builders,
 // filters on driver_user_id, ticks only through driver_mark_linen, opens no
@@ -26,7 +26,7 @@ function check(name, got, want) {
   console.log(`${ok ? '✓' : '✗'}  ${name}${ok ? '' : ` — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`)
 }
 
-const { linenFor, stopsByDay, nextStep, primaryTick, crewFirstNames } = await import(join(repo, 'src/lib/driverStops.ts'))
+const { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames } = await import(join(repo, 'src/lib/driverStops.ts'))
 const { bagLine } = await import(join(repo, 'src/lib/laundryBags.ts'))
 
 console.log('1. Linen to bring')
@@ -58,9 +58,12 @@ const grouped = stopsByDay([
 ], day)
 check('grouped by day, in time order', grouped.map(d => [d.day, d.stops.map(s => s.id)]),
   [['2026-11-04', ['a']], ['2026-11-05', ['c', 'b']]])
-check('nothing ticked: drop', nextStep({ linen_dropped_at: null, linen_collected_at: null }), 'drop')
-check('dropped: pick up', nextStep({ linen_dropped_at: 'x', linen_collected_at: null }), 'pickup')
-check('picked up: done', nextStep({ linen_dropped_at: 'x', linen_collected_at: 'y' }), 'done')
+check('nothing ticked: open', stopFinished({ status: 'scheduled', linen_dropped_at: null, linen_collected_at: null }), false)
+check('dropped only: open (the pickup is left)', stopFinished({ status: 'completed', linen_dropped_at: 'x', linen_collected_at: null }), false)
+check('both ticked: finished', stopFinished({ status: 'in_progress', linen_dropped_at: 'x', linen_collected_at: 'y' }), true)
+// CKS 2026-11-04 09:31: Picked up tapped at the office for houses not yet reached.
+check('picked up only, clean not done: open (the drop is ahead)', stopFinished({ status: 'scheduled', linen_dropped_at: null, linen_collected_at: 'y' }), false)
+check('picked up only, clean done (the office stop): finished', stopFinished({ status: 'completed', linen_dropped_at: null, linen_collected_at: 'y' }), true)
 // CKS 2026-11-04: Picked up shows first; nothing is highlighted until a tick.
 check('nothing ticked: no highlight', primaryTick({ linen_dropped_at: null, linen_collected_at: null }), null)
 check('dropped: highlight the pickup', primaryTick({ linen_dropped_at: 'x', linen_collected_at: null }), 'pickup')
@@ -86,6 +89,8 @@ check('the card opens no job (a driver is not crew)', /onJobPress/.test(card), f
 check('Home mounts it', /<DriverStopsCard user=\{user\}/.test(home), true)
 check('Picked up comes first on the card', card.indexOf("t('driver_picked_up')") < card.indexOf("t('driver_dropped')"), true)
 check('the bags line comes before the item list, which folds', [card.indexOf('styles.bags') < card.indexOf('driver_whats_in'), /openItems\[s\.id\] && \(/.test(card)], [true, true])
+check('a finished stop folds to one line and a tap opens it', [/finished && !openDone\[s\.id\]/.test(card), /stopFinished\(\{ status: s\.status, \.\.\.tk \}\)/.test(card), /setOpenDone\(p => \(\{ \.\.\.p, \[s\.id\]: true \}\)\)/.test(card)], [true, true, true])
+check('the stops read carries the clean\'s status (the office stop finishes on it)', /\.select\('id, tenant_id, status,/.test(reads), true)
 check('the stops read and the property read carry the bag count', [/laundry_bag_color, laundry_bag_count\)/.test(reads), /laundry_bag_color, laundry_bag_count, staging_photos/.test(reads)], [true, true])
 
 console.log(`\n${pass} passed, ${fail} failed`)
