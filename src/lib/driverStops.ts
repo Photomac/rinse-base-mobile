@@ -41,6 +41,14 @@ export function nextStep(stop: { linen_dropped_at?: string | null; linen_collect
   return 'drop'
 }
 
+/** Which tick to highlight. None until one is ticked: the card shows Picked
+ *  up first (CKS, 2026-11-04: their day starts with the bags at the office),
+ *  and a stop starts with the pickup at the office but with the drop at a
+ *  home. Once the clean linen is dropped, the pickup is what's left. */
+export function primaryTick(stop: { linen_dropped_at?: string | null; linen_collected_at?: string | null }): 'pickup' | null {
+  return stop.linen_dropped_at && !stop.linen_collected_at ? 'pickup' : null
+}
+
 /** First names of who's cleaning there. */
 export function crewFirstNames(stop: { crew?: { users?: { full_name?: string | null } | null }[] | null }): string[] {
   return (stop.crew ?? []).map(c => (c.users?.full_name || '').trim().split(/\s+/)[0]).filter(Boolean)

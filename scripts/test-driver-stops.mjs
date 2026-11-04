@@ -26,7 +26,8 @@ function check(name, got, want) {
   console.log(`${ok ? '✓' : '✗'}  ${name}${ok ? '' : ` — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`)
 }
 
-const { linenFor, stopsByDay, nextStep, crewFirstNames } = await import(join(repo, 'src/lib/driverStops.ts'))
+const { linenFor, stopsByDay, nextStep, primaryTick, crewFirstNames } = await import(join(repo, 'src/lib/driverStops.ts'))
+const { bagLine } = await import(join(repo, 'src/lib/laundryBags.ts'))
 
 console.log('1. Linen to bring')
 const linen = [
@@ -60,6 +61,18 @@ check('grouped by day, in time order', grouped.map(d => [d.day, d.stops.map(s =>
 check('nothing ticked: drop', nextStep({ linen_dropped_at: null, linen_collected_at: null }), 'drop')
 check('dropped: pick up', nextStep({ linen_dropped_at: 'x', linen_collected_at: null }), 'pickup')
 check('picked up: done', nextStep({ linen_dropped_at: 'x', linen_collected_at: 'y' }), 'done')
+// CKS 2026-11-04: Picked up shows first; nothing is highlighted until a tick.
+check('nothing ticked: no highlight', primaryTick({ linen_dropped_at: null, linen_collected_at: null }), null)
+check('dropped: highlight the pickup', primaryTick({ linen_dropped_at: 'x', linen_collected_at: null }), 'pickup')
+check('picked up (the office stop): nothing left to highlight', primaryTick({ linen_dropped_at: null, linen_collected_at: 'y' }), null)
+check('both: nothing', primaryTick({ linen_dropped_at: 'x', linen_collected_at: 'y' }), null)
+const word = n => n === 1 ? '1 bag' : `${n} bags`
+check('bags: count and which', bagLine(2, '(2) green', word), '2 bags · (2) green')
+check('bags: one', bagLine(1, ' tan ', word), '1 bag · tan')
+check('bags: which only (no count yet)', bagLine(null, 'YELLOW / BROWN (2)', word), 'YELLOW / BROWN (2)')
+check('bags: count only', bagLine(3, '', word), '3 bags')
+check('bags: neither', bagLine(null, null, word), '')
+check('bags: a bad count is ignored', bagLine(0, 'Red', word), 'Red')
 check('crew first names', crewFirstNames({ crew: [{ users: { full_name: 'Ana Souza' } }, { users: { full_name: ' Bia ' } }, { users: null }] }), ['Ana', 'Bia'])
 
 console.log('3. The source')
@@ -71,6 +84,9 @@ check('the stops read filters on the driver', /\.eq\('driver_user_id', user\.id\
 check('ticks go through driver_mark_linen only', [/rpc\('driver_mark_linen'/.test(card), /\.update\(/.test(card)], [true, false])
 check('the card opens no job (a driver is not crew)', /onJobPress/.test(card), false)
 check('Home mounts it', /<DriverStopsCard user=\{user\}/.test(home), true)
+check('Picked up comes first on the card', card.indexOf("t('driver_picked_up')") < card.indexOf("t('driver_dropped')"), true)
+check('the bags line comes before the item list, which folds', [card.indexOf('styles.bags') < card.indexOf('driver_whats_in'), /openItems\[s\.id\] && \(/.test(card)], [true, true])
+check('the stops read and the property read carry the bag count', [/laundry_bag_color, laundry_bag_count\)/.test(reads), /laundry_bag_color, laundry_bag_count, staging_photos/.test(reads)], [true, true])
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
