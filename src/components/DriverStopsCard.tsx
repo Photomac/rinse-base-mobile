@@ -21,7 +21,8 @@ import { tv } from '../lib/vocab'
 import { translateTexts, normalizeText } from '../lib/machineTranslate'
 import { cachedRead } from '../lib/dataCache'
 import { driverStopsRead, driverLinenReads } from '../lib/jobReads'
-import { linenFor, stopsByDay, nextStep, crewFirstNames, type LinenRow, type ExtraRow } from '../lib/driverStops'
+import { linenFor, stopsByDay, nextStep, primaryTick, crewFirstNames, type LinenRow, type ExtraRow } from '../lib/driverStops'
+import { bagLine } from '../lib/laundryBags'
 import { fmtTimeAt, fmtDate, dayKey, todayKey } from '../lib/timezone'
 import { GOLD_MUTED, SLATE, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
 
@@ -39,6 +40,8 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
   const [ticked, setTicked] = useState<Record<string, Ticks>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [openDays, setOpenDays] = useState<Record<string, boolean>>({})
+  // A stop's item list, folded: crews move whole bags (CKS, 2026-11-04).
+  const [openItems, setOpenItems] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -94,7 +97,10 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
     const step = nextStep(tk)
     const items = linenFor(s, linen, extras)
     const crew = crewFirstNames(s)
-    const bag = String(addr.laundry_bag_color || '').trim()
+    // Which bags and how many first: that is what a crew carrying closed bags
+    // checks; the item list folds away behind a tap.
+    const bags = bagLine(addr.laundry_bag_count, addr.laundry_bag_color, n => n === 1 ? t('bags_one') : ti(t('bags_n'), { n: String(n) }))
+    const primary = primaryTick(tk)
     return (
       <View key={s.id} style={[styles.stop, step === 'done' && styles.stopDone]}>
         <Text style={styles.stopHead}>
@@ -105,18 +111,28 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
             <Text style={styles.link}>{[addr.street, addr.city].filter(Boolean).join(', ')}  ·  {t('directions')} ›</Text>
           </TouchableOpacity>
         )}
+        {!!bags && <Text style={styles.bags}>🧺 {bags}</Text>}
         {!!addr.lockbox_code?.trim() && <Text style={styles.line}>🔑 {t('lockbox')}: {addr.lockbox_code}</Text>}
         {crew.length > 0 && <Text style={styles.line}>{ti(t('driver_cleaning'), { names: crew.join(', ') })}</Text>}
-        {items.length > 0
-          ? <Text style={styles.line}>🧺 {items.map(i => `${i.qty} × ${linenName(i.name)}`).join(' · ')}{bag ? `  ·  ${bag}` : ''}</Text>
-          : <Text style={styles.muted}>{t('driver_no_linen_list')}</Text>}
+        {items.length > 0 && (
+          <TouchableOpacity onPress={() => setOpenItems(p => ({ ...p, [s.id]: !p[s.id] }))} activeOpacity={0.7}
+            accessibilityRole="button" accessibilityState={{ expanded: !!openItems[s.id] }}>
+            <Text style={styles.fold}>{openItems[s.id] ? '▾' : '▸'} {t('driver_whats_in')} ({items.length})</Text>
+          </TouchableOpacity>
+        )}
+        {items.length > 0 && openItems[s.id] && (
+          <Text style={styles.line}>{items.map(i => `${i.qty} × ${linenName(i.name)}`).join(' · ')}</Text>
+        )}
+        {!bags && items.length === 0 && <Text style={styles.muted}>{t('driver_no_bags')}</Text>}
+        {/* Picked up first (CKS, 2026-11-04): their day starts with the bags at
+            the office. Neither is highlighted until one is ticked. */}
         <View style={styles.buttons}>
-          <TickButton label={t('driver_dropped')} at={tk.linen_dropped_at} addr={addr} locale={locale}
-            busy={busy === `${s.id}:dropped`} primary={step === 'drop'}
-            onPress={() => mark(s, 'dropped', !tk.linen_dropped_at)} />
           <TickButton label={t('driver_picked_up')} at={tk.linen_collected_at} addr={addr} locale={locale}
-            busy={busy === `${s.id}:collected`} primary={step === 'pickup'}
+            busy={busy === `${s.id}:collected`} primary={primary === 'pickup'}
             onPress={() => mark(s, 'collected', !tk.linen_collected_at)} />
+          <TickButton label={t('driver_dropped')} at={tk.linen_dropped_at} addr={addr} locale={locale}
+            busy={busy === `${s.id}:dropped`} primary={false}
+            onPress={() => mark(s, 'dropped', !tk.linen_dropped_at)} />
         </View>
       </View>
     )
@@ -179,6 +195,8 @@ const styles = StyleSheet.create({
   stopHead: { fontSize: 14, fontWeight: '700', color: TEXT },
   link: { fontSize: 13, color: SLATE, marginTop: 4, textDecorationLine: 'underline' },
   line: { fontSize: 13, color: TEXT, marginTop: 4 },
+  bags: { fontSize: 14, fontWeight: '700', color: TEXT, marginTop: 6 },
+  fold: { fontSize: 13, color: SLATE, marginTop: 4, fontWeight: '600' },
   muted: { fontSize: 12, color: TEXT_MUTED, marginTop: 4 },
   buttons: { flexDirection: 'row', gap: 8, marginTop: 10 },
   btn: { flex: 1, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 1, minHeight: 48 },
