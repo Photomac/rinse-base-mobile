@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, TextInput } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, TextInput, Linking } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import * as ImagePicker from 'expo-image-picker'
@@ -11,6 +11,7 @@ import { pendingOpCount, rejectedOps, clearRejected, flushOutbox } from '../lib/
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { CrewWeekCard } from '../components/CrewWeekCard'
 import { currencySymbol } from '../lib/money'
+import { crewTrainingUrl } from '../lib/trainingVideos'
 // JS API only — expo-updates is already in the native binary (it is what
 // delivers OTAs), so reading these adds no native dependency and this screen
 // stays OTA-shippable.
@@ -264,22 +265,32 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
           <Text style={styles.name}>{user.full_name}</Text>
           <View style={styles.roleBadge}><Text style={styles.roleText}>{t((ROLE_KEYS[user.role] || 'role_cleaner') as any)}</Text></View>
         </View>
-        {(onOpenTeam || onOpenMileage) && (
-          <View style={styles.card}>
-            {onOpenTeam && (
-              <TouchableOpacity style={styles.row} onPress={onOpenTeam}>
-                <Text style={styles.openRowText}>👥  {t('team_title')}</Text>
-                <Text style={styles.openRowChev}>›</Text>
-              </TouchableOpacity>
-            )}
-            {onOpenMileage && (
-              <TouchableOpacity style={styles.row} onPress={onOpenMileage}>
-                <Text style={styles.openRowText}>↗  {t('my_mileage')}</Text>
-                <Text style={styles.openRowChev}>›</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
+        <View style={styles.card}>
+          {onOpenTeam && (
+            <TouchableOpacity style={styles.row} onPress={onOpenTeam}>
+              <Text style={styles.openRowText}>👥  {t('team_title')}</Text>
+              <Text style={styles.openRowChev}>›</Text>
+            </TouchableOpacity>
+          )}
+          {onOpenMileage && (
+            <TouchableOpacity style={styles.row} onPress={onOpenMileage}>
+              <Text style={styles.openRowText}>↗  {t('my_mileage')}</Text>
+              <Text style={styles.openRowChev}>›</Text>
+            </TouchableOpacity>
+          )}
+          {/* Everyone gets this row, crew and office alike: it opens the
+              training videos on rinsebase.com in the app's language
+              (lib/trainingVideos). Opens in the phone's browser, so the
+              videos play full screen with the system player. */}
+          <TouchableOpacity style={[styles.row, styles.rowLast]} accessibilityRole="link"
+            onPress={() => { Linking.openURL(crewTrainingUrl(lang)).catch(() => {}) }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={styles.openRowText}>▶  {t('training_videos')}</Text>
+              <Text style={styles.openRowSub}>{t('training_videos_sub')}</Text>
+            </View>
+            <Text style={styles.openRowChev}>›</Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.card}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <Text style={styles.sectionTitle}>{t('contact_info')}</Text>
@@ -482,6 +493,8 @@ const styles = StyleSheet.create({
   rowValue: { fontSize: 13, color: '#0F172A', fontWeight: '500' },
   openRowText: { fontSize: 15, color: '#0F172A', fontWeight: '700' },
   openRowChev: { fontSize: 20, color: '#CBD5E1', fontWeight: '600' },
+  openRowSub: { fontSize: 12, color: '#94A3B8', marginTop: 2, marginLeft: 26 },
+  rowLast: { borderBottomWidth: 0 },
   input: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 14, color: '#0F172A', backgroundColor: '#fff', marginTop: 4 },
   contactBtn: { flex: 1, paddingVertical: 11, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   langRow: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 8 },
