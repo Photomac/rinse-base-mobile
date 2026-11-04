@@ -1,5 +1,5 @@
 // A property's laundry bags: how many (client_addresses.laundry_bag_count,
-// web migration 20261104160500_linen_bag_count) and which (laundry_bag_color,
+// web migration 20261104153435_linen_bag_count) and which (laundry_bag_color,
 // free text such as "(2) green"). CKS, 2026-11-04: crews move whole bags and
 // never open them, so the count and the bags are what they need to see.
 // scripts/test-driver-stops.mjs drives this.
