@@ -37,8 +37,8 @@ export function videosFromOwedRows(rows: unknown): WalkthroughType[] {
   return (['before', 'after'] as const).filter(has)
 }
 
-/** What's owed, less the clips of that type on this phone long enough to count. */
-export function videosStillOwed(owed: WalkthroughType[], onPhone: { video_type: WalkthroughType; duration_seconds: number }[]): WalkthroughType[] {
+/** What's owed, less the clips of that type on this phone long enough to count (a line clip is never one). */
+export function videosStillOwed(owed: WalkthroughType[], onPhone: { video_type: string; duration_seconds: number }[]): WalkthroughType[] {
   return owed.filter(t => !onPhone.some(v => v.video_type === t && v.duration_seconds >= WALKTHROUGH_MIN_SECONDS))
 }
 

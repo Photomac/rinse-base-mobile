@@ -2,6 +2,11 @@
 // left (finished), as proof for the owner and their client. Recorded inside
 // the app — never picked from the camera roll — so it can't be an old video.
 //
+// Line mode (`line`): a clip for one checklist line that asks for a video
+// (lib/lineVideos). Same camera, sound off, same queue; no Arrival/Finished,
+// at most a minute, at least 3 seconds to count, and saving it ticks the line
+// (onLineSaved) and goes back to the clean.
+//
 // Everything here uses native modules already in the store builds (expo-camera
 // has shipped since v1, expo-keep-awake comes with expo), so it ships over the
 // air. Recording is MUTED: no microphone prompt (the app's microphone text
@@ -16,9 +21,10 @@ import * as FileSystem from 'expo-file-system/legacy'
 import { ensureCamera } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 import {
-  enqueueVideo, flushVideoQueue, queuedJobVideos, QueuedJobVideo, WalkthroughType,
+  enqueueVideo, flushVideoQueue, queuedJobVideos, QueuedJobVideo, WalkthroughType, VideoType,
   WALKTHROUGH_MAX_SECONDS, WALKTHROUGH_MAX_BYTES, WALKTHROUGH_BITRATE,
 } from '../lib/videoQueue'
+import { LINE_CLIP_MAX_SECONDS, LINE_CLIP_MIN_SECONDS, lineClipCaption } from '../lib/lineVideos'
 import { WALKTHROUGH_MIN_SECONDS, arrivalOnClean } from '../lib/videosOwed'
 import { arrivalIsLate, walkthroughDefault } from '../lib/finishedClean'
 import { useLang } from '../contexts/LangContext'
@@ -48,12 +54,16 @@ interface Props {
   startedAt?: string | null
   /** The videos the company still needs for this clean: a clip too short for one says so. */
   owed?: WalkthroughType[]
+  /** Line mode: the checklist line this clip is for (its job_checklist_items id). */
+  line?: { id: string; room: string | null; title: string; label: string } | null
+  /** Line mode: a clip long enough to count was saved (the clean's screen ticks the line). */
+  onLineSaved?: (seconds: number) => void
   onBack: () => void
 }
 
 interface Row {
   key: string
-  video_type: WalkthroughType
+  video_type: VideoType
   duration_seconds: number | null
   size_bytes: number | null
   state: 'uploaded' | 'waiting' | 'failing' | 'stuck' | 'gone'
@@ -62,7 +72,7 @@ interface Row {
 
 const rowTrouble = (r: Row) => r.state === 'failing' || r.state === 'stuck' || r.state === 'gone'
 
-export function WalkthroughScreen({ job, user, defaultType, asked = false, started = false, startedAt: cleanStartedAt = null, owed = [], onBack }: Props) {
+export function WalkthroughScreen({ job, user, defaultType, asked = false, started = false, startedAt: cleanStartedAt = null, owed = [], line = null, onLineSaved, onBack }: Props) {
   const { t } = useLang()
   const cameraRef = useRef<CameraView>(null)
   const [perm, setPerm] = useState<'checking' | 'granted' | 'denied'>('checking')
@@ -87,23 +97,31 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
 
   const addr = job.client_addresses as any
   const client = job.clients as any
-  const typeLabel = (tp: WalkthroughType) => t(tp === 'before' ? 'walkthrough_type_before' : 'walkthrough_type_after')
+  const typeLabel = (tp: VideoType) => t(tp === 'line' ? 'line_video_clip' : tp === 'before' ? 'walkthrough_type_before' : 'walkthrough_type_after')
+  const lineId = line?.id ?? null
+  const maxSeconds = lineId ? LINE_CLIP_MAX_SECONDS : WALKTHROUGH_MAX_SECONDS
 
   useEffect(() => {
     ensureCamera().then(s => setPerm(s === 'granted' ? 'granted' : 'denied')).catch(() => setPerm('denied'))
   }, [])
 
   const loadList = useCallback(async () => {
-    const [serverRes, announcedRes, queued] = await Promise.all([
-      supabase.from('job_videos')
-        .select('id, video_type, duration_seconds, size_bytes, created_at')
-        .eq('job_id', job.id).order('created_at', { ascending: false }),
-      supabase.from('job_videos_on_the_way')
+    // Line mode lists that line's clips; the walkthrough lists the walkthroughs,
+    // never a line clip as an Arrival or Finished video.
+    const videos = supabase.from('job_videos')
+      .select('id, video_type, duration_seconds, size_bytes, created_at')
+      .eq('job_id', job.id)
+    const [serverRes, announcedRes, allQueued] = await Promise.all([
+      (lineId ? videos.eq('checklist_item_id', lineId) : videos.in('video_type', ['before', 'after']))
+        .order('created_at', { ascending: false }),
+      lineId ? Promise.resolve({ data: [], error: null }) : supabase.from('job_videos_on_the_way')
         .select('video_type, duration_seconds')
         .eq('job_id', job.id),
       queuedJobVideos(job.id).catch((): QueuedJobVideo[] => []),
     ])
-    const arrival = arrivalOnClean([serverRes.error ? null : ((serverRes.data as any[]) ?? []), announcedRes.error ? null : ((announcedRes.data as any[]) ?? []), queued])
+    const queued = allQueued.filter(v => (lineId ? v.video_type === 'line' && v.checklist_item_id === lineId : v.video_type !== 'line'))
+    // (Line mode has no Arrival / Finished to settle.)
+    const arrival = lineId ? null : arrivalOnClean([serverRes.error ? null : ((serverRes.data as any[]) ?? []), announcedRes.error ? null : ((announcedRes.data as any[]) ?? []), queued])
     setHasArrival(arrival)
     if (arrival !== null && !typeSettled.current) {
       typeSettled.current = true
@@ -123,7 +141,7 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
       key: r.id, video_type: r.video_type, duration_seconds: r.duration_seconds, size_bytes: r.size_bytes, state: 'uploaded',
     }))
     setRows([...onDevice, ...uploaded])
-  }, [job.id, job.status, started, cleanStartedAt])
+  }, [job.id, job.status, started, cleanStartedAt, lineId])
 
   useEffect(() => {
     loadList().catch(() => {})
@@ -172,13 +190,13 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
     const recordedAt = new Date().toISOString()
     try {
       const res = await cameraRef.current.recordAsync({
-        maxDuration: WALKTHROUGH_MAX_SECONDS,
+        maxDuration: maxSeconds,
         maxFileSize: WALKTHROUGH_MAX_BYTES,
         // H.264. iPhones default to HEVC, which Firefox and many Windows PCs
         // can't play; the bitrate cap also only applies with a codec set.
         ...(Platform.OS === 'ios' ? { codec: 'avc1' as const } : {}),
       })
-      const secs = Math.min(WALKTHROUGH_MAX_SECONDS, (Date.now() - startedAt.current) / 1000)
+      const secs = Math.min(maxSeconds, (Date.now() - startedAt.current) / 1000)
       if (res?.uri) setRecorded({ uri: res.uri, duration: secs, recordedAt })
     } catch (e: any) {
       Alert.alert(t('walkthrough_failed'), e?.message ? String(e.message) : '')
@@ -192,14 +210,27 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
     try { cameraRef.current?.stopRecording() } catch { /* already stopped */ }
   }
 
+  // A line clip under 3 seconds wouldn't count for the line: retake only.
+  const lineTooShort = !!line && !!recorded && recorded.duration < LINE_CLIP_MIN_SECONDS
+
   async function save() {
-    if (!recorded || saving) return
+    if (!recorded || saving || lineTooShort) return
     setSaving(true)
     try {
       await enqueueVideo({
         uri: recorded.uri, tenant_id: user.tenant_id, job_id: job.id, user_id: user.id,
-        video_type: videoType, duration_seconds: recorded.duration, recorded_at: recorded.recordedAt,
+        video_type: line ? 'line' : videoType, duration_seconds: recorded.duration, recorded_at: recorded.recordedAt,
+        ...(line ? { checklist_item_id: line.id, caption: lineClipCaption(line.room, line.title) } : {}),
       })
+      if (line) {
+        // The clip is on the phone and its record is on the way: the line is
+        // done, and the crew goes back to the clean.
+        flushVideoQueue().catch(() => {})
+        setRecorded(null)
+        onLineSaved?.(recorded.duration)
+        onBack()
+        return
+      }
       setRecorded(null)
       setJustSaved(true)
       await loadList()
@@ -238,7 +269,7 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
       <TouchableOpacity onPress={goBack} style={styles.backBtn} disabled={recording}>
         <Text style={[styles.backText, recording && { opacity: 0.35 }]}>← {t('back')}</Text>
       </TouchableOpacity>
-      <Text style={styles.headerTitle}>🎥 {t('walkthrough_title')}</Text>
+      <Text style={styles.headerTitle}>🎥 {t(line ? 'line_video_title' : 'walkthrough_title')}</Text>
       <View style={{ width: 60 }} />
     </View>
   )
@@ -268,18 +299,19 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
       <View style={styles.jobInfo}>
         <Text style={styles.jobName}>{addr?.nickname || client?.full_name}</Text>
         {!!addr?.street && <Text style={styles.jobAddr}>{addr.street}{addr?.city ? `, ${addr.city}` : ''}</Text>}
+        {!!line && <Text style={styles.lineLabel}>{line.label}</Text>}
       </View>
 
-      <View style={styles.typeRow}>
+      {!line && <View style={styles.typeRow}>
         {(['before', 'after'] as const).map(tp => (
           <TouchableOpacity key={tp} disabled={recording || !!recorded} onPress={() => { typeSettled.current = true; setVideoType(tp) }}
             style={[styles.typeBtn, videoType === tp && styles.typeBtnOn, (recording || !!recorded) && videoType !== tp && { opacity: 0.4 }]}>
             <Text style={[styles.typeBtnText, videoType === tp && styles.typeBtnTextOn]} numberOfLines={1}>{typeLabel(tp)}</Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </View>}
 
-      {videoType === 'before' && hasArrival === false && job.status !== 'completed' && !recording && !recorded
+      {!line && videoType === 'before' && hasArrival === false && job.status !== 'completed' && !recording && !recorded
         && arrivalIsLate({ started, startedAt: cleanStartedAt, now: Date.now() }) && (
         <Text style={styles.lateNote}>{t('walkthrough_arrival_late')}</Text>
       )}
@@ -301,22 +333,23 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
           <View style={styles.recBadge}>
             <View style={styles.recDot} />
             <Text style={styles.recText}>
-              {fmtClock(elapsed)} · {ti(t('walkthrough_time_left'), { time: fmtClock(WALKTHROUGH_MAX_SECONDS - elapsed) })}
+              {fmtClock(elapsed)} · {ti(t('walkthrough_time_left'), { time: fmtClock(maxSeconds - elapsed) })}
             </Text>
           </View>
         )}
         {recorded ? (
           <View style={styles.reviewOverlay}>
             <Text style={styles.reviewTitle}>{ti(t('walkthrough_recorded'), { time: fmtClock(recorded.duration) })}</Text>
-            <Text style={styles.reviewSub}>{typeLabel(videoType)}</Text>
-            {owed.includes(videoType) && recorded.duration < WALKTHROUGH_MIN_SECONDS && (
+            <Text style={styles.reviewSub}>{line ? line.label : typeLabel(videoType)}</Text>
+            {!line && owed.includes(videoType) && recorded.duration < WALKTHROUGH_MIN_SECONDS && (
               <Text style={styles.reviewWarn}>{t('walkthrough_too_short')}</Text>
             )}
+            {lineTooShort && <Text style={styles.reviewWarn}>{t('line_video_too_short')}</Text>}
             <View style={styles.reviewBtns}>
               <TouchableOpacity style={styles.secondaryBtn} onPress={retake} disabled={saving}>
                 <Text style={styles.secondaryBtnText}>{t('walkthrough_retake')}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.primaryBtn, { flex: 1 }]} onPress={save} disabled={saving}>
+              <TouchableOpacity style={[styles.primaryBtn, { flex: 1 }, lineTooShort && { opacity: 0.4 }]} onPress={save} disabled={saving || lineTooShort}>
                 {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>{t('walkthrough_save')}</Text>}
               </TouchableOpacity>
             </View>
@@ -338,7 +371,7 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
 
       {!recording && (
         <ScrollView style={styles.list} contentContainerStyle={{ padding: 14, paddingBottom: 28 }}>
-          <Text style={styles.intro}>{t('walkthrough_intro')}</Text>
+          <Text style={styles.intro}>{t(line ? 'line_video_intro' : 'walkthrough_intro')}</Text>
           {justSaved && <Text style={styles.savedNote}>✓ {t('walkthrough_saved_note')}</Text>}
           <Text style={styles.listTitle}>{t('walkthrough_list_title')}</Text>
           {rows.length === 0 ? (
@@ -380,6 +413,7 @@ const styles = StyleSheet.create({
   jobInfo: { backgroundColor: NAVY, paddingHorizontal: 16, paddingBottom: 12 },
   jobName: { color: '#fff', fontSize: 16, fontWeight: '700' },
   jobAddr: { color: 'rgba(255,255,255,0.5)', fontSize: 12, marginTop: 2 },
+  lineLabel: { color: GOLD, fontSize: 13, fontWeight: '700', marginTop: 6 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28, gap: 16 },
   permText: { fontSize: 15, color: '#374151', textAlign: 'center', lineHeight: 21 },
   typeRow: { flexDirection: 'row', gap: 8, padding: 10, backgroundColor: NAVY },
