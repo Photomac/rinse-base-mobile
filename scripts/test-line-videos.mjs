@@ -186,7 +186,9 @@ if (migFile) {
   check('…video_mode off / optional / required, answer_type tick / yes_no / text / number',
     /check \(video_mode in \('off', 'optional', 'required'\)\)/.test(mig) && /check \(answer_type in \('tick', 'yes_no', 'text', 'number'\)\)/.test(mig))
   check('…the answer rule is the app\'s: yes / no, the number pattern, 1 to 2,000 characters',
-    mig.includes("char_length(answer) between 1 and 2000") && mig.includes("(answer_type <> 'yes_no' or answer in ('yes', 'no'))")
+    // 1 to 2,000 characters, or (since the second review) up to 2,000 and not blank: the app trims and never sends a blank answer
+    (mig.includes("char_length(answer) between 1 and 2000") || mig.includes("char_length(answer) <= 2000 and btrim(answer) <> ''"))
+    && mig.includes("(answer_type <> 'yes_no' or answer in ('yes', 'no'))")
     && mig.includes(`answer ~ '${A.NUMBER_ANSWER.source}'`) && A.ANSWER_MAX === 2000)
   check('…a required question\'s missing answer is unchecked_required_item', /select 'unchecked_required_item'::text, c\.id, c\.room, c\.task, null::uuid[\s\S]{0,400}and c\.answer_type <> 'tick'\s*and c\.answer is null/.test(mig))
   check('…lets the phone send the record\'s line', mig.includes('grant insert (checklist_item_id) on public.job_videos_on_the_way to authenticated'))
