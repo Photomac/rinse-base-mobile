@@ -30,7 +30,7 @@
 // with an open time entry runs forever and corrupts payroll, so we clock out
 // FIRST (clockOut, owned by JobDetailScreen) and only file if that succeeded.
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image, Modal } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
@@ -43,7 +43,10 @@ import { StagingPhotoGroups, stagingViewerPhotos } from '../components/StagingPh
 import { WalkthroughChecklist } from '../components/WalkthroughChecklist'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import type { StagingPhotoRow } from '../lib/stagingRooms'
-import { localeFor, type TranslationKey } from '../lib/i18n'
+import { localeFor, ti, type TranslationKey } from '../lib/i18n'
+import { filingGaps, hasFilingGaps } from '../lib/inspectionFiling'
+import type { LineClipState } from '../lib/lineVideos'
+import type { WalkthroughLine } from '../lib/walkthrough'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 
 const NAVY = SLATE_DARK
@@ -120,6 +123,9 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   // A walkthrough line's photo: the photo screen opens over this one.
   const [photoLine, setPhotoLine] = useState<{ title: string; jobItemId: string; walkthrough?: boolean } | null>(null)
   const [walkKey, setWalkKey] = useState(0)
+  // The walkthrough as the card shows it (answers included) and each line's
+  // clip: filing waits for what must be answered or recorded (lib/inspectionFiling).
+  const walkState = useRef<{ lines: WalkthroughLine[]; clips: Record<string, LineClipState> } | null>(null)
 
   const [layer, setLayer] = useState('supervisor')
   const [result, setResult] = useState('')
@@ -222,6 +228,19 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   }
 
   async function file() {
+    // The walkthrough first: a must-answer question with no answer, or a
+    // required clip not recorded (3 seconds or more, landed, on its way or on
+    // this phone), is named and nothing is filed. The database doesn't gate
+    // filing; this matches the web's (src/lib/inspectionFiling.ts there).
+    const gaps = walkState.current ? filingGaps(walkState.current.lines, walkState.current.clips) : null
+    if (gaps && hasFilingGaps(gaps)) {
+      Alert.alert(`☑️ ${t('wt_file_blocked_title')}`, [
+        t('wt_file_blocked_msg'),
+        ...gaps.questions.map(q => `• ${ti(t('answer_needed_line'), { task: q })}`),
+        ...gaps.clips.map(c => `• ${ti(t('line_video_needed_line'), { task: c })}`),
+      ].join('\n'))
+      return
+    }
     const problem = validate()
     if (problem) { Alert.alert(t('error'), problem); return }
 
@@ -305,7 +324,8 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
 
         {/* The walkthrough: what this inspector checks, section by section.
             Renders nothing when the visit has none. */}
-        <WalkthroughChecklist job={job} user={user} readOnly={done} onAddPhoto={setPhotoLine} refreshKey={walkKey} />
+        <WalkthroughChecklist job={job} user={user} readOnly={done} onAddPhoto={setPhotoLine} refreshKey={walkKey}
+          onState={s => { walkState.current = s }} />
 
         {/* The parent clean's executed standard — what the crew signed off,
             room by room (§7.9: a score is only fair against the standard).
