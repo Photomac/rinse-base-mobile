@@ -148,6 +148,8 @@ const esbuild = (entry, out) => execSync(
 )
 
 const SCENARIOS = [
+  'lineAsksRideAlong',
+  'lineAsksBeforeMigration',
   'tomorrowFromTheNightBefore',
   'homeShowsOnlyToday',
   'officeGetsOwnStopsOnly',

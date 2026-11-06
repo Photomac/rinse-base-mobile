@@ -1,6 +1,8 @@
 // src/lib/videoQueue.ts
 // Offline-resilient uploads for walkthrough videos (the proof-of-condition
-// recordings from WalkthroughScreen). Same shape as photoQueue — persist the
+// recordings from WalkthroughScreen) and for line clips (a checklist line that
+// asks for a video, lib/lineVideos: video_type 'line' with the line's id). Same
+// shape as photoQueue — persist the
 // file, queue its metadata, upload now or whenever signal returns — but its
 // OWN queue key, directory and lock, on purpose:
 //   - photoQueue uploads one entry at a time under a single lock. A 40 MB video
@@ -35,6 +37,8 @@ export const WALKTHROUGH_MAX_BYTES = 45 * 1024 * 1024
 export const WALKTHROUGH_BITRATE = 2_500_000
 
 export type WalkthroughType = 'before' | 'after'
+/** A walkthrough video, or a clip recorded for one checklist line (lib/lineVideos). */
+export type VideoType = WalkthroughType | 'line'
 
 export interface PendingVideo {
   // Also the job_videos primary key, so a retry after a lost response hits a
@@ -46,11 +50,19 @@ export interface PendingVideo {
   tenant_id: string
   job_id: string
   user_id: string
-  video_type: WalkthroughType
+  video_type: VideoType
   duration_seconds: number
   size_bytes: number | null
   recorded_at: string
   created_at: number
+  /** A line clip: the job_checklist_items row it was recorded for. */
+  checklist_item_id?: string | null
+  /** A line clip: the line's room and wording (the server writes its own from the line;
+   *  this one stays when the line was deleted while the clip waited). */
+  caption?: string | null
+  /** The server refused the line (deleted while the clip waited for signal): the clip
+   *  goes on without it, still a line clip with its caption. */
+  lineDropped?: boolean
   // The file already reached storage; only the row insert is outstanding.
   stored?: boolean
   attempts?: number
@@ -104,7 +116,9 @@ async function ensureDir(): Promise<void> {
  *  video can wait hours for signal. */
 export async function enqueueVideo(p: {
   uri: string; tenant_id: string; job_id: string; user_id: string
-  video_type: WalkthroughType; duration_seconds: number; recorded_at: string
+  video_type: VideoType; duration_seconds: number; recorded_at: string
+  /** A line clip's line and caption (lib/lineVideos). */
+  checklist_item_id?: string | null; caption?: string | null
 }): Promise<void> {
   await ensureDir()
   const id = uuid4()
@@ -133,7 +147,7 @@ export async function enqueueVideo(p: {
     // The bucket is public, so the name is the only secret: the row's uuid
     // rather than a timestamp plus six random digits. The database requires
     // this <tenant>/<job>/ prefix and the exact public URL of this path.
-    storagePath: `${p.tenant_id}/${p.job_id}/walkthrough_${id}.${ext}`,
+    storagePath: `${p.tenant_id}/${p.job_id}/${p.video_type === 'line' ? 'line' : 'walkthrough'}_${id}.${ext}`,
     mimeType: 'video/mp4',
     tenant_id: p.tenant_id,
     job_id: p.job_id,
@@ -143,6 +157,7 @@ export async function enqueueVideo(p: {
     size_bytes: size,
     recorded_at: p.recorded_at,
     created_at: Date.now(),
+    ...(p.video_type === 'line' ? { checklist_item_id: p.checklist_item_id ?? null, caption: p.caption ?? null } : {}),
   }
   const q = await readQueue()
   q.push(entry)
@@ -206,11 +221,15 @@ async function announceOnce(): Promise<void> {
   const told = new Set(await readAnnounced())
   const due = (await readQueue()).filter(v => !told.has(v.id))
   if (!due.length) return
-  const row = (v: PendingVideo) => ({
+  // A line clip names its line, which is what lets it count for that line. A
+  // walkthrough record is sent exactly as before (no checklist_item_id key: a
+  // server without the column would refuse it).
+  const row = (v: PendingVideo, withLine = true) => ({
     id: v.id, tenant_id: v.tenant_id, job_id: v.job_id, user_id: v.user_id,
     video_type: v.video_type, duration_seconds: v.duration_seconds, recorded_at: v.recorded_at,
+    ...(withLine && lineOf(v) ? { checklist_item_id: lineOf(v) } : {}),
   })
-  const first = await sendRecords(due.map(row))
+  const first = await sendRecords(due.map(v => row(v)))
   if (first.answer === 'offline') return
   if (first.answer === 'unknown') { onTheWayUnknown = true; return }
   if (first.answer === 'ok') due.forEach(v => told.add(v.id))
@@ -219,7 +238,10 @@ async function announceOnce(): Promise<void> {
     // clean this person isn't on can't sink the rest.
     const refused: string[] = []
     for (const v of due) {
-      const one = due.length > 1 ? await sendRecords([row(v)]) : first
+      let one = due.length > 1 ? await sendRecords([row(v)]) : first
+      // The line is gone (deleted while the clip waited): the record goes on
+      // without it. It answers no line now, but the office still sees the clip.
+      if (one.answer === 'refused' && one.code === '23503' && lineOf(v)) one = await sendRecords([row(v, false)])
       if (one.answer === 'offline') break
       if (one.answer === 'unknown') { onTheWayUnknown = true; break }
       if (one.answer === 'refused' && one.code !== '42501') refused.push(one.message ?? '?')
@@ -234,6 +256,11 @@ async function announceOnce(): Promise<void> {
   try { await AsyncStorage.setItem(ANNOUNCED_KEY, JSON.stringify([...told].filter(id => queued.has(id)))) } catch { /* sent again: harmless */ }
 }
 
+/** The line a clip still names (none once the server refused it). */
+function lineOf(v: PendingVideo): string | null {
+  return v.video_type === 'line' && !v.lineDropped ? v.checklist_item_id ?? null : null
+}
+
 // A queued Complete is refused unless the server has heard of its clips first.
 onBeforeQueuedComplete(announceVideos)
 
@@ -244,7 +271,7 @@ function timeoutFor(sizeBytes: number | null): number {
   return Math.min(45 * 60_000, Math.max(240_000, Math.round((bytes / 20_000) * 1000)))
 }
 
-type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; noToken?: boolean }
+type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; noToken?: boolean; lineDropped?: boolean }
 
 async function describeHttpError(res: Response): Promise<string> {
   let detail = `HTTP ${res.status}`
@@ -297,28 +324,40 @@ async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
   }
 
   const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(entry.storagePath)
+  let lineDropped = false
+  const rowFor = (withLine: boolean) => ({
+    id: entry.id,
+    tenant_id: entry.tenant_id,
+    job_id: entry.job_id,
+    user_id: entry.user_id,
+    video_type: entry.video_type,
+    video_url: urlData.publicUrl,
+    storage_path: entry.storagePath,
+    mime_type: entry.mimeType,
+    duration_seconds: entry.duration_seconds,
+    size_bytes: entry.size_bytes,
+    recorded_at: entry.recorded_at,
+    visible_to_client: true,
+    // A line clip: its line (while the server takes it) and its caption. A
+    // walkthrough row is sent exactly as before.
+    ...(entry.video_type === 'line' ? { caption: entry.caption ?? null } : {}),
+    ...(withLine && lineOf(entry) ? { checklist_item_id: lineOf(entry) } : {}),
+  })
   try {
-    const res: any = await supabase.from('job_videos').insert({
-      id: entry.id,
-      tenant_id: entry.tenant_id,
-      job_id: entry.job_id,
-      user_id: entry.user_id,
-      video_type: entry.video_type,
-      video_url: urlData.publicUrl,
-      storage_path: entry.storagePath,
-      mime_type: entry.mimeType,
-      duration_seconds: entry.duration_seconds,
-      size_bytes: entry.size_bytes,
-      recorded_at: entry.recorded_at,
-      visible_to_client: true,
-    })
+    let res: any = await supabase.from('job_videos').insert(rowFor(true))
+    // 23503: the line is gone (deleted while the clip waited for signal). The clip
+    // is still evidence: it lands without the line, as a line clip with its caption.
+    if (res.error && res.error.code === '23503' && lineOf(entry)) {
+      lineDropped = true
+      res = await supabase.from('job_videos').insert(rowFor(false))
+    }
     // 23505 = this row already landed on an earlier try whose response was lost.
     // postgrest-js reports a fetch-level failure (no signal) as status 0.
     if (res.error && res.error.code !== '23505') {
-      return { ok: false, kind: res.status === 0 ? 'network' : 'server', message: res.error.message, stored: true }
+      return { ok: false, kind: res.status === 0 ? 'network' : 'server', message: res.error.message, stored: true, lineDropped }
     }
   } catch (e: any) {
-    return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
+    return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true, lineDropped }
   }
 
   try { await FileSystem.deleteAsync(resolveLocal(entry.localUri), { idempotent: true }) } catch { /* ignore */ }
@@ -394,6 +433,7 @@ export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ upl
       survivors.push({
         ...entry,
         stored: entry.stored || result.stored || undefined,
+        lineDropped: entry.lineDropped || result.lineDropped || undefined,
         attempts,
         failures: failures || undefined,
         reportedStuck: entry.reportedStuck || reportNow || undefined,
@@ -417,7 +457,9 @@ export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ upl
 
 export interface QueuedJobVideo {
   id: string
-  video_type: WalkthroughType
+  video_type: VideoType
+  /** A line clip: the line it was recorded for (null once the server refused the line). */
+  checklist_item_id: string | null
   duration_seconds: number
   size_bytes: number | null
   created_at: number
@@ -435,7 +477,7 @@ export async function queuedJobVideos(jobId: string): Promise<QueuedJobVideo[]> 
   return (await readQueue())
     .filter(v => v.job_id === jobId)
     .map(v => ({
-      id: v.id, video_type: v.video_type, duration_seconds: v.duration_seconds, size_bytes: v.size_bytes,
+      id: v.id, video_type: v.video_type, checklist_item_id: lineOf(v), duration_seconds: v.duration_seconds, size_bytes: v.size_bytes,
       created_at: v.created_at, failing: v.lastErrorKind === 'server', stuck: (v.failures ?? 0) >= STUCK_AFTER, fileGone: !!v.fileGone, lastError: v.lastError ?? null,
     }))
 }

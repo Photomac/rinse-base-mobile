@@ -254,6 +254,20 @@ export const checklistRowsRead = (jobId: string): CacheRead => ({
     .order('room').order('sort_order'),
 })
 
+/** The clean's lines that ask for more than a tick: a video clip (video_mode)
+ *  or a question (answer_type, and the crew's answer), each with its clips,
+ *  landed and on their way from a crew phone (lib/lineVideos, lib/lineAnswers;
+ *  rinse-base-app migration 20261106190000_checklist_line_videos). Its own
+ *  read: before that migration the server refuses it (no such column), and the
+ *  card reads a failed read as every line a tick, so nothing changes until it
+ *  applies. flag_answer is the office's, read but never shown to the crew. */
+export const lineVideosRead = (jobId: string): CacheRead => ({
+  key: `linevids:${jobId}`,
+  q: () => supabase.from('job_checklist_items')
+    .select('id, video_mode, answer_type, flag_answer, answer, job_videos(id, duration_seconds), job_videos_on_the_way(id, duration_seconds)')
+    .eq('job_id', jobId).or('video_mode.neq.off,answer_type.neq.tick'),
+})
+
 export const tenantSeedRead = (tenantId: string): CacheRead => ({
   key: `tenseed:${tenantId}`,
   q: () => supabase.from('tenants')
@@ -583,6 +597,8 @@ export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^
 // scripts/test-cache-prune.mjs fails until it is.
 const JOB_KEYS = new Set(['cilsite', 'chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
   'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'wtcarry', 'cfticks', 'cfphotos', 'cfstart',
+  // lib/lineVideos: the clean's lines that ask for a clip or a question, with their clips and answers
+  'linevids',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
   'crewNoteAck', 'videosowed'])
 const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'leadnotes', 'wttrash', 'cflines'])
@@ -626,6 +642,9 @@ export function jobPackReads(job: any, user: any): PackRead[] {
     // loadChecklist / loadChecklistForAddress
     ...(addrId ? [checklistTemplateRead(addrId)] : []),
     { ...checklistRowsRead(job.id), then: rows => (!isTask && Array.isArray(rows) && isWalkthroughJob(rows) ? walkthrough() : []) },
+    // Lines that ask for a clip or a question, and the crew's answers (the
+    // record button, the answer controls, and Complete with no signal).
+    ...(!isTask ? [lineVideosRead(job.id)] : []),
     tenantSeedRead(user.tenant_id),
     ...(addrId ? [
       roomsRead(addrId), roomSignoffsRead(job.id), addressModeRead(addrId),

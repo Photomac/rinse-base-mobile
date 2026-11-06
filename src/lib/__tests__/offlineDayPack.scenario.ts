@@ -162,6 +162,11 @@ function seedServer() {
     ],
     job_time_entries: [], job_room_signoffs: [], job_photos: [], job_crew_note_acks: [],
   }
+  // What a line asks beyond its tick (rinse-base-app 20261106190000_checklist_line_videos):
+  // every line a plain tick unless a scenario says otherwise.
+  server.tables.job_checklist_items = server.tables.job_checklist_items
+    .map(r => ({ video_mode: 'off', answer_type: 'tick', flag_answer: null, answer: null, ...r }))
+  server.beforeLineAsks = false
 }
 
 // ── Mock Supabase server ────────────────────────────────────────────────────
@@ -189,6 +194,9 @@ const server = {
   rpc: {} as Record<string, (args: any) => any>,
   /** Reachability probes answered (netFetch's /auth/v1/health). */
   probes: 0,
+  /** A database before 20261106190000_checklist_line_videos: a read naming its
+   *  columns is refused (400, 42703), as PostgREST refuses an unknown column. */
+  beforeLineAsks: false,
 }
 
 function splitTop(s: string): string[] {
@@ -244,6 +252,13 @@ function test(v: any, op: string, arg: string): boolean {
 }
 
 function keep(row: any, key: string, raw: string): boolean {
+  // or=(a.op.x,b.op.y): any of them (no nesting: none of this app's reads nest)
+  if (key === 'or') {
+    return raw.replace(/^\(|\)$/g, '').split(',').some(part => {
+      const dot = part.indexOf('.')
+      return keep(row, part.slice(0, dot), part.slice(dot + 1))
+    })
+  }
   let rest = raw, neg = false
   if (rest.startsWith('not.')) { neg = true; rest = rest.slice(4) }
   const dot = rest.indexOf('.')
@@ -316,6 +331,9 @@ const noAnswer = (init: any) => new Promise<Response>((_, reject) => {
       return out && typeof out === 'object' && 'status' in out ? json(out.status, out.body) : json(200, out)
     }
     if (method !== 'GET') { write(method, table, url.searchParams, init); return new Response('', { status: 201, headers: { date } }) }
+    if (server.beforeLineAsks && table === 'job_checklist_items' && /\bvideo_mode\b/.test(url.searchParams.get('select') || '')) {
+      return json(400, { code: '42703', message: 'column job_checklist_items.video_mode does not exist' })
+    }
     let rows = (server.tables[table] ?? []).slice()
     for (const [k, v] of url.searchParams) {
       if (k === 'select' || k === 'order' || k === 'limit' || k === 'offset') continue
@@ -378,6 +396,32 @@ function relaunch() {
 
 // ── Scenarios ───────────────────────────────────────────────────────────────
 const scenarios: Record<string, () => Promise<void>> = {
+  // Five Star, 2026-11-06: a task can ask a question or for a video clip. What
+  // each line asks, and the crew's answer, ride along with the stop, so a
+  // question still shows as a question with no signal.
+  async lineAsksRideAlong() {
+    setClock(EVENING); seedServer(); seedSession()
+    const ci3 = server.tables.job_checklist_items.find((r: any) => r.id === 'ci3')
+    Object.assign(ci3, { answer_type: 'yes_no', answer: 'no', flag_answer: 'yes', video_mode: 'optional' })
+    const c = load()
+    ok('evening: the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+    const saved = cachedVal('linevids:J-red')
+    ok('the stop\'s question lines are saved: what each asks and the answer',
+      Array.isArray(saved) && saved.length === 1 && saved[0].id === 'ci3' && saved[0].answer_type === 'yes_no' && saved[0].answer === 'no' && saved[0].video_mode === 'optional',
+      JSON.stringify(saved))
+    ok('…a plain tick line isn\'t in it', Array.isArray(saved) && !saved.some((r: any) => r.id === 'ci1' || r.id === 'ci2'))
+    ok('…nothing for a stop that is not hers', !cached('linevids:J-oak'))
+  },
+  // The app can reach phones before the migration does: the read is refused
+  // (an unknown column), and the pack saves everything else, every line a tick.
+  async lineAsksBeforeMigration() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.beforeLineAsks = true
+    const c = load()
+    ok('a database without the columns: the pack still saves', (await c.prefetchDays(CREW)).status === 'saved')
+    ok('…with the checklist rows', Array.isArray(cachedVal('chkrows:J-red')) && cachedVal('chkrows:J-red').length === 3)
+    ok('…and nothing saved for the refused read', !cached('linevids:J-red'))
+  },
   // CKS, 2026-10-19: "the crew and I see 'this is what got missed last time,
   // here's the photo'". The lines missed at the last inspection of a stop's
   // home ride along with the day's stops, and so does their photo, as a file:
