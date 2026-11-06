@@ -65,7 +65,8 @@ ok('a line photo hands its id to the photo screen, as a walkthrough photo', comp
 ok('owner-written text is translated', comp.includes('useMachineTranslation(lang,'))
 
 const insp = src('screens/JobInspectionScreen.tsx')
-ok('the inspection shows the walkthrough, read-only once filed', insp.includes('<WalkthroughChecklist job={job} user={user} readOnly={done} onAddPhoto={setPhotoLine} refreshKey={walkKey} />'))
+// (and hands its lines to the filing gate: lib/inspectionFiling, scripts/test-inspection-questions.mjs)
+ok('the inspection shows the walkthrough, read-only once filed', insp.includes('<WalkthroughChecklist job={job} user={user} readOnly={done} onAddPhoto={setPhotoLine} refreshKey={walkKey}'))
 ok('its photo screen opens in a modal (the form stays mounted)', insp.includes('<Modal visible={!!photoLine}') && insp.includes('preselectedItem={photoLine}'))
 
 const detail = src('screens/JobDetailScreen.tsx')

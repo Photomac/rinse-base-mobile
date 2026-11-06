@@ -7,6 +7,13 @@
 // 20261013131047_inspection_walkthrough). It's the same list on an inspection
 // visit and on a clean booked as the inspection service.
 //
+// Since 20261106230000_inspection_walkthrough_questions a line can also be a
+// question (answer_type yes_no / text / number, item_kind 'task', answered in
+// `answer`; level 'required' = must answer before filing) and take a video clip
+// (video_mode). Those come from their own read (lib/jobReads
+// walkthroughAsksRead); without it every line is a Looks good / Not right
+// check, as before. "Looks good" answers checks only, never a question.
+//
 // No imports, so src/lib/__tests__/walkthrough.scenario.ts can run it as is.
 
 export const WALKTHROUGH_BAND = 20000
@@ -21,6 +28,26 @@ export interface WalkthroughLine {
   photo_required: boolean
   follow_up: 'deep_clean' | 'maintenance' | null
   info_key: string | null
+  /** A question (yes_no / text / number) or a check ('tick', or absent). */
+  answer_type?: string | null
+  /** The question's answer. */
+  answer?: string | null
+  /** 'required' on a question: must be answered before the inspection is filed. */
+  level?: string | null
+  /** off / optional / required: a video clip recorded on the line. */
+  video_mode?: string | null
+  /** A Yes/No question's problem answer: the office's highlight, never the crew's. */
+  flag_answer?: string | null
+}
+
+/** A question the inspector answers, not a Looks good / Not right check. */
+export function isQuestionLine(l: { answer_type?: string | null }): boolean {
+  return l.answer_type === 'yes_no' || l.answer_type === 'text' || l.answer_type === 'number'
+}
+
+/** A line is answered: a check by its result, a question by its answer. */
+export function lineAnswered(l: WalkthroughLine): boolean {
+  return isQuestionLine(l) ? l.answer != null : l.result != null
 }
 
 export interface WalkthroughSection {
@@ -50,9 +77,10 @@ export function groupWalkthrough(lines: WalkthroughLine[]): WalkthroughSection[]
 }
 
 export function sectionState(s: WalkthroughSection) {
-  const answered = s.lines.filter(l => l.result != null).length
+  const answered = s.lines.filter(lineAnswered).length
   const issues = s.lines.filter(l => l.result === 'issue').length
-  const open = s.lines.filter(l => l.result == null).map(l => l.id)
+  // What "Looks good" may answer: checks with no answer yet, never a question.
+  const open = s.lines.filter(l => !isQuestionLine(l) && l.result == null).map(l => l.id)
   return { answered, total: s.lines.length, issues, open, done: answered === s.lines.length }
 }
 

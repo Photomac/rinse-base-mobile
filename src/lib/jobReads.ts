@@ -452,6 +452,18 @@ export const walkthroughLinesRead = (jobId: string): CacheRead => ({
     .eq('job_id', jobId).gte('sort_order', WALKTHROUGH_BAND).order('sort_order'),
 })
 
+/** What each walkthrough line asks beyond Looks good / Not right: a question
+ *  (answer_type, level, the answer), a clip (video_mode, with the clips landed
+ *  and on their way), the office's problem answer. Its own read (rinse-base-app
+ *  20261106230000_inspection_walkthrough_questions, after phase 1): before the
+ *  migrations it fails, and every line is a check as before. */
+export const walkthroughAsksRead = (jobId: string): CacheRead => ({
+  key: `wtasks:${jobId}`,
+  q: () => supabase.from('job_checklist_items')
+    .select('id, answer_type, video_mode, flag_answer, level, answer, job_videos(id, duration_seconds), job_videos_on_the_way(id, duration_seconds)')
+    .eq('job_id', jobId).gte('sort_order', WALKTHROUGH_BAND).or('video_mode.neq.off,answer_type.neq.tick'),
+})
+
 export const walkthroughPhotosRead = (jobId: string): CacheRead => ({
   key: `wtphotos:${jobId}`,
   q: () => supabase.from('job_photos')
@@ -596,7 +608,7 @@ export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^
 // builder must be listed here, or its keys are kept for ever:
 // scripts/test-cache-prune.mjs fails until it is.
 const JOB_KEYS = new Set(['cilsite', 'chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
-  'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'wtcarry', 'cfticks', 'cfphotos', 'cfstart',
+  'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'wtcarry', 'wtasks', 'cfticks', 'cfphotos', 'cfstart',
   // lib/lineVideos: the clean's lines that ask for a clip or a question, with their clips and answers
   'linevids',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
@@ -633,7 +645,7 @@ export function jobPackReads(job: any, user: any): PackRead[] {
   const isTask = isTaskJob(job)
   const dailyMode = user._timeMode === 'daily'
   const walkthrough = (): CacheRead[] => [
-    walkthroughLinesRead(job.id), walkthroughPhotosRead(job.id),
+    walkthroughLinesRead(job.id), walkthroughPhotosRead(job.id), walkthroughAsksRead(job.id),
     ...(addrId ? [trashDaysRead(addrId), carriedLinesRead(job.id)] : []),
   ]
   const reads: PackRead[] = [

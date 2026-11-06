@@ -24,7 +24,8 @@
 // 2026-10-20 that includes the lines missed at earlier inspections of the home
 // (carriedLinesRead), shown above the sections.
 import { readSoon, type SoonRead, type CacheRead } from './dataCache'
-import { walkthroughLinesRead, walkthroughPhotosRead, trashDaysRead, carriedLinesRead, jobAddressId } from './jobReads'
+import { walkthroughLinesRead, walkthroughPhotosRead, walkthroughAsksRead, trashDaysRead, carriedLinesRead, jobAddressId } from './jobReads'
+import { lineAskRows, type LineClipState } from './lineVideos'
 import { overlayPending } from './outbox'
 import { queuedJobPhotos } from './photoQueue'
 import { lastTripFailed } from './netFetch'
@@ -46,6 +47,9 @@ export interface WalkthroughView {
   carried: CarriedLine[]
   /** Their photo url → the file the day pack saved, when there is one. */
   carriedFiles: Record<string, string>
+  /** Line clips the server has, by line (lib/lineVideos): the card lays this
+   *  phone's queued clips over them. */
+  clips: Record<string, LineClipState>
 }
 
 const list = (x: any): any[] => (Array.isArray(x) ? x : [])
@@ -65,9 +69,17 @@ async function carriedSoon(read: CacheRead, wait: number): Promise<SoonRead> {
   return { data: null, error: null, fromCache: false, late: r.then(x => x.late ?? x) }
 }
 
-async function viewOf(job: any, [lines, photos, addr, carry]: { data: any; error?: any }[]): Promise<WalkthroughView> {
+async function viewOf(job: any, [lines, photos, addr, carry, asks]: { data: any; error?: any }[]): Promise<WalkthroughView> {
   // Answers queued offline overlay the rows (already scoped to this job).
-  const rows = (await overlayPending('job_checklist_items', list(lines.data), v => v.job_id === job.id)) as WalkthroughLine[]
+  const base = (await overlayPending('job_checklist_items', list(lines.data), v => v.job_id === job.id)) as WalkthroughLine[]
+  // What each line asks beyond a check (questions, clips): its own read, with
+  // answers queued offline laid over it. A failed read (or a database before
+  // the migrations): every line a check, as before.
+  const asked = lineAskRows(await overlayPending('job_checklist_items', list(asks?.data), () => false))
+  const rows = base.map(r => {
+    const a = asked.asks.get(r.id)
+    return a ? { ...r, answer_type: a.answer_type, answer: a.answer, level: a.level, video_mode: a.video_mode, flag_answer: a.flag_answer } : r
+  })
   const counts: Record<string, number> = {}
   for (const p of list(photos.data)) counts[p.checklist_item_id] = (counts[p.checklist_item_id] || 0) + 1
   // Photos still on the device count too: the photo screen captions a line's
@@ -83,7 +95,7 @@ async function viewOf(job: any, [lines, photos, addr, carry]: { data: any; error
   const carried = carry && !carry.error ? carriedFromRpc(carry.data) : []
   let carriedFiles: Record<string, string> = {}
   try { carriedFiles = await savedCarriedPhotos(carried.flatMap(l => l.photo_urls)) } catch {}
-  return { lines: rows, photoCount: counts, pickupDays: (addr.data?.trash_pickup_days ?? null) as number[] | null, carried, carriedFiles }
+  return { lines: rows, photoCount: counts, pickupDays: (addr.data?.trash_pickup_days ?? null) as number[] | null, carried, carriedFiles, clips: asked.server }
 }
 
 /** Read the card. `saved`: the first answer holds at least one saved copy.
@@ -96,6 +108,7 @@ export async function readWalkthrough(job: any, wait: number):
     readSoon(walkthroughPhotosRead(job.id), wait),
     addrId ? readSoon(trashDaysRead(addrId), wait) : NONE,
     addrId ? carriedSoon(carriedLinesRead(job.id), wait) : NONE,
+    readSoon(walkthroughAsksRead(job.id), wait),
   ])
   const first = await viewOf(job, reads)
   const fresh = reads.some(r => r.late)
