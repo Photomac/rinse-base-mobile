@@ -34,7 +34,7 @@ import {
   checklistTemplateRead, checklistRowsRead, tenantSeedRead, roomsRead, roomSignoffsRead,
   addressModeRead, tenantModeRead, photoRequirementsRead, requirementShotsRead, itemPhotosRead, lineVideosRead,
 } from './jobReads'
-import { lineVideoRows, type LineClipState } from './lineVideos'
+import { lineAskRows, type LineClipState } from './lineVideos'
 import { overlayPending } from './outbox'
 import { queuedNow, roomShots, type Queued } from './roomShots'
 import { isWalkthroughJob } from './walkthrough'
@@ -82,12 +82,16 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
   const rows = await overlayPending('job_checklist_items', list(p.rows), v => v.job_id === job.id)
   let items: any[]
   const checked: Record<string, boolean> = {}
-  // Lines that ask for a video clip: their own read, so a server without the
-  // column (or a failed read) leaves the list exactly as it was.
-  const videos = lineVideoRows(p.lineVids)
+  // Lines that ask for a clip or a question: their own read, so a server
+  // without the columns (or a failed read) leaves the list exactly as it was.
+  // Answers given with no signal overlay it, as ticks overlay the rows.
+  const asked = lineAskRows(await overlayPending('job_checklist_items', list(p.lineVids), () => false))
   if (rows.length > 0) {
     // The job has its own rows: render them as-is, template or not.
-    items = rows.map(r => ({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false, requires_video: videos.lines.has(r.id), room_uid: r.room_id, item_kind: r.item_kind || 'task', level: r.level || 'guidance', result: r.result ?? null, issue_note: r.issue_note ?? null }))
+    items = rows.map(r => {
+      const a = asked.asks.get(r.id)
+      return { id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false, video_mode: a?.video_mode ?? 'off', answer_type: a?.answer_type ?? 'tick', answer: a?.answer ?? null, room_uid: r.room_id, item_kind: r.item_kind || 'task', level: r.level || 'guidance', result: r.result ?? null, issue_note: r.issue_note ?? null }
+    })
     rows.forEach(r => { if (r.completed) checked[r.id] = true })
   } else if (tmpl.length > 0) {
     // Template exists but this job was never seeded: ticks upsert rows.
@@ -104,7 +108,7 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
     } catch { /* the default */ }
     items = seedMode === 'none' ? [] : defaults.map(d => ({ ...d }))
   }
-  const view: ChecklistView = { items, checked, walkthrough: isWalkthroughJob(rows), lineClips: videos.server }
+  const view: ChecklistView = { items, checked, walkthrough: isWalkthroughJob(rows), lineClips: asked.server }
 
   // Rooms, sign-offs, mode and the property's photo shots: best effort; without
   // them the card groups everything under "Other".

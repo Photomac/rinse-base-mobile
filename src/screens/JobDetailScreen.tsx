@@ -59,6 +59,7 @@ import {
   lineClipStates, lineClipOnPhone, videoLinesInBlockers, videoLinesInRefusal, videoLinesMissing,
   LINE_CLIP_MIN_SECONDS, type LineClipState, type VideoLineBlocker,
 } from '../lib/lineVideos'
+import { questionType, normaliseAnswer, answerWrite, requiredItemBullets, ANSWER_MAX } from '../lib/lineAnswers'
 import { checklistCard, type ChecklistView } from '../lib/checklistCard'
 import { stopDetails } from '../lib/stopDetails'
 import { checkFirstCard } from '../lib/checkFirstCard'
@@ -226,6 +227,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const [lineFor, setLineFor] = useState<any | null>(null)
   const [lineClipsServer, setLineClipsServer] = useState<Record<string, LineClipState>>({})
   const [queuedLineClips, setQueuedLineClips] = useState<QueuedJobVideo[]>([])
+  // A question's answer while it's being typed (text, number), by line: saved
+  // on blur or Done (lib/lineAnswers), and before Complete or leaving the
+  // screen. The ref is the same map, current between renders.
+  const [answerDrafts, setAnswerDrafts] = useState<Record<string, string>>({})
+  const answerDraftsRef = useRef<Record<string, string>>({})
   // Per-company switch (tenants.video_walkthroughs_enabled), off by default.
   const [videoEnabled, setVideoEnabled] = useState(false)
   // The videos the company still needs for this clean (lib/videosOwed): the
@@ -993,6 +999,23 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // Each video line's clip: landed, or on its way (this phone's, or one a phone told the server of).
   const lineClips = lineClipStates(lineClipsServer, queuedLineClips)
 
+  // Leaving the screen with an answer still being typed: saved, as a blur would.
+  const checklistRef = useRef<any[]>(checklist)
+  checklistRef.current = checklist
+  useEffect(() => () => {
+    const drafts = answerDraftsRef.current
+    for (const item of checklistRef.current) {
+      const type = questionType(item)
+      if (!type || drafts[item.id] === undefined || !item.jobItemId) continue
+      const n = normaliseAnswer(type, drafts[item.id])
+      if (!n.ok || n.value === (item.answer ?? null)) continue
+      writeThrough({
+        table: 'job_checklist_items', op: 'update', match: { id: item.jobItemId },
+        values: answerWrite(n.value, user.id, new Date().toISOString()),
+      }).catch(() => {})
+    }
+  }, [])
+
   // The office can rebuild this property's checklist or remove a room while the
   // crew is mid-clean. This screen keeps the shot list it loaded, so the next
   // shot names a shot that no longer exists. Before 2026-10-09 the server
@@ -1338,9 +1361,16 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     return item.labelKey ? t(item.labelKey) : (item.room ? `${tx(item.room)} — ${tx(item.title)}` : tx(item.title))
   }
 
+  /** Does the line take a video clip (optional or required)? */
+  function takesVideo(item: any): boolean {
+    return (item.video_mode === 'optional' || item.video_mode === 'required') && !!item.jobItemId
+  }
+
   // Under a video line's wording: Video required / Clip saved · uploading / Clip uploaded.
+  // An optional line with no clip says nothing: its button is there.
   function lineVideoNote(item: any) {
     const st = item.jobItemId ? lineClips[item.jobItemId] : undefined
+    if (!st && item.video_mode !== 'required') return null
     return (
       <Text style={{ fontSize: 9, color: st ? '#059669' : TEAL, fontWeight: '700', marginTop: 2 }}>
         🎥 {t(st === 'uploaded' ? 'line_video_uploaded' : st === 'sending' ? 'line_video_sending' : 'video_required_short')}
@@ -1354,8 +1384,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     return (
       <TouchableOpacity disabled={readOnly} onPress={() => openLineRecorder(item)}
         accessibilityRole="button" accessibilityLabel={t('line_video_record')}
-        style={[styles.itemPhotoBtn, st && styles.itemPhotoBtnDone, !st && { borderColor: TEAL, borderWidth: 1.5 }, readOnly && { opacity: 0.5 }]}>
-        <Text style={styles.itemPhotoBtnText}>{st ? '🎥 ✓' : '🎥!'}</Text>
+        style={[styles.itemPhotoBtn, st && styles.itemPhotoBtnDone, !st && item.video_mode === 'required' && { borderColor: TEAL, borderWidth: 1.5 }, readOnly && { opacity: 0.5 }]}>
+        <Text style={styles.itemPhotoBtnText}>{st ? '🎥 ✓' : item.video_mode === 'required' ? '🎥!' : '🎥'}</Text>
       </TouchableOpacity>
     )
   }
@@ -1366,13 +1396,125 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     setLineFor(item)
   }
 
-  /** A clip for the line was saved: it ticks the line, as a photo does a photo line.
-   *  A Yes / Not right line is still answered by the crew. */
+  /** A required clip for a Do line was saved: it ticks the line, as a photo does a
+   *  photo line. An optional clip ticks nothing; a Check line and a question are
+   *  still answered by the crew. */
   function lineClipSaved(item: any, seconds: number) {
     refreshQueuedLineClips()
-    if (seconds < LINE_CLIP_MIN_SECONDS || item.item_kind === 'verify' || checked[item.id]) return
+    if (seconds < LINE_CLIP_MIN_SECONDS || item.video_mode !== 'required' || item.item_kind === 'verify'
+      || questionType(item) || checked[item.id]) return
     setChecked(prev => ({ ...prev, [item.id]: true }))
     saveCheckItem(item, true)
+  }
+
+  /** Save (or clear) a question's answer, through the outbox like a tick so it
+   *  holds with no signal. Answering completes the line (lib/lineAnswers). */
+  async function saveAnswer(item: any, answer: string | null) {
+    if (!item?.jobItemId) return
+    checklistLoads.edited()
+    const before = { answer: item.answer ?? null, checked: !!checked[item.id] }
+    setChecklist(prev => prev.map(i => (i.id === item.id ? { ...i, answer } : i)))
+    setChecked(prev => ({ ...prev, [item.id]: answer != null }))
+    const { error } = await writeThrough({
+      table: 'job_checklist_items', op: 'update', match: { id: item.jobItemId },
+      values: answerWrite(answer, user.id, new Date().toISOString()),
+    })
+    if (error) {
+      setChecklist(prev => prev.map(i => (i.id === item.id ? { ...i, answer: before.answer } : i)))
+      setChecked(prev => ({ ...prev, [item.id]: before.checked }))
+      Alert.alert(t('error'), t('could_not_save'))
+    }
+  }
+
+  function setAnswerDraft(id: string, value: string) {
+    answerDraftsRef.current = { ...answerDraftsRef.current, [id]: value }
+    setAnswerDrafts(answerDraftsRef.current)
+  }
+
+  /** A typed answer, finished (blur or Done): saved if it changed; one the server
+   *  would refuse is refused here, and the saved answer stays. */
+  function commitAnswer(item: any): Promise<void> | undefined {
+    const raw = answerDraftsRef.current[item.id]
+    if (raw === undefined) return
+    const { [item.id]: _done, ...rest } = answerDraftsRef.current
+    answerDraftsRef.current = rest
+    setAnswerDrafts(rest)
+    const type = questionType(item)
+    if (!type) return
+    const n = normaliseAnswer(type, raw)
+    if (!n.ok) {
+      Alert.alert(t('error'), t(n.reason === 'too_long' ? 'answer_too_long' : 'answer_number_invalid'))
+      return
+    }
+    if (n.value === (item.answer ?? null)) return
+    return saveAnswer(item, n.value)
+  }
+
+  /** Every answer still being typed, saved before Complete asks the gate. */
+  async function commitAllAnswers() {
+    const drafts = answerDraftsRef.current
+    await Promise.all(checklist.filter((i: any) => drafts[i.id] !== undefined).map((i: any) => commitAnswer(i)))
+  }
+
+  // A question line: its answer control in place of the checkbox. Photos and a
+  // clip as on any line; the office's problem answer is never shown here.
+  function questionRow(item: any) {
+    const type = questionType(item)
+    const answered = item.answer != null
+    const draft = answerDrafts[item.id]
+    return (
+      <View key={item.id} style={styles.checkItem}>
+        <View style={{ flex: 1, gap: 6 }}>
+          <View>
+            <Text style={styles.checkLabel}>{item.labelKey ? t(item.labelKey) : tx(item.title)}</Text>
+            {item.level === 'required' && !answered && (
+              <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>{t('answer_required_short')}</Text>
+            )}
+            {item.requires_photo && !itemPhotos[item.id] && (
+              <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>{t('photo_required_short')}</Text>
+            )}
+            {takesVideo(item) && lineVideoNote(item)}
+          </View>
+          {type === 'yes_no' ? (
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {(['yes', 'no'] as const).map(v => {
+                const on = item.answer === v
+                return (
+                  <TouchableOpacity key={v} disabled={readOnly} onPress={() => { saveAnswer(item, on ? null : v) }}
+                    accessibilityRole="button" accessibilityState={{ selected: on }}
+                    style={[styles.answerPill, on && styles.answerPillOn, readOnly && !on && { opacity: 0.5 }]}>
+                    <Text style={[styles.answerPillText, on && styles.answerPillTextOn]}>{t(v)}</Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+          ) : (
+            <TextInput
+              editable={!readOnly}
+              value={draft ?? item.answer ?? ''}
+              onChangeText={v => setAnswerDraft(item.id, v)}
+              onBlur={() => { commitAnswer(item) }}
+              onSubmitEditing={() => { commitAnswer(item) }}
+              placeholder={t(type === 'number' ? 'answer_number_ph' : 'answer_text_ph')}
+              placeholderTextColor="#9CA3AF"
+              keyboardType={type === 'number' ? 'decimal-pad' : 'default'}
+              multiline={type === 'text'}
+              blurOnSubmit
+              returnKeyType="done"
+              maxLength={type === 'text' ? ANSWER_MAX : 24}
+              style={[styles.answerInput, type === 'text' && styles.answerInputText, answered && draft === undefined && styles.answerInputDone]}
+            />
+          )}
+        </View>
+        <TouchableOpacity
+          style={[styles.itemPhotoBtn, itemPhotos[item.id] > 0 && styles.itemPhotoBtnDone, item.requires_photo && !itemPhotos[item.id] && { borderColor: TEAL, borderWidth: 1.5 }]}
+          onPress={() => { setActivePhotoItem(item); setShowPhotos(true) }}
+        >
+          <Text style={styles.itemPhotoBtnText}>{itemPhotos[item.id] > 0 ? `📷 ${itemPhotos[item.id]}` : item.requires_photo ? '📷!' : '📷'}</Text>
+        </TouchableOpacity>
+        {takesVideo(item) && lineVideoButton(item)}
+      </View>
+    )
   }
 
   /** Complete stopped for lines that ask for a video clip: name them, and open the recorder on the first. */
@@ -1519,6 +1661,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   }
 
   async function completeJob() {
+    // An answer still being typed goes first: the gate reads the saved ones.
+    await commitAllAnswers()
     // An inspection is closed by FILING ITS RESULT, not by a generic Complete.
     // Marking it done with no result would produce a visit that counts for
     // nothing: QualityReport only counts inspections with a recorded result, so
@@ -1771,7 +1915,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       // issue). List the rooms and pop them open — the work is on this screen.
       const requiredLeft = blockers.filter((b: any) => b.code === 'unchecked_required_item')
       if (requiredLeft.length > 0) {
-        const roomsLeft = [...new Set(requiredLeft.map((b: any) => tx(b.room)).filter(Boolean))] as string[]
+        // Rooms of the unticked lines; a question by name ("Answer: …", lib/lineAnswers).
+        const roomsLeft = requiredItemBullets(requiredLeft, checklist, {
+          room: (r: string) => tx(r),
+          answer: (item: any, task: string) => ti(t('answer_needed_line'), { task: tx(item?.title ?? task) }),
+        })
         const affected = checklist.filter((i: any) => requiredLeft.some((b: any) => b.checklist_item_id === i.jobItemId))
         Alert.alert(
           `☑️ ${t('required_items_missing_title')}`,
@@ -2639,8 +2787,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                 const evReq = evRows.filter((e: any) => e.required && !notOwed(e.id, e.required))
                 const req = { total: evReq.length, done: evReq.filter((e: any) => e.photo_url).length }
                 const signed = !!signoffs[g.key]
+                // A question isn't answered by the room's sign-off (lib/lineAnswers).
+                const questionsLeft = g.items.filter((i: any) => questionType(i) && i.answer == null).length
                 const workDone = g.mode === 'room_complete'
-                  ? signed
+                  ? signed && questionsLeft === 0
                   : doneTasks === tasks.length && answered === verifies.length
                 return { tasks, verifies, doneTasks, answered, issues, req, signed,
                   complete: g.items.length > 0 && workDone && req.done >= req.total }
@@ -2692,7 +2842,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                       <Text style={{ color: '#B45309', width: 16, textAlign: 'center' }}>◇</Text>
                                       <View style={{ flex: 1 }}>
                                         <Text style={styles.checkLabel}>{tx(item.title)}</Text>
-                                        {item.requires_video && lineVideoNote(item)}
+                                        {takesVideo(item) && lineVideoNote(item)}
                                         {item.result === 'issue' && item.issue_note && issueForId !== item.id && (
                                           <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>⚠ {item.issue_note}</Text>
                                         )}
@@ -2720,7 +2870,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                           </TouchableOpacity>
                                         )
                                       })}
-                                      {item.requires_video && lineVideoButton(item)}
+                                      {takesVideo(item) && lineVideoButton(item)}
                                     </View>
                                     {issueForId === item.id && (
                                       <View style={{ flexDirection: 'row', gap: 6, marginTop: 5, marginLeft: 24 }}>
@@ -2735,6 +2885,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                   </View>
                                 )
                               }
+                              // A question (lib/lineAnswers): answered in any mode; a
+                              // room's sign-off doesn't answer it.
+                              if (questionType(item) && item.jobItemId) return questionRow(item)
                               // task row (also verify rows on unseeded legacy jobs)
                               if (g.mode === 'room_complete') {
                                 return (
@@ -2742,9 +2895,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                     <Text style={{ color: '#9CA3AF', width: 16, textAlign: 'center' }}>•</Text>
                                     <View style={{ flex: 1 }}>
                                       <Text style={styles.checkLabel}>{item.labelKey ? t(item.labelKey) : tx(item.title)}</Text>
-                                      {item.requires_video && lineVideoNote(item)}
+                                      {takesVideo(item) && lineVideoNote(item)}
                                     </View>
-                                    {item.requires_video && lineVideoButton(item)}
+                                    {takesVideo(item) && lineVideoButton(item)}
                                   </View>
                                 )
                               }
@@ -2753,7 +2906,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                   <TouchableOpacity disabled={readOnly} onPress={() => {
                                     const newVal = !checked[item.id]
                                     // A video line ticks with its clip (lib/lineVideos), as a photo line with its photo.
-                                    if (newVal && item.requires_video && !lineClips[item.jobItemId]) {
+                                    if (newVal && item.video_mode === 'required' && !lineClips[item.jobItemId]) {
                                       Alert.alert(`🎥 ${t('line_video_required_title')}`, t('line_video_before_check_msg'), [
                                         { text: t('line_video_record'), onPress: () => openLineRecorder(item) },
                                         { text: t('cancel'), style: 'cancel' },
@@ -2778,7 +2931,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                       {item.requires_photo && !itemPhotos[item.id] && (
                                         <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>{t('photo_required_short')}</Text>
                                       )}
-                                      {item.requires_video && lineVideoNote(item)}
+                                      {takesVideo(item) && lineVideoNote(item)}
                                     </View>
                                   </TouchableOpacity>
                                   {/* Generated "Restock…" tasks jump to this room's supplies */}
@@ -2793,7 +2946,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                   >
                                     <Text style={styles.itemPhotoBtnText}>{itemPhotos[item.id] > 0 ? `📷 ${itemPhotos[item.id]}` : item.requires_photo ? '📷!' : '📷'}</Text>
                                   </TouchableOpacity>
-                                  {item.requires_video && lineVideoButton(item)}
+                                  {takesVideo(item) && lineVideoButton(item)}
                                 </View>
                               )
                             })}
@@ -3090,6 +3243,13 @@ const styles = StyleSheet.create({
   checkbox: { width: 24, height: 24, borderRadius: 7, borderWidth: 2, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   checkboxDone: { backgroundColor: TEAL, borderColor: TEAL },
   checkLabel: { fontSize: 13, color: '#374151', flex: 1 },
+  answerPill: { paddingVertical: 6, paddingHorizontal: 16, borderRadius: 14, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#fff' },
+  answerPillOn: { backgroundColor: TEAL, borderColor: TEAL },
+  answerPillText: { fontSize: 12, fontWeight: '800', color: '#374151' },
+  answerPillTextOn: { color: '#fff' },
+  answerInput: { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, fontSize: 13, color: '#111827', backgroundColor: '#fff' },
+  answerInputText: { minHeight: 56, textAlignVertical: 'top' },
+  answerInputDone: { borderColor: '#6EE7B7', backgroundColor: '#ECFDF5' },
   itemPhotoBtn: { padding: 8, borderRadius: 8, backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#E5E7EB' },
   itemPhotoBtnDone: { backgroundColor: '#ECFDF5', borderColor: '#6EE7B7' },
   itemPhotoBtnText: { fontSize: 14 },

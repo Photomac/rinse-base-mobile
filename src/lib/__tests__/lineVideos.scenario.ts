@@ -1,12 +1,19 @@
-// A checklist line that asks for a video clip, on the phone. Run with: node scripts/test-line-videos.mjs
+// A checklist line that asks for a video clip or a question, on the phone.
+// Run with: node scripts/test-line-videos.mjs
 //
-// The REAL videoQueue.ts beside the REAL outbox.ts. A line clip goes up through
+// The REAL videoQueue.ts beside the REAL outbox.ts, and the REAL lineAnswers /
+// lineVideos rules. An answer is written through the outbox like a tick (it
+// completes the line; clearing it unticks it), holds with no signal, and the
+// card shows it before it's delivered. A line clip goes up through
 // the walkthrough videos' queue as video_type 'line' with its line's id: the
 // record names the line (that's what lets the server count it for the line),
 // the row carries the line and its caption, and a walkthrough clip is sent
 // exactly as before. A line deleted while its clip waited for signal doesn't
 // strand the clip: it goes on without the line.
 import { enqueueVideo, flushVideoQueue, queuedJobVideos } from '../videoQueue'
+import { writeThrough, flushOutbox, pendingOpCount, overlayPending } from '../outbox'
+import { answerWrite, normaliseAnswer } from '../lineAnswers'
+import { lineAskRows } from '../lineVideos'
 import { net, video, lines } from './lineVideos.mocks'
 
 let failures = 0
@@ -116,6 +123,39 @@ const rows = (table: string, job: string) => net.applied.filter(a => a.table ===
   const j4recs: any[] = rows('job_videos_on_the_way', 'J4')
   ok('signal back: each record names its line', ['LINE4', 'LINE5'].every(id => j4recs.some(r => r.checklist_item_id === id)))
   ok('…and both clips land', (await queuedJobVideos('J4')).length === 0 && rows('job_videos', 'J4').length === 2)
+
+  // ── Answers: written like a tick, held with no signal ────────────────────
+  const answer = (id: string, value: string | null) => writeThrough({
+    table: 'job_checklist_items', op: 'update', match: { id }, values: answerWrite(value, 'U', AT),
+  })
+  const updates = (id: string) => net.applied.filter(a => a.table === 'job_checklist_items' && a.op === 'update' && a.filters.includes(`id=eq.${id}`))
+  net.online = true
+  net.answering = true
+  const yes = await answer('Q1', 'yes')
+  ok('online: a Yes is written at once, with the tick', !yes.error && !yes.queued
+    && updates('Q1').some(a => a.values.answer === 'yes' && a.values.completed === true && a.values.completed_by === 'U' && a.values.completed_at === AT))
+  const cleared = await answer('Q1', null)
+  ok('…tapping it again clears the answer and unticks the line', !cleared.error
+    && updates('Q1').some(a => a.values.answer === null && a.values.completed === false && a.values.completed_at === null && a.values.completed_by === null))
+
+  net.online = false
+  net.answering = false
+  const typed = normaliseAnswer('number', ' 3,5 ')
+  ok('a number typed with a comma is saved with a point', typed.ok && typed.value === '3.5')
+  const offline = await answer('Q2', typed.ok ? typed.value : null)
+  ok('no signal: the answer queues instead of failing', !offline.error && offline.queued && (await pendingOpCount()) >= 1)
+  const savedCopy = [{ id: 'Q2', video_mode: 'off', answer_type: 'number', answer: null, job_videos: [], job_videos_on_the_way: [] }]
+  const shown = lineAskRows(await overlayPending('job_checklist_items', savedCopy, () => false))
+  ok('…the card shows it over the saved copy before it\'s delivered', shown.asks.get('Q2')?.answer === '3.5')
+  const before = updates('Q2').length
+  net.online = true
+  net.answering = true
+  await flushOutbox()
+  await settle()
+  ok('signal back: it\'s delivered, with the tick', updates('Q2').length === before + 1
+    && updates('Q2').some(a => a.values.answer === '3.5' && a.values.completed === true) && (await pendingOpCount()) === 0)
+  const bad = normaliseAnswer('number', '3.12345')
+  ok('a number the server would refuse is never sent', !bad.ok)
 
   console.log(failures ? `\n${failures} FAILED` : '\nall passed')
   if (failures) process.exit(1)

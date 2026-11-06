@@ -867,6 +867,13 @@ export const translations = {
     line_video_required_title: 'Video needed',
     line_video_before_check_msg: 'This task needs a short video before it can be checked off. Record it, and the task checks itself off.',
     line_videos_missing_msg: 'These tasks still need a video before the clean can be completed:',
+    // A checklist task that asks a question (lib/lineAnswers)
+    answer_required_short: 'Answer required',
+    answer_text_ph: 'Type your answer',
+    answer_number_ph: 'Enter a number',
+    answer_number_invalid: 'Enter a number, like 16 or 3.5.',
+    answer_too_long: 'That answer is too long. Keep it under 2,000 characters.',
+    answer_needed_line: 'Answer: {task}',
     // Training videos — Profile row that opens the crew training page on rinsebase.com (lib/trainingVideos)
     training_videos: 'Training videos',
     training_videos_sub: 'Short videos on using the app',
@@ -1946,6 +1953,13 @@ export const translations = {
     line_video_required_title: 'Falta un video',
     line_video_before_check_msg: 'Esta tarea necesita un video corto antes de poder marcarla. Grábalo y la tarea se marca sola.',
     line_videos_missing_msg: 'Estas tareas aún necesitan un video antes de completar la limpieza:',
+    // Una tarea de la lista que hace una pregunta (lib/lineAnswers)
+    answer_required_short: 'Respuesta requerida',
+    answer_text_ph: 'Escribe tu respuesta',
+    answer_number_ph: 'Escribe un número',
+    answer_number_invalid: 'Escribe un número, como 16 o 3,5.',
+    answer_too_long: 'La respuesta es muy larga. Que tenga menos de 2.000 caracteres.',
+    answer_needed_line: 'Responde: {task}',
     // Videos de capacitación — fila del Perfil que abre la página de capacitación en rinsebase.com (lib/trainingVideos)
     training_videos: 'Videos de capacitación',
     training_videos_sub: 'Videos cortos sobre cómo usar la app',
@@ -3025,6 +3039,13 @@ export const translations = {
     line_video_required_title: 'Falta um vídeo',
     line_video_before_check_msg: 'Esta tarefa precisa de um vídeo curto antes de ser marcada. Grave o vídeo e a tarefa se marca sozinha.',
     line_videos_missing_msg: 'Estas tarefas ainda precisam de um vídeo antes de concluir a limpeza:',
+    // Uma tarefa da lista que faz uma pergunta (lib/lineAnswers)
+    answer_required_short: 'Resposta obrigatória',
+    answer_text_ph: 'Digite sua resposta',
+    answer_number_ph: 'Digite um número',
+    answer_number_invalid: 'Digite um número, como 16 ou 3,5.',
+    answer_too_long: 'A resposta está muito longa. Use menos de 2.000 caracteres.',
+    answer_needed_line: 'Responda: {task}',
     // Vídeos de treinamento — linha do Perfil que abre a página de treinamento em português em rinsebase.com
     // (lib/trainingVideos). Os vídeos têm legendas em português (as telas foram gravadas com o app em inglês).
     training_videos: 'Vídeos de treinamento',
