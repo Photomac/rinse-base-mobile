@@ -54,7 +54,11 @@ import { noteCachedJobs } from '../lib/cachePrune'
 // pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
 import { crewClockRead, checkFirstStartRead, videosOwedRead } from '../lib/jobReads'
 import { videosInBlockers, videosInRefusal, videosFromOwedRows, videosStillOwed } from '../lib/videosOwed'
-import { queuedJobVideos, announceVideos, type WalkthroughType } from '../lib/videoQueue'
+import { queuedJobVideos, announceVideos, flushVideoQueue, type WalkthroughType, type QueuedJobVideo } from '../lib/videoQueue'
+import {
+  lineClipStates, lineClipOnPhone, videoLinesInBlockers, videoLinesInRefusal, videoLinesMissing,
+  LINE_CLIP_MIN_SECONDS, type LineClipState, type VideoLineBlocker,
+} from '../lib/lineVideos'
 import { checklistCard, type ChecklistView } from '../lib/checklistCard'
 import { stopDetails } from '../lib/stopDetails'
 import { checkFirstCard } from '../lib/checkFirstCard'
@@ -217,6 +221,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const [showWalkthrough, setShowWalkthrough] = useState(false)
   // Opened for one video (Start's question, Complete's alert): the recorder starts on it.
   const [walkthroughFor, setWalkthroughFor] = useState<WalkthroughType | null>(null)
+  // A checklist line that asks for a video clip (lib/lineVideos): the line the
+  // recorder is open for, the server's clips by line, and this phone's.
+  const [lineFor, setLineFor] = useState<any | null>(null)
+  const [lineClipsServer, setLineClipsServer] = useState<Record<string, LineClipState>>({})
+  const [queuedLineClips, setQueuedLineClips] = useState<QueuedJobVideo[]>([])
   // Per-company switch (tenants.video_walkthroughs_enabled), off by default.
   const [videoEnabled, setVideoEnabled] = useState(false)
   // The videos the company still needs for this clean (lib/videosOwed): the
@@ -881,6 +890,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       setEvidence(v.rooms.evidence)
     }
     if (v.itemPhotos) setItemPhotos(v.itemPhotos)
+    setLineClipsServer(v.lineClips)
+    refreshQueuedLineClips()
+  }
+
+  /** This phone's line clips still in the video queue (lib/videoQueue). */
+  function refreshQueuedLineClips() {
+    queuedJobVideos(job.id)
+      .then(q => setQueuedLineClips(q.filter(v => v.video_type === 'line')))
+      .catch(() => {})
   }
 
   // quiet = refresh in place (realtime teammate updates) — no spinner flash.
@@ -955,6 +973,25 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     })
     return () => { off(); if (timer) clearTimeout(timer) }
   }, [job.id])
+
+  // A line clip still on this phone: keep sending it, and once it lands the
+  // line reads uploaded (the server's read says so).
+  const lineClipQueued = queuedLineClips.length > 0
+  useEffect(() => {
+    if (!lineClipQueued) return
+    const iv = setInterval(() => {
+      flushVideoQueue().catch(() => {}).finally(() => {
+        queuedJobVideos(job.id).then(q => {
+          const left = q.filter(v => v.video_type === 'line')
+          setQueuedLineClips(left)
+          if (left.length === 0) loadChecklist(true)
+        }).catch(() => {})
+      })
+    }, 20_000)
+    return () => clearInterval(iv)
+  }, [lineClipQueued, job.id])
+  // Each video line's clip: landed, or on its way (this phone's, or one a phone told the server of).
+  const lineClips = lineClipStates(lineClipsServer, queuedLineClips)
 
   // The office can rebuild this property's checklist or remove a room while the
   // crew is mid-clean. This screen keeps the shot list it loaded, so the next
@@ -1296,6 +1333,62 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     setShowWalkthrough(true)
   }
 
+  /** A checklist line's name, in the crew's language. */
+  function lineLabel(item: any): string {
+    return item.labelKey ? t(item.labelKey) : (item.room ? `${tx(item.room)} — ${tx(item.title)}` : tx(item.title))
+  }
+
+  // Under a video line's wording: Video required / Clip saved · uploading / Clip uploaded.
+  function lineVideoNote(item: any) {
+    const st = item.jobItemId ? lineClips[item.jobItemId] : undefined
+    return (
+      <Text style={{ fontSize: 9, color: st ? '#059669' : TEAL, fontWeight: '700', marginTop: 2 }}>
+        🎥 {t(st === 'uploaded' ? 'line_video_uploaded' : st === 'sending' ? 'line_video_sending' : 'video_required_short')}
+      </Text>
+    )
+  }
+
+  // A video line's record button, beside its photo button.
+  function lineVideoButton(item: any) {
+    const st = item.jobItemId ? lineClips[item.jobItemId] : undefined
+    return (
+      <TouchableOpacity disabled={readOnly} onPress={() => openLineRecorder(item)}
+        accessibilityRole="button" accessibilityLabel={t('line_video_record')}
+        style={[styles.itemPhotoBtn, st && styles.itemPhotoBtnDone, !st && { borderColor: TEAL, borderWidth: 1.5 }, readOnly && { opacity: 0.5 }]}>
+        <Text style={styles.itemPhotoBtnText}>{st ? '🎥 ✓' : '🎥!'}</Text>
+      </TouchableOpacity>
+    )
+  }
+
+  /** Record the clip a checklist line asks for (WalkthroughScreen's line mode). */
+  function openLineRecorder(item: any) {
+    if (!item?.jobItemId || readOnly) return
+    setLineFor(item)
+  }
+
+  /** A clip for the line was saved: it ticks the line, as a photo does a photo line.
+   *  A Yes / Not right line is still answered by the crew. */
+  function lineClipSaved(item: any, seconds: number) {
+    refreshQueuedLineClips()
+    if (seconds < LINE_CLIP_MIN_SECONDS || item.item_kind === 'verify' || checked[item.id]) return
+    setChecked(prev => ({ ...prev, [item.id]: true }))
+    saveCheckItem(item, true)
+  }
+
+  /** Complete stopped for lines that ask for a video clip: name them, and open the recorder on the first. */
+  function alertVideoLinesNeeded(left: VideoLineBlocker[]) {
+    const items = left.map(b => checklist.find((i: any) => i.jobItemId === b.checklist_item_id))
+    const lines = left.map((b, idx) => {
+      const item = items[idx]
+      return item ? lineLabel(item) : (b.room ? `${tx(b.room)} — ${tx(b.task ?? '')}` : tx(b.task ?? ''))
+    })
+    const first = items.find(Boolean)
+    Alert.alert(`🎥 ${t('line_video_required_title')}`, `${t('line_videos_missing_msg')}\n\n• ${lines.join('\n• ')}`, [
+      ...(first && !readOnly ? [{ text: t('line_video_record'), onPress: () => openLineRecorder(first) }] : []),
+      { text: t('cancel'), style: 'cancel' as const },
+    ])
+  }
+
   /** Complete stopped for these videos: say which, and open the recorder on the first. */
   function alertVideosNeeded(types: WalkthroughType[]) {
     const label = (x: WalkthroughType) => t(x === 'before' ? 'walkthrough_type_before' : 'walkthrough_type_after')
@@ -1594,6 +1687,26 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       if (!gateErr) {
         Alert.alert(`🎥 ${t('walkthrough_sending_title')}`, t('walkthrough_sending_msg'))
         return
+      }
+    }
+    // Lines that ask for a video clip (missing_required_video, lib/lineVideos).
+    // With no answer from the gate: the phone's own copy of the lines with no
+    // clip anywhere it knows of (a Complete queued past one would be refused
+    // when it lands, with the crew long gone). A clip on this phone the server
+    // hasn't heard of yet: still sending, as for walkthrough videos.
+    {
+      const onPhone = await queuedJobVideos(job.id).catch((): QueuedJobVideo[] => [])
+      const missing: VideoLineBlocker[] = !gateErr
+        ? videoLinesInBlockers(blockers)
+        : videoLinesMissing(checklist, lineClipStates(lineClipsServer, onPhone))
+          .map((i: any) => ({ checklist_item_id: i.jobItemId, room: i.room ?? null, task: i.title ?? null }))
+      if (missing.length > 0) {
+        const left = missing.filter(b => !(b.checklist_item_id && lineClipOnPhone(b.checklist_item_id, onPhone)))
+        if (left.length > 0) { alertVideoLinesNeeded(left); return }
+        if (!gateErr) {
+          Alert.alert(`🎥 ${t('walkthrough_sending_title')}`, t('walkthrough_sending_msg'))
+          return
+        }
       }
     }
     // What still stops the Complete.
@@ -1923,6 +2036,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       // The gate refused for a video this screen didn't know was owed.
       const refusedVideos = videosInRefusal(doneErr.message)
       if (refusedVideos.length > 0) { alertVideosNeeded(refusedVideos); return }
+      const refusedLines = videoLinesInRefusal(doneErr.message)
+      if (refusedLines.length > 0) { alertVideoLinesNeeded(refusedLines); return }
       Alert.alert(t('error'), doneErr.message)
       return
     }
@@ -1957,6 +2072,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     />
   )
   if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} requiredOutstanding={Math.max(0, reqTotal - reqDone)} readOnly={readOnly} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
+  if (lineFor) {
+    // Back from the recorder: no checklist reload, which could beat the tick's
+    // write and show the line unticked. The tick is on screen already; the line
+    // reads uploaded once the clip lands (the poll above reloads then).
+    return <WalkthroughScreen job={job} user={user} defaultType="after" asked
+      line={{ id: lineFor.jobItemId, room: lineFor.room ?? null, title: lineFor.title, label: lineLabel(lineFor) }}
+      onLineSaved={secs => lineClipSaved(lineFor, secs)}
+      onBack={() => { setLineFor(null); refreshQueuedLineClips() }} />
+  }
   if (showWalkthrough) {
     // Arrival until the clean is ~15 minutes in, finished after that, until the
     // recorder reads whether the clean has its arrival video. The crew can switch
@@ -2568,6 +2692,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                       <Text style={{ color: '#B45309', width: 16, textAlign: 'center' }}>◇</Text>
                                       <View style={{ flex: 1 }}>
                                         <Text style={styles.checkLabel}>{tx(item.title)}</Text>
+                                        {item.requires_video && lineVideoNote(item)}
                                         {item.result === 'issue' && item.issue_note && issueForId !== item.id && (
                                           <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>⚠ {item.issue_note}</Text>
                                         )}
@@ -2595,6 +2720,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                           </TouchableOpacity>
                                         )
                                       })}
+                                      {item.requires_video && lineVideoButton(item)}
                                     </View>
                                     {issueForId === item.id && (
                                       <View style={{ flexDirection: 'row', gap: 6, marginTop: 5, marginLeft: 24 }}>
@@ -2614,7 +2740,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                 return (
                                   <View key={item.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}>
                                     <Text style={{ color: '#9CA3AF', width: 16, textAlign: 'center' }}>•</Text>
-                                    <Text style={[styles.checkLabel, { flex: 1 }]}>{item.labelKey ? t(item.labelKey) : tx(item.title)}</Text>
+                                    <View style={{ flex: 1 }}>
+                                      <Text style={styles.checkLabel}>{item.labelKey ? t(item.labelKey) : tx(item.title)}</Text>
+                                      {item.requires_video && lineVideoNote(item)}
+                                    </View>
+                                    {item.requires_video && lineVideoButton(item)}
                                   </View>
                                 )
                               }
@@ -2622,6 +2752,14 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                 <View key={item.id} style={styles.checkItem}>
                                   <TouchableOpacity disabled={readOnly} onPress={() => {
                                     const newVal = !checked[item.id]
+                                    // A video line ticks with its clip (lib/lineVideos), as a photo line with its photo.
+                                    if (newVal && item.requires_video && !lineClips[item.jobItemId]) {
+                                      Alert.alert(`🎥 ${t('line_video_required_title')}`, t('line_video_before_check_msg'), [
+                                        { text: t('line_video_record'), onPress: () => openLineRecorder(item) },
+                                        { text: t('cancel'), style: 'cancel' },
+                                      ])
+                                      return
+                                    }
                                     if (newVal && item.requires_photo && !itemPhotos[item.id]) {
                                       Alert.alert(`📸 ${t('photo_required_alert')}`, t('item_photo_before_check_msg'), [
                                         { text: t('add_photo_btn'), onPress: () => { setActivePhotoItem(item); setShowPhotos(true) } },
@@ -2640,6 +2778,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                       {item.requires_photo && !itemPhotos[item.id] && (
                                         <Text style={{ fontSize: 9, color: TEAL, fontWeight: '700', marginTop: 2 }}>{t('photo_required_short')}</Text>
                                       )}
+                                      {item.requires_video && lineVideoNote(item)}
                                     </View>
                                   </TouchableOpacity>
                                   {/* Generated "Restock…" tasks jump to this room's supplies */}
@@ -2654,6 +2793,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                   >
                                     <Text style={styles.itemPhotoBtnText}>{itemPhotos[item.id] > 0 ? `📷 ${itemPhotos[item.id]}` : item.requires_photo ? '📷!' : '📷'}</Text>
                                   </TouchableOpacity>
+                                  {item.requires_video && lineVideoButton(item)}
                                 </View>
                               )
                             })}

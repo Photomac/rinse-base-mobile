@@ -32,8 +32,9 @@
 import { cachedRead, readSoon, type SoonRead } from './dataCache'
 import {
   checklistTemplateRead, checklistRowsRead, tenantSeedRead, roomsRead, roomSignoffsRead,
-  addressModeRead, tenantModeRead, photoRequirementsRead, requirementShotsRead, itemPhotosRead,
+  addressModeRead, tenantModeRead, photoRequirementsRead, requirementShotsRead, itemPhotosRead, lineVideosRead,
 } from './jobReads'
+import { lineVideoRows, type LineClipState } from './lineVideos'
 import { overlayPending } from './outbox'
 import { queuedNow, roomShots, type Queued } from './roomShots'
 import { isWalkthroughJob } from './walkthrough'
@@ -54,12 +55,15 @@ export interface ChecklistView {
   rooms?: { meta: any[]; signoffs: Record<string, string>; mode: string; evidence: any[] }
   /** Photos per item. Absent when the read returned nothing. */
   itemPhotos?: Record<string, number>
+  /** Line clips the server has, by job_checklist_items id (lib/lineVideos). The
+   *  screen lays this phone's queued clips over them. */
+  lineClips: Record<string, LineClipState>
 }
 
 const list = (x: any): any[] => (Array.isArray(x) ? x : [])
 const NONE: SoonRead = { data: null, error: null, fromCache: false, late: null }
 
-type Parts = { tmpl: any; rows: any; rooms: any; signoffs: any; addrMode: any; tenMode: any; reqs: any; shots: any; photos: any }
+type Parts = { tmpl: any; rows: any; rooms: any; signoffs: any; addrMode: any; tenMode: any; reqs: any; shots: any; photos: any; lineVids: any }
 
 // The job's own checklist rows (seeded at job creation) are the shared source
 // of truth with the owner dashboard: both sides must read the same rows and
@@ -78,9 +82,12 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
   const rows = await overlayPending('job_checklist_items', list(p.rows), v => v.job_id === job.id)
   let items: any[]
   const checked: Record<string, boolean> = {}
+  // Lines that ask for a video clip: their own read, so a server without the
+  // column (or a failed read) leaves the list exactly as it was.
+  const videos = lineVideoRows(p.lineVids)
   if (rows.length > 0) {
     // The job has its own rows: render them as-is, template or not.
-    items = rows.map(r => ({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false, room_uid: r.room_id, item_kind: r.item_kind || 'task', level: r.level || 'guidance', result: r.result ?? null, issue_note: r.issue_note ?? null }))
+    items = rows.map(r => ({ id: r.id, jobItemId: r.id, label: `${r.room} — ${r.task}`, room: r.room, title: r.task, requires_photo: r.photo_required || false, requires_video: videos.lines.has(r.id), room_uid: r.room_id, item_kind: r.item_kind || 'task', level: r.level || 'guidance', result: r.result ?? null, issue_note: r.issue_note ?? null }))
     rows.forEach(r => { if (r.completed) checked[r.id] = true })
   } else if (tmpl.length > 0) {
     // Template exists but this job was never seeded: ticks upsert rows.
@@ -97,7 +104,7 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
     } catch { /* the default */ }
     items = seedMode === 'none' ? [] : defaults.map(d => ({ ...d }))
   }
-  const view: ChecklistView = { items, checked, walkthrough: isWalkthroughJob(rows) }
+  const view: ChecklistView = { items, checked, walkthrough: isWalkthroughJob(rows), lineClips: videos.server }
 
   // Rooms, sign-offs, mode and the property's photo shots: best effort; without
   // them the card groups everything under "Other".
@@ -168,10 +175,11 @@ export async function readChecklist(job: any, user: any, addressId: string | nul
     a ? readSoon(photoRequirementsRead(a), wait) : NONE,
     a ? readSoon(requirementShotsRead(job.id), wait) : NONE,
     readSoon(itemPhotosRead(job.id), wait),
+    readSoon(lineVideosRead(job.id), wait),
   ])
   const parts = (r: { data: any }[]): Parts => ({
     tmpl: r[0].data, rows: r[1].data, rooms: r[2].data, signoffs: r[3].data, addrMode: r[4].data,
-    tenMode: r[5].data, reqs: r[6].data, shots: r[7].data, photos: r[8].data,
+    tenMode: r[5].data, reqs: r[6].data, shots: r[7].data, photos: r[8].data, lineVids: r[9].data,
   })
   // The seed is read only for a job with no rows and no template.
   const first = await viewOf(parts(reads), job, !!a, defaults, () => readSoon(tenantSeedRead(user.tenant_id), waitNow()), queuedBefore)
@@ -217,7 +225,7 @@ export function checklistCard(ui: { show: (v: ChecklistView) => void; setLoading
         reportClientError(`checklist card: ${e?.message || e}`, e?.stack, 'checklist')
         // Never loaded: no card rather than the screen's built-in list, whose
         // ticks would write rows to a clean that has its own.
-        if (!shown && seq === loads) show({ items: [], checked: {}, walkthrough: false })
+        if (!shown && seq === loads) show({ items: [], checked: {}, walkthrough: false, lineClips: {} })
       } finally {
         // A newer load clears it in its own finally.
         if (seq === loads) ui.setLoading(false)

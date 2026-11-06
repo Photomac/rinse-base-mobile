@@ -84,7 +84,7 @@ const STOP_KEYS = (J: string) => [
   `chkrows:${J}`, `jobmeta:${J}`, `crew:${J}`, `crewclock:${J}`, `time:${J}:${U}`, `time:${J}:job`,
   `photos:${J}`, `pshot:${J}`, `signoffs:${J}`, `inv:log:${J}`, `inv:extras:${J}`, `nextarr:${J}`,
   `route:${J}:${U}`, `cilsite:${J}`, `crewnote:${J}`, `crewnoteack:${J}:${U}`, `crewNoteAck:${J}:${U}`, `wtlines:${J}`, `wtphotos:${J}`, `wtcarry:${J}`,
-  `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`, `videosowed:${J}`,
+  `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`, `videosowed:${J}`, `linevids:${J}`,
 ]
 const PROPERTY_KEYS = (A: string) => [
   `tmpl:${A}`, `rooms:${A}`, `addrmode:${A}`, `preq:${A}`, `propmeta:${A}`, `leadnotes:${A}`,
@@ -168,6 +168,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       requirementShotsRead: () => R.requirementShotsRead(J),
       photoEnforceRead: () => R.photoEnforceRead(T),
       itemPhotosRead: () => R.itemPhotosRead(J),
+      lineVideosRead: () => R.lineVideosRead(J),
       checkFirstLinesRead: () => R.checkFirstLinesRead(A),
       checkFirstTicksRead: () => R.checkFirstTicksRead(J),
       checkFirstPhotosRead: () => R.checkFirstPhotosRead(J),

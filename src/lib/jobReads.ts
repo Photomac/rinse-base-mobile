@@ -254,6 +254,18 @@ export const checklistRowsRead = (jobId: string): CacheRead => ({
     .order('room').order('sort_order'),
 })
 
+/** The clean's lines that ask for a video clip, each with its clips: landed, and
+ *  on their way from a crew phone (lib/lineVideos; rinse-base-app migration
+ *  20261106190000_checklist_line_videos). Before that migration the server
+ *  refuses it (no such column), and the card reads a failed read as no video
+ *  lines, so nothing changes until it applies. */
+export const lineVideosRead = (jobId: string): CacheRead => ({
+  key: `linevids:${jobId}`,
+  q: () => supabase.from('job_checklist_items')
+    .select('id, job_videos(id, duration_seconds), job_videos_on_the_way(id, duration_seconds)')
+    .eq('job_id', jobId).eq('video_required', true),
+})
+
 export const tenantSeedRead = (tenantId: string): CacheRead => ({
   key: `tenseed:${tenantId}`,
   q: () => supabase.from('tenants')
@@ -583,6 +595,8 @@ export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^
 // scripts/test-cache-prune.mjs fails until it is.
 const JOB_KEYS = new Set(['cilsite', 'chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
   'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'wtcarry', 'cfticks', 'cfphotos', 'cfstart',
+  // lib/lineVideos: the clean's lines that ask for a video clip, with their clips
+  'linevids',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
   'crewNoteAck', 'videosowed'])
 const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'leadnotes', 'wttrash', 'cflines'])
@@ -626,6 +640,8 @@ export function jobPackReads(job: any, user: any): PackRead[] {
     // loadChecklist / loadChecklistForAddress
     ...(addrId ? [checklistTemplateRead(addrId)] : []),
     { ...checklistRowsRead(job.id), then: rows => (!isTask && Array.isArray(rows) && isWalkthroughJob(rows) ? walkthrough() : []) },
+    // Lines that ask for a video clip (the record button, and Complete with no signal).
+    ...(!isTask ? [lineVideosRead(job.id)] : []),
     tenantSeedRead(user.tenant_id),
     ...(addrId ? [
       roomsRead(addrId), roomSignoffsRead(job.id), addressModeRead(addrId),
