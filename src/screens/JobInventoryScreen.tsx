@@ -235,7 +235,12 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onBack}><Text style={styles.back}>‹ {t('back')}</Text></TouchableOpacity>
-        <Text style={styles.title}>{t('supplies')}</Text>
+        {/* Title + one line on what this is: this clean's restock report,
+            not the house's standing list or the company's own closet. */}
+        <View style={styles.titleWrap}>
+          <Text style={styles.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{t('supplies')}</Text>
+          <Text style={styles.subtitle} numberOfLines={2}>{t('supplies_sub')}</Text>
+        </View>
         <TouchableOpacity onPress={save} disabled={saving} style={[styles.saveBtn, saving && { opacity: 0.5 }]}>
           <Text style={styles.saveBtnText}>{saving ? t('saving') : saved ? t('saved') : t('save')}</Text>
         </TouchableOpacity>
@@ -447,7 +452,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: '#E2E8F0',
   },
   back: { color: GOLD, fontSize: 15, fontWeight: '600' },
+  titleWrap: { flex: 1, alignItems: 'center', marginHorizontal: 10 },
   title: { fontSize: 17, fontWeight: '800', color: NAVY },
+  subtitle: { fontSize: 11, color: '#64748B', marginTop: 2, textAlign: 'center' },
   saveBtn: { backgroundColor: GOLD, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
   saveBtnText: { color: '#fff', fontWeight: '800', fontSize: 13 },
 
