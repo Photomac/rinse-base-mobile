@@ -652,6 +652,8 @@ export const translations = {
     stay_saved: 'Saved',
     stay_update: 'Update rating',
     stay_tap_star: 'Tap a star to rate',
+    stay_ask_save_complete: 'Save and complete',
+    stay_ask_skip: 'Skip',
     // Lost & found (crew logs a guest belonging left behind)
     lf_title: 'Lost & found',
     lf_sub: 'Found something a guest left behind? Log it — your manager reviews it before the host is told.',
@@ -1741,6 +1743,8 @@ export const translations = {
     stay_saved: 'Guardado',
     stay_update: 'Actualizar calificación',
     stay_tap_star: 'Toca una estrella para calificar',
+    stay_ask_save_complete: 'Guardar y completar',
+    stay_ask_skip: 'Omitir',
     // Objetos perdidos (la cuadrilla registra algo que dejó un huésped)
     lf_title: 'Objetos perdidos',
     lf_sub: '¿Encontraste algo que dejó un huésped? Regístralo — tu gerente lo revisa antes de avisarle al anfitrión.',
@@ -2827,6 +2831,8 @@ export const translations = {
     stay_saved: 'Salvo',
     stay_update: 'Atualizar avaliação',
     stay_tap_star: 'Toque em uma estrela para avaliar',
+    stay_ask_save_complete: 'Salvar e concluir',
+    stay_ask_skip: 'Pular',
     // Lost & found (crew logs a guest belonging left behind)
     lf_title: 'Achados e perdidos',
     lf_sub: 'Encontrou algo que um hóspede esqueceu? Registre — seu gerente revisa antes de avisar o anfitrião.',
