@@ -879,6 +879,13 @@ export const translations = {
     answer_number_invalid: 'Enter a number, like 16 or 3.5.',
     answer_too_long: 'That answer is too long. Keep it under 2,000 characters.',
     answer_needed_line: 'Answer: {task}',
+    // The inspection walkthrough's questions and clips (WalkthroughChecklist, lib/inspectionFiling)
+    wt_problem_answer: 'Problem answer: {answer}',
+    wt_answered: 'Answered: {answer}',
+    wt_unanswered: 'Not answered',
+    wt_file_blocked_title: 'Not ready to file',
+    wt_file_blocked_msg: 'Before filing this inspection:',
+    line_video_needed_line: 'Record the video: {task}',
     // Training videos — Profile row that opens the crew training page on rinsebase.com (lib/trainingVideos)
     training_videos: 'Training videos',
     training_videos_sub: 'Short videos on using the app',
@@ -1967,6 +1974,13 @@ export const translations = {
     answer_number_invalid: 'Escribe un número, como 16 o 3,5.',
     answer_too_long: 'La respuesta es muy larga. Que tenga menos de 2.000 caracteres.',
     answer_needed_line: 'Responde: {task}',
+    // Las preguntas y clips del recorrido de inspección (WalkthroughChecklist, lib/inspectionFiling)
+    wt_problem_answer: 'Respuesta con problema: {answer}',
+    wt_answered: 'Respondida: {answer}',
+    wt_unanswered: 'Sin responder',
+    wt_file_blocked_title: 'Aún no se puede registrar',
+    wt_file_blocked_msg: 'Antes de registrar esta inspección:',
+    line_video_needed_line: 'Graba el video: {task}',
     // Videos de capacitación — fila del Perfil que abre la página de capacitación en rinsebase.com (lib/trainingVideos)
     training_videos: 'Videos de capacitación',
     training_videos_sub: 'Videos cortos sobre cómo usar la app',
@@ -3055,6 +3069,13 @@ export const translations = {
     answer_number_invalid: 'Digite um número, como 16 ou 3,5.',
     answer_too_long: 'A resposta está muito longa. Use menos de 2.000 caracteres.',
     answer_needed_line: 'Responda: {task}',
+    // As perguntas e clipes da vistoria da inspeção (WalkthroughChecklist, lib/inspectionFiling)
+    wt_problem_answer: 'Resposta com problema: {answer}',
+    wt_answered: 'Respondida: {answer}',
+    wt_unanswered: 'Sem resposta',
+    wt_file_blocked_title: 'Ainda não dá para registrar',
+    wt_file_blocked_msg: 'Antes de registrar esta inspeção:',
+    line_video_needed_line: 'Grave o vídeo: {task}',
     // Vídeos de treinamento — linha do Perfil que abre a página de treinamento em português em rinsebase.com
     // (lib/trainingVideos). Os vídeos têm legendas em português (as telas foram gravadas com o app em inglês).
     training_videos: 'Vídeos de treinamento',

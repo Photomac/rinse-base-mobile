@@ -47,7 +47,7 @@ const rowsRead = [
   const r = L.lineAskRows(rowsRead)
   check('the read: what each line asks', [...r.asks.entries()].map(([id, a]) => [id, a.video_mode, a.answer_type, a.answer]),
     [['A', 'required', 'tick', null], ['B', 'optional', 'yes_no', 'no'], ['C', 'required', 'number', '16'], ['D', 'off', 'tick', null]])
-  check('…a value it doesn\'t know reads as the default, never stricter', r.asks.get('D'), { video_mode: 'off', answer_type: 'tick', answer: null })
+  check('…a value it doesn\'t know reads as the default, never stricter', r.asks.get('D'), { video_mode: 'off', answer_type: 'tick', answer: null, level: null, flag_answer: null })
   check('…landed is uploaded, announced is sending, too short or no length is nothing', r.server, { A: 'uploaded', B: 'sending' })
 }
 check('a failed read (or a server before the migration): every line a tick', [L.lineAskRows(null).asks.size, L.lineAskRows({ message: 'column does not exist' }).asks.size], [0, 0])

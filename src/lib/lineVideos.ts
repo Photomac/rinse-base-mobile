@@ -29,7 +29,7 @@ export type VideoMode = 'off' | 'optional' | 'required'
 export type AnswerType = 'tick' | 'yes_no' | 'text' | 'number'
 
 /** What a line asks for beyond its tick, from the server (lib/jobReads lineVideosRead). */
-export interface LineAsk { video_mode: VideoMode; answer_type: AnswerType; answer: string | null }
+export interface LineAsk { video_mode: VideoMode; answer_type: AnswerType; answer: string | null; level: string | null; flag_answer: string | null }
 
 const VIDEO_MODES: VideoMode[] = ['off', 'optional', 'required']
 const ANSWER_TYPES: AnswerType[] = ['tick', 'yes_no', 'text', 'number']
@@ -60,6 +60,9 @@ export function lineAskRows(rows: unknown): { asks: Map<string, LineAsk>; server
       video_mode: VIDEO_MODES.includes(r.video_mode) ? r.video_mode : 'off',
       answer_type: ANSWER_TYPES.includes(r.answer_type) ? r.answer_type : 'tick',
       answer: typeof r.answer === 'string' ? r.answer : null,
+      // Read only where it's selected (the inspection walkthrough's read).
+      level: typeof r.level === 'string' ? r.level : null,
+      flag_answer: r.flag_answer === 'yes' || r.flag_answer === 'no' ? r.flag_answer : null,
     })
     const landed = Array.isArray(r.job_videos) ? r.job_videos : []
     const onTheWay = Array.isArray(r.job_videos_on_the_way) ? r.job_videos_on_the_way : []

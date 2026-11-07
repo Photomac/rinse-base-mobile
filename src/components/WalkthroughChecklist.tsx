@@ -22,6 +22,15 @@
 // writes laid over them, and every answer goes through the outbox, so a dead
 // spot in a basement never loses one. A real server refusal reverts the line
 // and says so.
+//
+// Questions and clips (rinse-base-app 20261106230000_inspection_walkthrough_questions,
+// phase 2 of the checklist formats): a line can be a question (Yes/No, a written
+// answer, a number; lib/lineAnswers) answered in place of Looks good / Not right,
+// and take a video clip (optional or required) recorded on the line in the
+// crew app's recorder (WalkthroughScreen line mode, lib/lineVideos). "Looks
+// good" never answers a question. The office's problem answer shows only to
+// owners, admins, managers and dispatchers. What must be answered or recorded
+// before filing is the host's to enforce (lib/inspectionFiling, onState).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator, Image, Modal } from 'react-native'
@@ -33,7 +42,12 @@ import { walkthroughCard, type WalkthroughView } from '../lib/walkthroughCard'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
 import { useMachineTranslation } from '../lib/machineTranslate'
-import { groupWalkthrough, sectionState, pickupDaysLabel, type WalkthroughLine } from '../lib/walkthrough'
+import { groupWalkthrough, sectionState, pickupDaysLabel, lineAnswered, type WalkthroughLine } from '../lib/walkthrough'
+import { questionType, normaliseAnswer, answerWrite, ANSWER_MAX } from '../lib/lineAnswers'
+import { lineClipStates, type LineClipState } from '../lib/lineVideos'
+import { queuedJobVideos, flushVideoQueue, type QueuedJobVideo } from '../lib/videoQueue'
+import { isOfficeRole } from '../lib/jobScope'
+import { WalkthroughScreen } from '../screens/WalkthroughScreen'
 import { carriedItemIds, groupCarried, looksGoodIds, type CarriedLine } from '../lib/carriedLines'
 import { fmtDate } from '../lib/timezone'
 import { GOLD, SLATE_DARK } from '../lib/theme'
@@ -54,9 +68,12 @@ interface Props {
   refreshKey?: number
   /** Something was answered: the host screen may want to reload its own state. */
   onChanged?: () => void
+  /** The lines as shown (answers included) and each line's clip state: the
+   *  inspection screen refuses to file on them (lib/inspectionFiling). */
+  onState?: (s: { lines: WalkthroughLine[]; clips: Record<string, LineClipState> }) => void
 }
 
-export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, refreshKey = 0, onChanged }: Props) {
+export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, refreshKey = 0, onChanged, onState }: Props) {
   const { t, lang } = useLang()
   const [lines, setLines] = useState<WalkthroughLine[]>([])
   const [photoCount, setPhotoCount] = useState<Record<string, number>>({})
@@ -69,6 +86,16 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
   const [carried, setCarried] = useState<CarriedLine[]>([])
   const [carriedFiles, setCarriedFiles] = useState<Record<string, string>>({})
   const [big, setBig] = useState<string | null>(null)
+  // Line clips: the server's (landed, on their way), this phone's queue, and
+  // the line the recorder is open for.
+  const [clipsServer, setClipsServer] = useState<Record<string, LineClipState>>({})
+  const [queuedClips, setQueuedClips] = useState<QueuedJobVideo[]>([])
+  const [recordFor, setRecordFor] = useState<WalkthroughLine | null>(null)
+  // A written or number answer while it's typed: saved on blur or Done, and
+  // when the card closes. The ref is the same map, current between renders.
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const draftsRef = useRef<Record<string, string>>({})
+  const office = isOfficeRole(user?.role)
   // One per card: the newest load wins, and an answer from a load that began
   // before the inspector's last answer doesn't overwrite it (lib/walkthroughCard).
   const [card] = useState(() => walkthroughCard({ show, setLoading }))
@@ -78,6 +105,12 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
     setPickupDays(v.pickupDays)
     setCarried(v.carried)
     setCarriedFiles(v.carriedFiles)
+    setClipsServer(v.clips)
+    refreshQueuedClips()
+  }
+
+  function refreshQueuedClips() {
+    queuedJobVideos(job.id).then(q => setQueuedClips(q.filter(v => v.video_type === 'line'))).catch(() => {})
   }
 
   // The first load (mount) may show the saved copy first; a reload (back from
@@ -89,6 +122,40 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
   }, [job.id, refreshKey])
 
   const sections = useMemo(() => groupWalkthrough(lines), [lines])
+  const clips = useMemo(() => lineClipStates(clipsServer, queuedClips), [clipsServer, queuedClips])
+
+  // The host (the inspection screen) files on what's shown here.
+  useEffect(() => { onState?.({ lines, clips }) }, [lines, clips])
+
+  // A clip still on this phone: keep sending it; once it lands the card reloads.
+  const clipQueued = queuedClips.length > 0
+  useEffect(() => {
+    if (!clipQueued) return
+    const iv = setInterval(() => {
+      flushVideoQueue().catch(() => {}).finally(() => {
+        queuedJobVideos(job.id).then(q => {
+          const left = q.filter(v => v.video_type === 'line')
+          setQueuedClips(left)
+          if (left.length === 0) card.load(job).catch(() => {})
+        }).catch(() => {})
+      })
+    }, 20_000)
+    return () => clearInterval(iv)
+  }, [clipQueued, job.id])
+
+  // Closing the card with an answer still being typed: saved, as a blur would.
+  const linesRef = useRef<WalkthroughLine[]>(lines)
+  linesRef.current = lines
+  useEffect(() => () => {
+    for (const l of linesRef.current) {
+      const type = questionType({ answer_type: l.answer_type, item_kind: 'task' })
+      if (!type || draftsRef.current[l.id] === undefined || readOnly) continue
+      const n = normaliseAnswer(type, draftsRef.current[l.id])
+      if (!n.ok || n.value === (l.answer ?? null)) continue
+      writeThrough({ table: 'job_checklist_items', op: 'update', match: { id: l.id },
+        values: answerWrite(n.value, user.id, new Date().toISOString()) }).catch(() => {})
+    }
+  }, [])
   const carriedIds = useMemo(() => carriedItemIds(carried), [carried])
   const carriedSections = useMemo(() => groupCarried(carried), [carried])
   const tx = useMachineTranslation(lang, [...sections.map(s => s.name), ...lines.map(l => l.task), ...carried.map(c => c.issue_note)])
@@ -157,6 +224,127 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
     onChanged?.()
   }
 
+  /** A question's answer, saved (or cleared) through the outbox like any answer:
+   *  answered = completed by me, cleared = not (lib/lineAnswers). */
+  async function saveAnswer(line: WalkthroughLine, value: string | null) {
+    if (readOnly) return
+    const before = { answer: line.answer ?? null }
+    setBusy(line.id)
+    card.edited()
+    patch([line.id], { answer: value })
+    const { error } = await writeThrough({
+      table: 'job_checklist_items', op: 'update', match: { id: line.id },
+      values: answerWrite(value, user.id, new Date().toISOString()),
+    })
+    setBusy(null)
+    if (error) {
+      patch([line.id], before)
+      Alert.alert(t('error'), t('could_not_save'))
+      return
+    }
+    onChanged?.()
+  }
+
+  function setDraft(id: string, v: string) {
+    draftsRef.current = { ...draftsRef.current, [id]: v }
+    setDrafts(draftsRef.current)
+  }
+
+  /** A typed answer, finished: saved if it changed; refused here if the server would refuse it. */
+  function commitDraft(line: WalkthroughLine) {
+    const raw = draftsRef.current[line.id]
+    if (raw === undefined) return
+    const { [line.id]: _done, ...rest } = draftsRef.current
+    draftsRef.current = rest
+    setDrafts(rest)
+    const type = questionType({ answer_type: line.answer_type, item_kind: 'task' })
+    if (!type) return
+    const n = normaliseAnswer(type, raw)
+    if (!n.ok) {
+      Alert.alert(t('error'), t(n.reason === 'too_long' ? 'answer_too_long' : 'answer_number_invalid'))
+      return
+    }
+    if (n.value === (line.answer ?? null)) return
+    saveAnswer(line, n.value)
+  }
+
+  const takesVideo = (l: WalkthroughLine) => l.video_mode === 'optional' || l.video_mode === 'required'
+
+  // A line's clip, under its words: Video required / Clip saved · uploading / Clip uploaded.
+  function clipNote(l: WalkthroughLine) {
+    const st = clips[l.id]
+    if (!st && l.video_mode !== 'required') return null
+    return (
+      <Text style={[styles.flag, { color: st ? GREEN : '#B45309' }]}>
+        🎥 {t(st === 'uploaded' ? 'line_video_uploaded' : st === 'sending' ? 'line_video_sending' : 'video_required_short')}
+      </Text>
+    )
+  }
+
+  function clipChip(l: WalkthroughLine) {
+    const st = clips[l.id]
+    return (
+      <TouchableOpacity onPress={() => !readOnly && setRecordFor(l)} disabled={readOnly}
+        accessibilityRole="button" accessibilityLabel={t('line_video_record')}
+        style={[styles.chip, st && { borderColor: GREEN }, !st && l.video_mode === 'required' && { borderColor: '#B45309' }]}>
+        <Text style={styles.chipText}>{st ? '🎥 ✓' : `🎥 ${t('line_video_record')}`}</Text>
+      </TouchableOpacity>
+    )
+  }
+
+  // A question's control in place of Looks good / Not right: Yes / No, a
+  // written answer, a number (a comma read as the point). Photo and clip as on
+  // any line.
+  function questionControls(l: WalkthroughLine) {
+    const type = questionType({ answer_type: l.answer_type, item_kind: 'task' })
+    const photos = photoCount[l.id] || 0
+    const draft = drafts[l.id]
+    return (
+      <>
+        {type === 'yes_no' ? (
+          <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+            {(['yes', 'no'] as const).map(v => {
+              const on = l.answer === v
+              // The office sees its problem answer in red; the crew never sees which it is.
+              const color = on ? (office && l.flag_answer === v ? RED : SLATE_DARK) : null
+              return (
+                <TouchableOpacity key={v} disabled={busy === l.id || readOnly} onPress={() => saveAnswer(l, on ? null : v)}
+                  accessibilityRole="button" accessibilityState={{ selected: on }}
+                  style={[styles.chip, color && { backgroundColor: color, borderColor: color }]}>
+                  <Text style={[styles.chipText, color && { color: '#fff' }]}>{t(v)}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        ) : (
+          <TextInput
+            style={[styles.answer, type === 'text' && { minHeight: 56, textAlignVertical: 'top' }, l.answer != null && draft === undefined && styles.answerDone]}
+            editable={!readOnly}
+            value={draft ?? l.answer ?? ''}
+            onChangeText={v => setDraft(l.id, v)}
+            onBlur={() => commitDraft(l)}
+            onSubmitEditing={() => commitDraft(l)}
+            placeholder={t(type === 'number' ? 'answer_number_ph' : 'answer_text_ph')}
+            placeholderTextColor="#94A3B8"
+            keyboardType={type === 'number' ? 'decimal-pad' : 'default'}
+            multiline={type === 'text'}
+            blurOnSubmit
+            returnKeyType="done"
+            maxLength={type === 'text' ? ANSWER_MAX : 24}
+          />
+        )}
+        {!readOnly && (
+          <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+            <TouchableOpacity onPress={() => onAddPhoto({ title: l.task, jobItemId: l.id, walkthrough: true })} style={styles.chip}>
+              <Text style={styles.chipText}>{t('wt_photo')}{photos ? ` · ${photos}` : ''}</Text>
+            </TouchableOpacity>
+            {takesVideo(l) && clipChip(l)}
+          </View>
+        )}
+      </>
+    )
+  }
+
   async function saveNote(line: WalkthroughLine) {
     if (readOnly || line.result !== 'issue') return
     const note = (notes[line.id] ?? '').trim() || null
@@ -197,6 +385,7 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
           <TouchableOpacity onPress={() => onAddPhoto({ title: l.task, jobItemId: l.id, walkthrough: true })} style={styles.chip}>
             <Text style={styles.chipText}>{t('wt_photo')}{photos ? ` · ${photos}` : ''}</Text>
           </TouchableOpacity>
+          {takesVideo(l) && clipChip(l)}
         </View>
         {l.result === 'issue' && (
           <TextInput
@@ -218,7 +407,7 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
   if (loading) return <View style={{ padding: 12 }}><ActivityIndicator color={GOLD} /></View>
   if (sections.length === 0) return null
 
-  const answered = lines.filter(l => l.result != null).length
+  const answered = lines.filter(lineAnswered).length
   const issues = lines.filter(l => l.result === 'issue').length
   const pickup = pickupDaysLabel(pickupDays, localeFor(lang), t('wt_and'))
 
@@ -276,6 +465,16 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
           ))}
         </View>
       )}
+      {/* A line's clip: the crew app's recorder in line mode, over the card,
+          so the form underneath is never unmounted. */}
+      <Modal visible={!!recordFor} animationType="slide" onRequestClose={() => setRecordFor(null)}>
+        {!!recordFor && (
+          <WalkthroughScreen job={job} user={user} defaultType="after" asked
+            line={{ id: recordFor.id, room: recordFor.room ?? null, title: recordFor.task, label: [tx(recordFor.room), tx(recordFor.task)].filter(Boolean).join(' — ') }}
+            onLineSaved={() => refreshQueuedClips()}
+            onBack={() => { setRecordFor(null); refreshQueuedClips() }} />
+        )}
+      </Modal>
       <Modal visible={!!big} transparent animationType="fade" onRequestClose={() => setBig(null)}>
         <TouchableOpacity activeOpacity={1} onPress={() => setBig(null)} style={styles.viewer}>
           {!!big && <Image source={{ uri: big }} style={styles.full} resizeMode="contain" />}
@@ -316,6 +515,35 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
                 )}
 
                 {s.lines.map(l => {
+                  if (questionType({ answer_type: l.answer_type, item_kind: 'task' })) {
+                    const done = l.answer != null
+                    const shown = l.answer_type === 'yes_no' && (l.answer === 'yes' || l.answer === 'no') ? t(l.answer as 'yes' | 'no') : l.answer
+                    return (
+                      <View key={l.id} style={styles.line}>
+                        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
+                          <Text style={{ width: 18, textAlign: 'center', color: done ? GREEN : MUTED, fontWeight: '800', fontSize: 15 }}>{done ? '✓' : '?'}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.lineText}>{tx(l.task)}</Text>
+                            {l.level === 'required' && !done && <Text style={[styles.flag, { color: '#B45309' }]}>{t('answer_required_short')}</Text>}
+                            {office && l.answer_type === 'yes_no' && (l.flag_answer === 'yes' || l.flag_answer === 'no') && (
+                              <Text style={[styles.flag, l.answer === l.flag_answer && { color: RED, fontWeight: '800' }]}>
+                                {ti(t('wt_problem_answer'), { answer: t(l.flag_answer as 'yes' | 'no') })}
+                              </Text>
+                            )}
+                            {l.photo_required && (
+                              <Text style={[styles.flag, { color: (photoCount[l.id] || 0) ? GREEN : '#B45309' }]}>
+                                {t('wt_photo_needed')}{photoCount[l.id] ? ` · ${photoCount[l.id]}` : ''}
+                              </Text>
+                            )}
+                            {takesVideo(l) && clipNote(l)}
+                            {readOnly
+                              ? <Text style={[styles.flag, { color: SLATE_DARK, fontWeight: '700' }]}>{done ? ti(t('wt_answered'), { answer: String(shown) }) : t('wt_unanswered')}</Text>
+                              : <View style={{ marginTop: 6 }}>{questionControls(l)}</View>}
+                          </View>
+                        </View>
+                      </View>
+                    )
+                  }
                   const isCarried = carriedIds.has(l.id)
                   // A line missed last time is answered in the block on top.
                   const expanded = lineOpen === l.id && !readOnly && !isCarried
@@ -345,6 +573,7 @@ export function WalkthroughChecklist({ job, user, readOnly = false, onAddPhoto, 
                             <Text style={[styles.flag, { color: RED }]}>{l.issue_note}</Text>
                           )}
                           {!l.photo_required && photos > 0 && !expanded && <Text style={styles.flag}>📷 {photos}</Text>}
+                          {takesVideo(l) && clipNote(l)}
                         </View>
                       </TouchableOpacity>
 
@@ -390,6 +619,11 @@ const styles = StyleSheet.create({
   viewer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', alignItems: 'center', justifyContent: 'center' },
   full: { width: '100%', height: '80%' },
   close: { position: 'absolute', top: 54, right: 24, color: '#fff', fontSize: 26, fontWeight: '700' },
+  answer: {
+    borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8,
+    fontSize: 14, color: SLATE_DARK, backgroundColor: '#fff',
+  },
+  answerDone: { borderColor: '#86EFAC', backgroundColor: '#F0FDF4' },
   note: {
     marginTop: 8, borderWidth: 1, borderColor: '#FECACA', borderRadius: 8, padding: 10,
     fontSize: 14, color: SLATE_DARK, backgroundColor: '#fff', minHeight: 60, textAlignVertical: 'top',
