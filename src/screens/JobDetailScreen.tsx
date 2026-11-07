@@ -15,7 +15,9 @@ import { LaundryRunScreen } from './LaundryRunScreen'
 import { JobInspectionScreen } from './JobInspectionScreen'
 import { WalkthroughChecklist } from '../components/WalkthroughChecklist'
 import { MessagesScreen } from './MessagesScreen'
-import { StayRatingCard } from '../components/StayRatingCard'
+import { StayRatingCard, StayAskModal, useStayRating } from '../components/StayRatingCard'
+import { asksAtComplete } from '../lib/stayAsk'
+import { stayAskedBefore, rememberStayAsked } from '../lib/stayRating'
 import { PhotoViewer } from '../components/PhotoViewer'
 import { ShotThumb } from '../components/ShotThumb'
 import { ClockInOfficeCard } from '../components/ClockInOfficeCard'
@@ -264,8 +266,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   useEffect(() => { evidenceRef.current = evidence }, [evidence])
   const shotListChangeNoticed = useRef(false)
   const [openRooms, setOpenRooms] = useState<Record<string, boolean>>({})
-  // Room hand-off: "Report an issue in <room>" opens the incident card below
-  // with that room preset and scrolls it into view.
+  // Room hand-off: "Report an issue in <room>" opens the incident card (above
+  // the checklist since 2026-11) with that room preset and scrolls up to it.
   const [incidentRoom, setIncidentRoom] = useState<{ id: string; name: string } | null>(null)
   const [incidentKey, setIncidentKey] = useState(0)
   const scrollRef = useRef<ScrollView>(null)
@@ -518,6 +520,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // (job_inspections), which that rule doesn't touch, so it keeps its button.
   const completeNotOnClean = notOnThisClean && !isInspection
   const cfStarted = startedAt(firstClockIn([...timeEntries, ...(crewClockRows ?? [])]), checkFirst?.jobStartedAt)
+  // "How did the guests leave it?" (StayRatingCard): STR/PM cleans, once
+  // started. The card and the ask at Complete pick and save the same rating
+  // (lib/stayAsk.ts has the rules).
+  const stayShows = isStarted && !isTask && !isResidential
+  const stay = useStayRating(job, user, stayShows)
+  // The ask at Complete is open while completeJob waits on stayAnswer.
+  const [stayAskOpen, setStayAskOpen] = useState(false)
+  const stayAnswer = useRef<((go: boolean) => void) | null>(null)
+  // What the crew answered, handed over once the sheet has gone (stayAskGone).
+  const stayGo = useRef<boolean | null>(null)
+  const stayAskedHere = useRef(false)
 
   useEffect(() => {
     // Drain queued offline writes first chance we get (same trigger set as the
@@ -1660,6 +1673,36 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     return !!mine.is_lead
   }
 
+  // "How did the guests leave it?" at Complete (lib/stayAsk): once, on a clean
+  // that shows the rating card and has no rating. Resolves true to carry on
+  // (rated or skipped), false to stop (the sheet closed, or the save refused).
+  async function askStayFirst(): Promise<boolean> {
+    const askedBefore = stayAskedHere.current || await stayAskedBefore(job.id)
+    if (!asksAtComplete({ shows: stayShows && !readOnly, rated: stay.saved, askedBefore })) return true
+    stayAskedHere.current = true
+    rememberStayAsked(job.id).catch(() => {})
+    return new Promise<boolean>(resolve => {
+      stayAnswer.current = resolve
+      stayGo.current = null
+      setStayAskOpen(true)
+    })
+  }
+  // The answer waits for the sheet to finish closing: an alert the Complete
+  // raises next (a missing photo, "saved offline") doesn't show on iOS while a
+  // modal is still going away.
+  function answerStayAsk(go: boolean) {
+    if (!stayAnswer.current || stayGo.current !== null) return
+    stayGo.current = go
+    setStayAskOpen(false)
+    setTimeout(stayAskGone, 600)
+  }
+  function stayAskGone() {
+    const resolve = stayAnswer.current
+    if (!resolve || stayGo.current === null) return
+    stayAnswer.current = null
+    resolve(stayGo.current)
+  }
+
   async function completeJob() {
     // An answer still being typed goes first: the gate reads the saved ones.
     await commitAllAnswers()
@@ -1698,6 +1741,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       Alert.alert(`🔒 ${t('lead_signoff_title')}`, t('lead_signoff_msg'))
       return
     }
+
+    // How did the guests leave it? Asked here, after the sign-off check, so
+    // only someone who can close the clean is asked; never twice for a clean.
+    // A rating it saves goes through the outbox ahead of this Complete.
+    if (!(await askStayFirst())) return
 
     // Check first, by the phone's own copy, fresh: every line ticked and a
     // photo line's photo taken (one still on the phone counts). Offline the
@@ -2737,6 +2785,25 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           )}
         </View>
 
+        {/* The order of the work (CKS, 2026-11-03; every company from 11/6):
+            arrive and record the walk-through, say how the guests left it and
+            report what's wrong, THEN clean. Both sat below the checklist, so
+            damage was reported after cleaning had covered it. The office notes
+            stay at the bottom. Complete still asks for a missing rating once
+            (lib/stayAsk). */}
+        {/* Stay condition rating — how the guests left it (host sees it with photos) */}
+        {stayShows && <StayRatingCard stay={stay} readOnly={readOnly} onError={m => Alert.alert(t('error'), m)} />}
+
+        {/* Property incident report — damage / missing / maintenance / pest /
+            safety / lost & found (manager reviews before the host is told).
+            The per-room "Report an issue here" buttons in the checklist below
+            scroll back up to it through incidentY. */}
+        <View onLayout={e => { incidentY.current = e.nativeEvent.layout.y }}>
+          {/* Cleans and inspections: inspectors report what they find on the
+              visit, a needed deep clean above all (CKS, 2026-10-22). */}
+          {isStarted && (!isTask || isInspection) && !readOnly && <IncidentReportCard job={job} user={user} rooms={roomsMeta} presetRoom={incidentRoom} presetKey={incidentKey} />}
+        </View>
+
         {/* Turnover checklist — cleans only; laundry runs use the reconciliation
             form. Phase 2: rooms accordion in the order the cleaner walks the
             house; DO ☐ / VERIFY ◇ / photos per room. Items with no room (old
@@ -3049,17 +3116,6 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           </View>
         )}
 
-        {/* Stay condition rating — how the guests left it (host sees it with photos) */}
-        {isStarted && !isTask && !isResidential && <StayRatingCard job={job} user={user} readOnly={readOnly} />}
-
-        {/* Property incident report — damage / missing / maintenance / pest /
-            safety / lost & found (manager reviews before the host is told) */}
-        <View onLayout={e => { incidentY.current = e.nativeEvent.layout.y }}>
-          {/* Cleans and inspections: inspectors report what they find on the
-              visit, a needed deep clean above all (CKS, 2026-10-22). */}
-          {isStarted && (!isTask || isInspection) && !readOnly && <IncidentReportCard job={job} user={user} rooms={roomsMeta} presetRoom={incidentRoom} presetKey={incidentKey} />}
-        </View>
-
         {/* Notes. Saved only by Complete (into internal_notes), so a finished
             clean's box took typing and kept none of it. */}
         {isStarted && !readOnly && (
@@ -3121,6 +3177,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           busy={cfBusy} tx={tx} nameOf={cfTickerName} onTick={tickCheckFirst} onPhoto={shootCheckFirst}
           onStart={startFromCheckFirst} onNotYet={() => setCfPrompt(null)} />
       )}
+
+      {/* "How did the guests leave it?" at Complete (askStayFirst). A refused
+          save stops the Complete and says why; the next tap doesn't ask. */}
+      <StayAskModal visible={stayAskOpen} stay={stay}
+        onSaveAndComplete={async () => {
+          const { error } = await stay.save()
+          answerStayAsk(!error)
+          if (error) setTimeout(() => Alert.alert(t('error'), error.message || String(error)), 650)
+        }}
+        onSkip={() => answerStayAsk(true)}
+        onClose={() => answerStayAsk(false)} />
 
       {/* The office's edit. A save updates this screen's clean in place (time
           on the card, crew re-read), and Home / Schedule re-read on the way back. */}
