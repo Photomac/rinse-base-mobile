@@ -2630,7 +2630,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             {(!isTask || isInspection) && !readOnly && (
               <TouchableOpacity style={styles.actionChip} onPress={() => setShowInventory(true)}>
                 <Text style={styles.actionChipIcon}>📦</Text>
-                <Text style={styles.actionChipLabel} numberOfLines={1}>{t('supplies')}</Text>
+                {/* "Turnover restock" won't fit one line of a chip; two lines, shrunk if needed */}
+                <Text style={[styles.actionChipLabel, { textAlign: 'center' }]} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.8}>{t('supplies')}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity style={styles.actionChip} onPress={() => setShowMessages(true)}>
