@@ -113,7 +113,7 @@ check('a restock line does not open the Supplies counts',
 check('the walkthrough list, photos, stay rating and laundry bags are told',
   ['<WalkthroughChecklist job={job} user={user} readOnly={readOnly}',
    'readOnly={readOnly} onBack={() => { setShowPhotos(false)',
-   '<StayRatingCard job={job} user={user} readOnly={readOnly} />',
+   '<StayRatingCard stay={stay} readOnly={readOnly}',
    'bagColor={tx(bagColor)} readOnly={readOnly} />'].map(s => has(detail, s)), [true, true, true, true])
 check('laundry on-site and pet toggles are off',
   [has(detail, 'onPress={toggleLaundryDoneOnsite} disabled={readOnly}'), has(detail, 'onPress={togglePetFee} disabled={readOnly}')], [true, true])
