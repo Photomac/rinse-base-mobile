@@ -47,7 +47,7 @@ import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/ar
 import { clockInFields, fmtClockInDistance, notCheckedRole, type ClockInDecision } from '../lib/clockInGate'
 import { checkClockIn, clockInRule, clockInSite, recordRefusal } from '../lib/clockInLocation'
 import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, photosOnPhone, photosOnTheWay, queuedShots } from '../lib/photoQueue'
-import { withShotStates, type ShotState } from '../lib/roomShots'
+import { shotsShown, withoutShot, withShotStates, type RoomShot, type ShotState } from '../lib/roomShots'
 import { completeWhileUploading, type WhileUploading } from '../lib/photoBlockers'
 import { readHoldAnswer, whoHasThePhotos, type HoldAnswer } from '../lib/photosOnTheWay'
 import { cachedRead } from '../lib/dataCache'
@@ -1058,6 +1058,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // screen shot list. Optimistic thumbnail from the local uri, so offline the
   // room reads done immediately; the queue uploads when signal returns.
   const [shootingId, setShootingId] = useState<string | null>(null)
+  // A room shot's photos open full screen, swipeable (a shot can hold several).
+  const [shotViewer, setShotViewer] = useState<{ title: string; photos: RoomShot[]; index: number } | null>(null)
   async function shootEvidence(e: any) {
     setShootingId(e.id)
     const res = await captureRequiredPhoto(
@@ -1069,12 +1071,35 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     if (res.status === 'captured' && res.localUri) {
       // Reloads keep it until it uploads: the card lays the phone's shots
       // over the server's (lib/roomShots).
-      setEvidence(prev => prev.map((x: any) => x.id === e.id ? { ...x, photo_url: res.localUri, photo_fallback: null, photo_state: 'uploading' } : x))
+      // Another photo for the shot, not a replacement: the ones it already
+      // shows stay listed under the new one (lib/roomShots shotsShown).
+      setEvidence(prev => prev.map((x: any) => x.id === e.id ? { ...x, shots: shotsShown(x), photo_url: res.localUri, photo_fallback: null, photo_state: 'uploading' } : x))
       loadPhotoRequirements()
       // Before the upload lands: the first shot after a change brings the
       // current list up, so the rest are taken against it.
       void refreshIfShotListChanged()
     }
+  }
+
+  // Delete one of a room shot's photos (long press). Only a saved one: a photo
+  // still on the phone has no row to delete yet. The last one gone, the room
+  // asks for the shot again.
+  function deleteShot(e: any, shot: RoomShot) {
+    if (!shot.id || readOnly) return
+    Alert.alert(t('delete_photo'), t('delete_confirm'), [
+      { text: t('cancel'), style: 'cancel' },
+      {
+        text: t('delete_btn'), style: 'destructive', onPress: async () => {
+          const { error } = await supabase.from('job_photos').delete().eq('id', shot.id)
+          if (error) { Alert.alert(t('error'), t('could_not_save')); return }
+          checklistLoads.edited()
+          setEvidence(prev => prev.map((x: any) => x.id === e.id ? withoutShot(x, shot) : x))
+          setShotViewer(null)
+          loadChecklist(true)
+          loadPhotoRequirements()
+        },
+      },
+    ])
   }
 
   async function saveCheckItem(item: any, isChecked: boolean) {
@@ -3020,10 +3045,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                             })}
                             {/* Evidence — captured HERE, in the room it proves.
                                 The Photos screen is job-level shots only now. */}
-                            {evidence.filter((e: any) => (e.room_id || '__other__') === g.key).map((e: any) => (
+                            {evidence.filter((e: any) => (e.room_id || '__other__') === g.key).map((e: any) => {
+                              // Every photo the shot holds, latest first. The latest is the
+                              // big thumbnail; the rest line up under the name.
+                              const shown = shotsShown(e)
+                              const open = (i: number) => setShotViewer({ title: tx(e.area_name), photos: shown, index: i })
+                              return (
                               <View key={e.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 }}>
                                 {e.photo_url
-                                  ? <ShotThumb uri={e.photo_url} fallback={e.photo_fallback} size={34} />
+                                  ? <TouchableOpacity onPress={() => open(0)} onLongPress={() => deleteShot(e, shown[0])} accessibilityRole="imagebutton" accessibilityLabel={tx(e.area_name)}>
+                                      <ShotThumb uri={e.photo_url} fallback={e.photo_fallback} size={34} />
+                                    </TouchableOpacity>
                                   : <View style={{ width: 34, height: 34, borderRadius: 6, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' }}><Text style={{ opacity: 0.5 }}>📷</Text></View>}
                                 <View style={{ flex: 1 }}>
                                   <Text style={styles.checkLabel}>
@@ -3034,19 +3066,31 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                                   {!!e.photo_url && !!SHOT_MARK[e.photo_state as ShotState] && (
                                     <Text style={{ fontSize: 10, fontWeight: '700', marginTop: 1, color: SHOT_MARK[e.photo_state as ShotState].color }}>
                                       {t(SHOT_MARK[e.photo_state as ShotState].key)}
+                                      {shown.length > 1 ? `  ·  ${ti(t('shot_photo_count'), { n: String(shown.length) })}` : ''}
                                     </Text>
+                                  )}
+                                  {shown.length > 1 && (
+                                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                                      {shown.slice(1).map((sh, i) => (
+                                        <TouchableOpacity key={`${sh.uri}:${i}`} onPress={() => open(i + 1)} onLongPress={() => deleteShot(e, sh)}>
+                                          <ShotThumb uri={sh.uri} fallback={sh.fallback} size={26} />
+                                        </TouchableOpacity>
+                                      ))}
+                                    </View>
                                   )}
                                 </View>
                                 {!readOnly && <TouchableOpacity onPress={() => shootEvidence(e)} disabled={shootingId === e.id}
+                                  accessibilityRole="button" accessibilityLabel={e.photo_url ? t('add_shot_photo_a11y') : t('take_photo')}
                                   style={{ paddingVertical: 5, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1,
-                                    borderColor: e.photo_url ? '#E5E7EB' : '#8B5CF6',
+                                    borderColor: e.photo_url ? TEAL : '#8B5CF6',
                                     backgroundColor: e.photo_url ? '#fff' : '#F5F3FF' }}>
-                                  <Text style={{ fontSize: 11, fontWeight: '800', color: e.photo_url ? '#6B7280' : '#7C3AED' }}>
-                                    {shootingId === e.id ? '…' : e.photo_url ? t('retake_photo') : t('take_photo')}
+                                  <Text style={{ fontSize: 11, fontWeight: '800', color: e.photo_url ? TEAL : '#7C3AED' }}>
+                                    {shootingId === e.id ? '…' : e.photo_url ? `＋ ${t('add_shot_photo')}` : t('take_photo')}
                                   </Text>
                                 </TouchableOpacity>}
                               </View>
-                            ))}
+                              )
+                            })}
                             {g.key !== '__other__' && !isTask && !readOnly && (
                               <TouchableOpacity onPress={() => reportIssueIn(g.key, g.name)}
                                 style={{ marginTop: 6, alignSelf: 'flex-start', borderWidth: 1, borderStyle: 'dashed', borderColor: '#E5E7EB', borderRadius: 8, paddingVertical: 5, paddingHorizontal: 10 }}>
@@ -3154,6 +3198,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
         <PhotoViewer
           photos={[{ url: propertyPhotoUrl, caption: propLabel || null, meta: t('property_photo') }]}
           onClose={() => setViewPropertyPhoto(false)}
+        />
+      )}
+
+      {shotViewer && shotViewer.photos.length > 0 && (
+        <PhotoViewer
+          // A saved shot opens from storage: its file on the phone may be gone.
+          photos={shotViewer.photos.map(p => ({ url: p.state === 'saved' && p.fallback ? p.fallback : p.uri, caption: shotViewer.title }))}
+          startIndex={shotViewer.index}
+          onClose={() => setShotViewer(null)}
         />
       )}
 

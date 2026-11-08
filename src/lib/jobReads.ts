@@ -318,7 +318,7 @@ export const photoEnforceRead = (tenantId: string): CacheRead => ({
 export const requirementShotsRead = (jobId: string): CacheRead => ({
   key: `pshot:${jobId}`,
   q: () => supabase.from('job_photos')
-    .select('photo_requirement_id, photo_url, created_at')
+    .select('id, photo_requirement_id, photo_url, created_at')
     .eq('job_id', jobId).not('photo_requirement_id', 'is', null)
     .order('created_at', { ascending: false }),
 })
