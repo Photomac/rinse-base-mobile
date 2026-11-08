@@ -19,15 +19,24 @@
 // should also be a clear indication that the photo was successfully saved so
 // employees aren't left guessing"): saved, on the phone and uploading, on the
 // phone and waiting for signal, or refused by the server (take it again).
-import { queuedShots, type QueuedShot } from './photoQueue'
+import { queuedShots, queuedShotList, type QueuedShot, type QueuedShotEntry } from './photoQueue'
 
 export type Queued = Map<string, QueuedShot>
+/** Every required shot still on the phone (queuedShotList). */
+export type QueuedList = QueuedShotEntry[]
 
 /** Where a shot stands, as its room says it. */
 export type ShotState = 'saved' | 'uploading' | 'waiting' | 'failed'
 
-/** A shot to show: `uri` first, `fallback` when that file can't be loaded. */
-export interface RoomShot { uri: string; fallback: string | null; state: ShotState }
+/** A shot to show: `uri` first, `fallback` when that file can't be loaded.
+ *  `id`: its job_photos row, when the row was in the server's read. */
+export interface RoomShot { uri: string; fallback: string | null; state: ShotState; id?: string | null }
+
+/** Where a shot is, or will be, in storage: the same for its file on the phone
+ *  and its row once saved, so one shot is never listed twice. */
+export function storedUrlOf(s: { uri: string | null; fallback?: string | null }): string | null {
+  return s.fallback ?? s.uri
+}
 
 function queuedState(q: QueuedShot): ShotState {
   return q.refused ? 'failed' : q.waiting ? 'waiting' : 'uploading'
@@ -36,6 +45,57 @@ function queuedState(q: QueuedShot): ShotState {
 /** The phone's required shots for `jobId` now (none when the queue can't be read). */
 export function queuedNow(jobId: string): Promise<Queued> {
   return queuedShots(jobId).catch((): Queued => new Map())
+}
+
+/** Every one of the phone's required shots for `jobId` now (none when the queue can't be read). */
+export function queuedListNow(jobId: string): Promise<QueuedList> {
+  return queuedShotList(jobId).catch((): QueuedList => [])
+}
+
+/** The newest shot per requirement, as queuedShots gives it, from one read of
+ *  every shot: the latest shot and the list then come from the same read. */
+export function newestPerShot(list: QueuedList): Queued {
+  const shots: Queued = new Map()
+  for (const s of list) {
+    const newer = shots.get(s.requirementId)
+    if (newer && newer.created_at >= s.created_at) continue
+    const { requirementId, ...shot } = s
+    shots.set(requirementId, shot)
+  }
+  return shots
+}
+
+/** requirement id → every shot it holds, newest first, by the same rule as
+ *  roomShots: the ones on the phone over the server's, so its first shot is
+ *  the one roomShots shows. A shot is listed once: by its file while it is on
+ *  the phone, by its row (with the row's id) once saved. */
+export function roomShotLists(server: any[], before: QueuedList, after: QueuedList): Record<string, RoomShot[]> {
+  const lists: Record<string, RoomShot[]> = {}
+  const listed = new Set<string>()
+  const add = (req: string, at: number, shot: RoomShot, into: { req: string; at: number; shot: RoomShot }[]) => {
+    const key = storedUrlOf(shot)
+    if (!key || listed.has(key)) return
+    listed.add(key)
+    into.push({ req, at, shot })
+  }
+  const newestFirst = (a: { at: number }, b: { at: number }) => b.at - a.at
+  // Still on the phone after the reads: its file, with where it stands.
+  const onPhone: { req: string; at: number; shot: RoomShot }[] = []
+  for (const q of after) add(q.requirementId, q.created_at, { uri: q.localUri, fallback: q.storedUrl, state: queuedState(q) }, onPhone)
+  // Landed while the reads were out: its row, when the reads have it…
+  const rows: { req: string; at: number; shot: RoomShot }[] = []
+  for (const s of server) {
+    if (s?.photo_requirement_id && s.photo_url) {
+      add(s.photo_requirement_id, Date.parse(s.created_at) || 0, { uri: s.photo_url, fallback: null, state: 'saved', id: s.id ?? null }, rows)
+    }
+  }
+  // …or its stored copy (its file on the phone is gone).
+  const landed: { req: string; at: number; shot: RoomShot }[] = []
+  for (const q of before) add(q.requirementId, q.created_at, { uri: q.storedUrl, fallback: null, state: 'saved' }, landed)
+  for (const group of [onPhone.sort(newestFirst), landed.sort(newestFirst), rows.sort(newestFirst)]) {
+    for (const { req, shot } of group) (lists[req] ??= []).push(shot)
+  }
+  return lists
 }
 
 /** requirement id → the shot to show. `server`: the clean's shot rows, newest
@@ -77,6 +137,38 @@ export function withShotStates<T extends ShotRow>(rows: T[], queued: Queued, lan
     if (landed && r.photo_url && (r.photo_state === 'uploading' || r.photo_state === 'waiting')) return { ...r, photo_state: 'saved' as const }
     return r
   })
+}
+
+/** A room's shot row with every photo it holds (`shots`, from roomShotLists). */
+export interface ShotListRow extends ShotRow { shots?: RoomShot[] }
+
+/** The photos a shot row shows, its latest first: the one the room has been
+ *  showing (kept live from the phone's queue by withShotStates, or just taken),
+ *  then the rest of `shots`. The latest carries its row's id when the read had
+ *  it. A shot taken since the last read is in no list yet; the one it followed
+ *  then shows second. */
+export function shotsShown(row: ShotListRow): RoomShot[] {
+  const listed = row.shots ?? []
+  if (!row.photo_url) return listed
+  const first: RoomShot = { uri: row.photo_url, fallback: row.photo_fallback ?? null, state: row.photo_state ?? 'saved' }
+  const key = storedUrlOf(first)
+  const same = (s: RoomShot) => storedUrlOf(s) === key || s.uri === row.photo_url
+  return [{ ...first, id: listed.find(same)?.id ?? null }, ...listed.filter(s => !same(s))]
+}
+
+/** The row once `gone` is deleted: out of its list, and if it was the photo the
+ *  room showed, the next one shows (or "Take photo" when none is left). */
+export function withoutShot<T extends ShotListRow>(row: T, gone: RoomShot): T {
+  const key = storedUrlOf(gone)
+  const shown = shotsShown(row).filter(s => storedUrlOf(s) !== key && s.uri !== gone.uri)
+  const next = shown[0]
+  return {
+    ...row,
+    shots: (row.shots ?? []).filter(s => storedUrlOf(s) !== key && s.uri !== gone.uri),
+    photo_url: next?.uri ?? null,
+    photo_fallback: next?.fallback ?? null,
+    photo_state: next?.state ?? null,
+  }
 }
 
 /** The requirements taken, on the server or on the phone. */

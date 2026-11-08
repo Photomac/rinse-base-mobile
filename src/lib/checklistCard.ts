@@ -36,7 +36,7 @@ import {
 } from './jobReads'
 import { lineAskRows, type LineClipState } from './lineVideos'
 import { overlayPending } from './outbox'
-import { queuedNow, roomShots, type Queued } from './roomShots'
+import { newestPerShot, queuedListNow, roomShotLists, roomShots, type QueuedList } from './roomShots'
 import { isWalkthroughJob } from './walkthrough'
 import { lastTripFailed } from './netFetch'
 import { reportClientError } from './errorReporter'
@@ -75,7 +75,7 @@ type Parts = { tmpl: any; rows: any; rooms: any; signoffs: any; addrMode: any; t
 // who deliberately cleared every checklist must not have crews working an
 // invented list they can't see or edit.
 async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
-  seed: () => Promise<{ data: any }>, queuedBefore: Queued): Promise<ChecklistView> {
+  seed: () => Promise<{ data: any }>, queuedBefore: QueuedList): Promise<ChecklistView> {
   const tmpl = list(p.tmpl)
   // Queued offline ticks overlay the saved/live rows (rows are already scoped
   // to this job, matching the ops' job_id filter).
@@ -121,8 +121,10 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
       const tenMode = list(p.tenMode)[0]?.checklist_execution_mode
       // The latest shot per requirement, the ones still on the phone over the
       // server's (lib/roomShots): a reload never puts "Take photo" back on a
-      // shot that is uploading.
-      const shots = roomShots(list(p.shots), queuedBefore, await queuedNow(job.id))
+      // shot that is uploading. `shots` on each row: every photo it holds.
+      const queuedAfter = await queuedListNow(job.id)
+      const shots = roomShots(list(p.shots), newestPerShot(queuedBefore), newestPerShot(queuedAfter))
+      const all = roomShotLists(list(p.shots), queuedBefore, queuedAfter)
       view.rooms = {
         meta: list(p.rooms),
         signoffs,
@@ -132,6 +134,7 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
           photo_url: shots[rq.id]?.uri ?? null,
           photo_fallback: shots[rq.id]?.fallback ?? null,
           photo_state: shots[rq.id]?.state ?? null,
+          shots: all[rq.id] ?? [],
         })),
       }
     } catch { /* the flat grouping */ }
@@ -168,7 +171,7 @@ export async function readChecklist(job: any, user: any, addressId: string | nul
   const wait = waitNow()
   const a = addressId
   // The shots on the phone as the reads go out (lib/roomShots).
-  const queuedBefore = a ? await queuedNow(job.id) : new Map()
+  const queuedBefore: QueuedList = a ? await queuedListNow(job.id) : []
   const reads = await Promise.all([
     a ? readSoon(checklistTemplateRead(a), wait) : NONE,
     readSoon(checklistRowsRead(job.id), wait),

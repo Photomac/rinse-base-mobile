@@ -875,14 +875,31 @@ export interface QueuedShot {
  *  keeps it in, marked, for the room's "didn't upload" mark. */
 export async function queuedShots(jobId: string, opts?: { refused?: boolean }): Promise<Map<string, QueuedShot>> {
   const shots = new Map<string, QueuedShot>()
+  for (const s of await queuedShotList(jobId, opts)) {
+    const newer = shots.get(s.requirementId)
+    if (newer && newer.created_at >= s.created_at) continue
+    const { requirementId, ...shot } = s
+    shots.set(requirementId, shot)
+  }
+  return shots
+}
+
+/** A required shot still on the phone, with the requirement it is for. */
+export interface QueuedShotEntry extends QueuedShot { requirementId: string }
+
+/** Every one of this clean's required shots still on the phone, in queue
+ *  order: a room shot can hold more than one photo ("multiple pics for the
+ *  guest ready picture of each room", Five Star, 2026-11-08). queuedShots is
+ *  the newest of these per requirement; the same shots are left out. */
+export async function queuedShotList(jobId: string, opts?: { refused?: boolean }): Promise<QueuedShotEntry[]> {
+  const shots: QueuedShotEntry[] = []
   for (const p of await readQueue()) {
     if (p.job_id !== jobId || !p.photo_requirement_id || p.row_saved) continue
     if (p.incident_report_id && !p.also_job_photo) continue
     const refused = p.lastErrorKind === 'server' && refusalsOf(p) >= REFUSALS_BEFORE_COMPLETE_GOES
     if (refused && !opts?.refused) continue
-    const newer = shots.get(p.photo_requirement_id)
-    if (newer && newer.created_at >= p.created_at) continue
-    shots.set(p.photo_requirement_id, {
+    shots.push({
+      requirementId: p.photo_requirement_id,
       localUri: resolveLocal(p.localUri),
       storedUrl: supabase.storage.from('job-photos').getPublicUrl(p.fileName).data.publicUrl,
       created_at: p.created_at,
