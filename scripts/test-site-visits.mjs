@@ -105,7 +105,9 @@ const siteBranch = task.slice(task.indexOf("const fence = await siteFenceKind(jo
 check('an arrive/leave fence is handled before (and instead of) the clock-in path',
   siteBranch.length > 0 && /if \(fence !== 'other'\) \{[\s\S]*return\n  \}/.test(siteBranch), true)
 check('…recording only, and only for today\'s fences', /if \(fence === 'site' && /.test(siteBranch) && /onSiteCrossing\(jobId/.test(siteBranch) && !/scheduleNotificationAsync|job_time_entries|from\('jobs'\)/.test(siteBranch), true)
-check('the arrival clock-in still never runs for a day-shift company', /tenant\?\.auto_clock_in && tenant\?\.time_tracking_mode !== 'daily' && windowOpen/.test(fence), true)
+// Since the per-person day clock (test-day-clock-per-person.mjs) "day-shift"
+// is the person's clock over the company's.
+check('the arrival clock-in still never runs for someone on the day clock', /effectiveTimeMode\(\(mine as any\)\?\.time_tracking_mode, tenant\?\.time_tracking_mode\) === 'daily'[\s\S]{0,80}tenant\?\.auto_clock_in && !daily && windowOpen/.test(fence), true)
 check('a fence from an earlier day is "stale" and records nothing', /return armed\.day === today\(\) \? 'site' : 'stale'/.test(site), true)
 check('crossings at one fence are handled one at a time, in order (a leave right after an arrive is kept)',
   /chains\[jobId\] \?\? Promise\.resolve\(\)\)\.then\(\(\) => handleCrossing\(jobId, report, at, centre\)\)/.test(site), true)

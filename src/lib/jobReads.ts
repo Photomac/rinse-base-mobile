@@ -375,7 +375,10 @@ export const checkFirstTenantRead = (tenantId: string): CacheRead => ({
 export const clockInRuleRead = (tenantId: string): CacheRead => ({
   key: `cilrule:${tenantId}`,
   q: () => supabase.from('tenants')
-    .select('clock_in_location_required, lat, lng').eq('id', tenantId).maybeSingle(),
+    // home_base_*: the company location, exact only when the office placed it
+    // (lib/dayClock companyLocationSite). Before that migration the read fails
+    // and clockInRule reads it as off with no location: a punch as before.
+    .select('clock_in_location_required, lat, lng, home_base_precision, home_base_label').eq('id', tenantId).maybeSingle(),
 })
 
 /** The clean's property and how far its pin can be trusted. */

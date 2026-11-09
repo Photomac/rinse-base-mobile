@@ -35,6 +35,11 @@ const GRANTED = ['id', 'tenant_id', 'full_name', 'email', 'phone', 'role', 'is_a
   'created_at', 'updated_at', 'auth_user_id', 'hire_date', 'end_date', 'shirt_size',
   'stripe_connect_onboarded', 'is_demo', 'invite_expires_at', 'nickname', 'removed_at', 'email_self_set_at']
 
+// Granted by a later migration (web repo 20261109200100_day_clock_per_person)
+// and read on their own, never in USERS_READABLE_COLUMNS: a phone that updates
+// before the migration still loads its profile, and only that read fails.
+const GRANTED_LATER = ['time_tracking_mode', 'day_clock_at_office']
+
 const lib = read('src/lib/userPrivateDetails.ts')
 const READABLE = (/export const USERS_READABLE_COLUMNS = '([^']*)'/.exec(lib)?.[1] ?? '').split(',').map((c) => c.trim())
 ok('USERS_READABLE_COLUMNS is the granted list, in order', READABLE, GRANTED)
@@ -86,7 +91,12 @@ for (const { file, text } of SRC) {
     if (sel) {
       const list = sel[2] ? READABLE.join(', ') : sel[1]
       if (list.trim() === '*') bad.push(`${where}: select('*')`)
-      else for (const c of topLevel(list)) if (!READABLE.includes(c)) bad.push(`${where}: selects ${c}`)
+      else {
+        const cols = topLevel(list)
+        for (const c of cols) if (!READABLE.includes(c) && !GRANTED_LATER.includes(c)) bad.push(`${where}: selects ${c}`)
+        // A later column only in a read of its own (see GRANTED_LATER).
+        if (cols.some(c => GRANTED_LATER.includes(c)) && cols.some(c => !GRANTED_LATER.includes(c))) bad.push(`${where}: mixes ${cols.filter(c => GRANTED_LATER.includes(c)).join(', ')} into a read of other columns`)
+      }
     }
     for (const f of chain.matchAll(/\.(?:eq|neq|is|in|not|gt|gte|lt|lte|like|ilike|order|contains)\('([a-z0-9_]+)'/g)) {
       if (!READABLE.includes(f[1])) bad.push(`${where}: filters or sorts on ${f[1]}`)
