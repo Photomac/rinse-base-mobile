@@ -1,14 +1,16 @@
 // Tapping a crew job push opens the job it is about.
 //
-// The server sends four pushes about a crew member's clean, all with data
+// The server sends five pushes about a crew member's clean, all with data
 // { type, jobId, tenantId }: 'job_assigned' (notify-crew-assigned: the office
 // put them on it), 'job_reminder' (send-job-reminders: the day-before
 // reminder, which replaces most crew texts), 'home_prepped'
 // (notify-home-prepped, rinse-base-app 2026-10-21: "Catherine has prepped
-// CAYUSE B for you.", jobId = their next clean there) and 'inspection_result'
+// CAYUSE B for you.", jobId = their next clean there), 'inspection_result'
 // (notify-crew-inspection: their clean's inspection was filed; jobId = that
 // completed clean, whose screen shows the result and, when there is something
-// to look at, "I've reviewed this"). A tap used to open the app
+// to look at, "I've reviewed this") and 'guest_left' (notify-guest-left,
+// rinse-base-app 2026-11-09: "The guest left OCEAN 204", a guest tapped the
+// early checkout card; jobId = today's clean there, so they can start it). A tap used to open the app
 // wherever it was (Home on a cold start), and the crew member had to go and
 // find the job.
 //
@@ -40,7 +42,7 @@
 import { isMyJob, isOfficeRole } from './jobScope'
 
 /** The pushes a tap opens a job for (data.type). */
-export const JOB_PUSH_TYPES = ['job_reminder', 'job_assigned', 'home_prepped', 'inspection_result']
+export const JOB_PUSH_TYPES = ['job_reminder', 'job_assigned', 'home_prepped', 'inspection_result', 'guest_left']
 
 /** How long a tap waits for the live job before using the saved copy. */
 export const LIVE_WAIT_MS = 4000
