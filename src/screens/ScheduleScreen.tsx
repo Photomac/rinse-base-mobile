@@ -15,6 +15,7 @@ import { crewGroups, listItems } from '../lib/crewGroups'
 import { ti, localeFor, capFirst } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
+import { fetchAllPages } from '../lib/fetchAll'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { overlayPending } from '../lib/outbox'
 import { useAwaitingAnswers } from '../lib/useCrewAnswers'
@@ -77,13 +78,23 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     // Cached read: an offline crew member still sees the schedule they loaded
     // online. Cached rows carry scheduled_start, so day placement stays right
     // even when the cache is a day or two old.
-    const { data, fromCache } = await cachedQuery(`sched:${user.id}`, supabase.from('jobs')
+    //
+    // Paged (lib/fetchAll.ts): PostgREST answers an unranged select with at
+    // most 1,000 rows and no error, cut wherever the ORDER BY puts row 1,000.
+    // This reads the whole company's window (a month back to two months
+    // ahead) and filters to the viewer below, so every clean past row 1,000
+    // silently vanished, for owners and crew alike: on 2026-11-09 CKS had
+    // 1,188 jobs in it and Lee Concierge 1,616. id breaks ties, so a page
+    // boundary can't skip or repeat cleans that share a start time. The select
+    // is pushTap.ts's SCHEDULE_JOB_SELECT (pushTap.scenario.ts checks they match).
+    const { data, fromCache } = await cachedQuery(`sched:${user.id}`, fetchAllPages(() => supabase.from('jobs')
       .select('id, job_number, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url, timezone), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
       .eq('tenant_id', user.tenant_id)
       .gte('scheduled_start', start.toISOString())
       .lte('scheduled_start', end.toISOString())
       .neq('status', 'cancelled')
-      .order('scheduled_start'))
+      .order('scheduled_start')
+      .order('id')))
     setOffline(fromCache)
     const myJobs = isOwner
       ? (data ?? [])
