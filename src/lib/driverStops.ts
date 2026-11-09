@@ -60,7 +60,7 @@ export function crewFirstNames(stop: { crew?: { users?: { full_name?: string | n
 // ── The morning pickup (CKS, 2026-11-09) ───────────────────────────────────
 // A property can say how long before checkout its bags are picked up at the
 // office (client_addresses.linen_pickup_minutes, web migration
-// driver_follows_lead_and_pickup_times): CKS picks up Sedona homes 45 minutes
+// 20261109160000_driver_follows_lead_and_linen_pickup): CKS picks up Sedona homes 45 minutes
 // before checkout and Cottonwood homes 15. The checkout is the property's usual
 // one (default_checkout_time), else the company's. It's a time on the
 // property's own clock, so it stays a wall-clock time ('HH:MM') and is never

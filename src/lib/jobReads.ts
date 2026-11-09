@@ -600,7 +600,7 @@ export function driverLinenReads(user: any, stops: any[]) {
  *  properties' usual checkout and pickup minutes, and the company's checkout
  *  for a property with none. Separate from the stops read on purpose:
  *  linen_pickup_minutes arrives with web migration
- *  driver_follows_lead_and_pickup_times, and naming it in the stops read would
+ *  20261109160000_driver_follows_lead_and_linen_pickup, and naming it in the stops read would
  *  empty the whole card on a database without it. This read fails alone, and
  *  the card then shows no pickup times. */
 export function driverPickupReads(user: any, stops: any[]) {
