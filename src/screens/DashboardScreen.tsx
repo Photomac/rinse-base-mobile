@@ -16,7 +16,8 @@ import { currencySymbol } from '../lib/money'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences, quickGpsStamp } from '../lib/arrivalGeofence'
 import { clockInFields, daySites, fmtClockInDistance, notCheckedRole } from '../lib/clockInGate'
-import { checkClockIn, clockInRule, recordRefusal } from '../lib/clockInLocation'
+import { checkClockIn, checkDayEnd, clockInRule, recordRefusal } from '../lib/clockInLocation'
+import { dayEndChecked, dayEndFields, dayStartSites, type DayEndDecision } from '../lib/dayClock'
 import { arrivalForStart } from '../lib/siteVisits'
 import { cachedQuery, cachedRead, readSoon, writeCacheEntry, cacheEpoch } from '../lib/dataCache'
 import { lastTripFailed } from '../lib/netFetch'
@@ -81,6 +82,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [shiftKnown, setShiftKnown] = useState(false)
   const [shiftElapsed, setShiftElapsed] = useState('')
   const [shiftBusy, setShiftBusy] = useState(false)
+  // The company location's name, under Start my day when the office limited
+  // this person's day to it (user._dayClockAtOffice, lib/dayClock).
+  const [dayPlace, setDayPlace] = useState<string | null>(null)
+  useEffect(() => {
+    if (!user._dayClockAtOffice) return
+    clockInRule(user.tenant_id).then(r => setDayPlace(r.office?.name ?? null)).catch(() => {})
+  }, [user.tenant_id, user._dayClockAtOffice])
   // Bumped by every Start/End: a read that began before one must not put the
   // older state back (9/27: the load's read returned [] a millisecond after
   // Start's insert and the button came back).
@@ -381,16 +389,21 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       // today: "📍 Started at SILEX"); it waits at most 2.5 s and never holds
       // up the start (no fix, no stamp).
       const tappedAt = new Date().toISOString()
-      // Clock-in only at the property, when the company has it on: against
-      // today's cleans and the office (lib/clockInGate). Refused = told why,
-      // nothing written. The office starts the day for them from Team today.
+      // Where the day may start (lib/dayClock dayStartSites): only at the
+      // company location when the office limited this person's day to it (a
+      // driver collecting the van at the warehouse), else today's cleans and
+      // the company location when the company has "Clock in only at the
+      // property" on, else anywhere. Refused = told why, nothing written. The
+      // office starts the day for them from Team today or Payroll.
+      const atOffice = user._dayClockAtOffice ?? null
       const rule = notCheckedRole(user.role) ? null : await clockInRule(user.tenant_id)
-      const gate = rule?.required
-        ? await checkClockIn({ sites: daySites(dayRows, rule.office), jobId: null, userId: user.id })
-        : null
+      const sites = rule ? dayStartSites({ atOffice, companyRequired: rule.required, office: rule.office, companySites: () => daySites(dayRows, rule.office) }) : null
+      const gate = sites ? await checkClockIn({ sites, jobId: null, userId: user.id }) : null
       if (gate && !gate.allow) {
         await recordRefusal(gate, { tenantId: user.tenant_id, jobId: null, userId: user.id })
-        Alert.alert(t('clock_in_refused_title'), ti(t('day_start_refused_body'), { distance: fmtClockInDistance(gate.distanceM) }))
+        Alert.alert(t('clock_in_refused_title'), atOffice
+          ? ti(t('day_start_office_refused_body'), { distance: fmtClockInDistance(gate.distanceM), place: rule?.office?.name || t('company_location') })
+          : ti(t('day_start_refused_body'), { distance: fmtClockInDistance(gate.distanceM) }))
         return
       }
       if (gate?.check === 'no_permission') Alert.alert('📍', t('clock_in_location_off'))
@@ -458,6 +471,28 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         const out = new Date()
         const stampP = quickGpsStamp()
         try {
+          // A day that starts and ends at the company location: where it ended
+          // is judged and kept for the office (clock_out_check). Never refused:
+          // that would keep their paid day running. Away from it, they're asked
+          // first, so someone who forgot can go back and end it there.
+          let end: DayEndDecision | null = null
+          if (dayEndChecked(user._dayClockAtOffice) && !notCheckedRole(user.role)) {
+            const rule = await clockInRule(user.tenant_id)
+            end = await checkDayEnd(rule.office)
+            if (end.away && end.distanceM != null) {
+              const place = rule.office?.name || t('company_location')
+              const distance = fmtClockInDistance(end.distanceM)
+              const endHere = await new Promise<boolean>(resolve => Alert.alert(
+                t('day_end_away_title'), ti(t('day_end_away_body'), { distance, place }),
+                [
+                  { text: t('cancel') || 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+                  { text: t('day_end_here'), style: 'destructive', onPress: () => resolve(true) },
+                ],
+                { cancelable: false },
+              ))
+              if (!endHere) return
+            }
+          }
           // End the shift the server has open NOW. The one on screen can be
           // stale (ended or restarted on the web, or a start that lost to one
           // already running); ending its id changed nothing and left the real
@@ -478,13 +513,14 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           }
           // No answer = no signal: end the one on screen. The outbox replays it,
           // pointed at the right row if its start lost to another.
-          const stamp = await stampP
+          const stamp = end?.stamp ?? await stampP
           const { error } = await writeThrough({
             table: 'job_time_entries', op: 'update', match: { id: target.id },
             values: {
               clocked_out_at: out.toISOString(),
               duration_minutes: Math.max(0, Math.round((out.getTime() - new Date(target.clocked_in_at).getTime()) / 60000)),
               clock_out_lat: stamp?.lat ?? null, clock_out_lng: stamp?.lng ?? null,
+              ...dayEndFields(end),
             },
           })
           if (error) { Alert.alert(t('error'), error.message); return }
@@ -602,9 +638,14 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
               </TouchableOpacity>
             </View>
           ) : (
-            <TouchableOpacity style={styles.startDayBtn} onPress={handleStartDay} disabled={shiftBusy} activeOpacity={0.85}>
-              {shiftBusy ? <ActivityIndicator color={SLATE} /> : <Text style={styles.startDayBtnText}>⏱  {t('start_my_day')}</Text>}
-            </TouchableOpacity>
+            <View>
+              <TouchableOpacity style={styles.startDayBtn} onPress={handleStartDay} disabled={shiftBusy} activeOpacity={0.85}>
+                {shiftBusy ? <ActivityIndicator color={SLATE} /> : <Text style={styles.startDayBtnText}>⏱  {t('start_my_day')}</Text>}
+              </TouchableOpacity>
+              {!!user._dayClockAtOffice && (
+                <Text style={styles.dayPlaceHint}>📍 {ti(t('day_starts_at'), { place: dayPlace || t('company_location') })}</Text>
+              )}
+            </View>
           )
         )}
 
@@ -810,6 +851,7 @@ const styles = StyleSheet.create({
   answerBannerText: { color: '#B45309', fontSize: 14, fontWeight: '800' },
   offlineBannerText: { color: '#92400E', fontSize: 12, fontWeight: '700', textAlign: 'center' },
   dayPackLine: { marginHorizontal: 16, marginTop: 10, fontSize: 11, color: '#64748B', textAlign: 'center' },
+  dayPlaceHint: { marginHorizontal: 16, marginTop: 6, fontSize: 12, color: '#64748B', textAlign: 'center' },
   startDayBtn:{ marginHorizontal: 16, marginTop: 16, backgroundColor: GOLD, borderRadius: 14, paddingVertical: 18, alignItems: 'center', justifyContent: 'center' },
   startDayBtnText: { color: SLATE, fontSize: 17, fontWeight: '800' },
   shiftCardPending: { marginHorizontal: 16, marginTop: 16, backgroundColor: '#F1F5F9', borderRadius: 14, paddingVertical: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
