@@ -3,8 +3,8 @@
 // person on the other clock (users.time_tracking_mode) and limit where their day
 // starts, and ends, to the company location (users.day_clock_at_office, the pin
 // in tenants.lat/lng the office placed with set_company_pin). Migrations
-// 20261109200000_company_location_pin, 20261109200100_day_clock_per_person and
-// 20261109200200_day_end_place_check.
+// 20261109153021_company_location_pin, 20261109153110_day_clock_per_person and
+// 20261109153126_day_end_place_check.
 //
 // Pure, with the phone's and the network's answers passed in, so every case can
 // be tested. This file is the same in rinsebase-app and rinsebase-mobile. The

@@ -35,7 +35,7 @@ const GRANTED = ['id', 'tenant_id', 'full_name', 'email', 'phone', 'role', 'is_a
   'created_at', 'updated_at', 'auth_user_id', 'hire_date', 'end_date', 'shirt_size',
   'stripe_connect_onboarded', 'is_demo', 'invite_expires_at', 'nickname', 'removed_at', 'email_self_set_at']
 
-// Granted by a later migration (web repo 20261109200100_day_clock_per_person)
+// Granted by a later migration (web repo 20261109153110_day_clock_per_person)
 // and read on their own, never in USERS_READABLE_COLUMNS: a phone that updates
 // before the migration still loads its profile, and only that read fails.
 const GRANTED_LATER = ['time_tracking_mode', 'day_clock_at_office']
