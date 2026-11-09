@@ -26,7 +26,7 @@ function check(name, got, want) {
   console.log(`${ok ? '✓' : '✗'}  ${name}${ok ? '' : ` — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`)
 }
 
-const { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames } = await import(join(repo, 'src/lib/driverStops.ts'))
+const { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames, returnTick, nextReturn } = await import(join(repo, 'src/lib/driverStops.ts'))
 const { bagLine } = await import(join(repo, 'src/lib/laundryBags.ts'))
 
 console.log('1. Linen to bring')
@@ -92,6 +92,22 @@ check('the bags line comes before the item list, which folds', [card.indexOf('st
 check('a finished stop folds to one line and a tap opens it', [/finished && !openDone\[s\.id\]/.test(card), /stopFinished\(\{ status: s\.status, \.\.\.tk \}\)/.test(card), /setOpenDone\(p => \(\{ \.\.\.p, \[s\.id\]: true \}\)\)/.test(card)], [true, true, true])
 check('the stops read carries the clean\'s status (the office stop finishes on it)', /\.select\('id, tenant_id, status,/.test(reads), true)
 check('the stops read and the property read carry the bag count', [/laundry_bag_color, laundry_bag_count\)/.test(reads), /laundry_bag_color, laundry_bag_count, staging_photos/.test(reads)], [true, true])
+
+console.log('4. The day\'s end: where the bags went (CKS, 2026-11-07)')
+const atOffice = { returned_to: 'office', returned_at: '2026-11-09T23:12:00Z' }
+check('no return: neither place shows a time', [returnTick(null, 'office'), returnTick(null, 'owner_home')], [null, null])
+check('the office return shows its time on Office only', [returnTick(atOffice, 'office'), returnTick(atOffice, 'owner_home')], ['2026-11-09T23:12:00Z', null])
+check('a first tap sends the place', nextReturn(null, 'office'), 'office')
+check('a tap on the other place moves it', nextReturn(atOffice, 'owner_home'), 'owner_home')
+check('a tap on the ticked place takes it back (null)', nextReturn(atOffice, 'office'), null)
+const rcard = readFileSync(join(repo, 'src/components/DriverStopsCard.tsx'), 'utf8')
+const rreads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
+check('the return is written only by driver_return_linen, for today', /rpc\('driver_return_linen', \{ p_day: today, p_to: to \}\)/.test(rcard), true)
+check('the return is read through jobReads, by driver and day', [/cachedRead\(driverReturnRead\(user, today\)\)/.test(rcard), /from\('linen_returns'\)[\s\S]{0,120}\.eq\('driver_user_id', user\.id\)[\s\S]{0,60}\.eq\('return_day', day\)/.test(rreads)], [true, true])
+check('the row sits under today\'s stops only', rcard.indexOf('{todays.stops.map(renderStop)}') < rcard.indexOf("t('driver_return_title')") && rcard.indexOf("t('driver_return_title')") < rcard.indexOf('{later.map('), true)
+check('Office comes before the owner\'s home', rcard.indexOf("t('driver_return_office')") < rcard.indexOf("t('driver_return_home')"), true)
+check('the places are the database\'s', [/markReturn\('office'\)/.test(rcard), /markReturn\('owner_home'\)/.test(rcard)], [true, true])
+check('a failed save says so', /if \(error\) \{\s*Alert\.alert\(t\('driver_tick_failed_title'\)/.test(rcard.slice(rcard.indexOf('async function markReturn'))), true)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)

@@ -19,6 +19,9 @@ export const translations = {
     driver_picked_up: 'Picked up',
     driver_tick_failed_title: "Couldn't save",
     driver_tick_failed: 'Check your signal and tap again.',
+    driver_return_title: 'End of the day: where did the bags go?',
+    driver_return_office: 'Office',
+    driver_return_home: "Owner's home",
     // Dashboard "Get ready for today" prep card
     prep_title: 'Get ready for today',
     prep_all_set: 'All set for today',
@@ -1128,6 +1131,9 @@ export const translations = {
     driver_picked_up: 'Recogida',
     driver_tick_failed_title: 'No se pudo guardar',
     driver_tick_failed: 'Revisa tu señal y vuelve a tocar.',
+    driver_return_title: 'Al final del día: ¿adónde llevaste las bolsas?',
+    driver_return_office: 'Oficina',
+    driver_return_home: 'Casa del dueño',
     // Tarjeta "Prepárate para hoy"
     prep_title: 'Prepárate para hoy',
     prep_all_set: 'Todo listo para hoy',
@@ -2226,6 +2232,9 @@ export const translations = {
     driver_picked_up: 'Recolhida',
     driver_tick_failed_title: 'Não foi possível salvar',
     driver_tick_failed: 'Verifique o sinal e toque de novo.',
+    driver_return_title: 'No fim do dia: para onde foram os sacos?',
+    driver_return_office: 'Escritório',
+    driver_return_home: 'Casa do dono',
     // Cartão "Prepare-se para hoje"
     prep_title: 'Prepare-se para hoje',
     prep_all_set: 'Tudo pronto para hoje',

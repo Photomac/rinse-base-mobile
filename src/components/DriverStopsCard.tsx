@@ -9,7 +9,8 @@
 // with two buttons: Picked up and Dropped off (driver_mark_linen, which the
 // office sees on the clean). A finished stop folds to one line so the next one
 // is on screen; a tap opens it again. Today is open; the next six days are
-// listed below.
+// listed below. Under today's stops, the day's end: where the soiled bags went,
+// the office or the owner's home (driver_return_linen; CKS, 2026-11-07).
 //
 // Renders nothing for anyone who drives no clean this week, so it costs crew
 // who aren't drivers one small read.
@@ -22,8 +23,8 @@ import { ti, localeFor, capFirst } from '../lib/i18n'
 import { tv } from '../lib/vocab'
 import { translateTexts, normalizeText } from '../lib/machineTranslate'
 import { cachedRead } from '../lib/dataCache'
-import { driverStopsRead, driverLinenReads } from '../lib/jobReads'
-import { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames, type LinenRow, type ExtraRow } from '../lib/driverStops'
+import { driverStopsRead, driverLinenReads, driverReturnRead } from '../lib/jobReads'
+import { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames, returnTick, nextReturn, type LinenRow, type ExtraRow, type LinenReturn, type ReturnPlace } from '../lib/driverStops'
 import { bagLine } from '../lib/laundryBags'
 import { fmtTimeAt, fmtDate, dayKey, todayKey } from '../lib/timezone'
 import { GOLD_MUTED, SLATE, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
@@ -46,6 +47,9 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
   const [openItems, setOpenItems] = useState<Record<string, boolean>>({})
   // A finished stop the driver opened again (to check it or untick a slip).
   const [openDone, setOpenDone] = useState<Record<string, boolean>>({})
+  // Today's end-of-day bag return (one per driver per day), and the place being saved.
+  const [ret, setRet] = useState<LinenReturn>(null)
+  const [returnBusy, setReturnBusy] = useState<ReturnPlace | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -57,17 +61,18 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
       setTicked({})
       if (rows.length === 0) return
       const reads = driverLinenReads(user, rows)
-      const [l, x] = await Promise.all([cachedRead(reads.linen), cachedRead(reads.extras)])
+      const [l, x, r] = await Promise.all([cachedRead(reads.linen), cachedRead(reads.extras), cachedRead(driverReturnRead(user, today))])
       const linenRows = ((l.data as any[]) ?? []) as LinenRow[]
       // Owner-typed linen names in the driver's language; seeded ones resolve locally.
       const m = await translateTexts(lang, [...new Set(linenRows.map(r => r.item_name))]).catch(() => new Map<string, string>())
       if (cancelled) return
       setLinen(linenRows)
       setExtras(((x.data as any[]) ?? []) as ExtraRow[])
+      setRet(((r.data as any) ?? null) as LinenReturn)
       setNames(m)
     })().catch(() => { if (!cancelled) setStops([]) })
     return () => { cancelled = true }
-  }, [user.id, user.tenant_id, lang, reloadKey])
+  }, [user.id, user.tenant_id, lang, reloadKey, today])
 
   const days = useMemo(() => stopsByDay(stops, at => dayKey(at)), [stops])
 
@@ -87,6 +92,20 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
     setTicked(prev => ({ ...prev, [stop.id]: data as Ticks }))
     // A tick that finishes the stop folds it, even one opened by hand.
     setOpenDone(prev => ({ ...prev, [stop.id]: false }))
+  }
+
+  // The day's end: a tap records the place (with the time), a tap on the other
+  // place moves it (the first time stays), a tap on the ticked one takes it back.
+  async function markReturn(place: ReturnPlace) {
+    const to = nextReturn(ret, place)
+    setReturnBusy(place)
+    const { data, error } = await supabase.rpc('driver_return_linen', { p_day: today, p_to: to })
+    setReturnBusy(null)
+    if (error) {
+      Alert.alert(t('driver_tick_failed_title'), t('driver_tick_failed'))
+      return
+    }
+    setRet(to ? ((data as any) ?? null) as LinenReturn : null)
   }
 
   function openMaps(addr: any) {
@@ -175,6 +194,17 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
         ? (<>
             <Text style={styles.dayHead}>{t('today')} · {drops(todays.stops.length)}</Text>
             {todays.stops.map(renderStop)}
+            {/* The day's end (CKS, 2026-11-07): the leads bring the soiled bags
+                to the office or the owner's home, and the office sees where and when. */}
+            <View style={styles.returnBox}>
+              <Text style={styles.returnHead}>🧺 {t('driver_return_title')}</Text>
+              <View style={styles.buttons}>
+                <TickButton label={t('driver_return_office')} at={returnTick(ret, 'office')} addr={todays.stops[0].client_addresses ?? {}}
+                  locale={locale} busy={returnBusy === 'office'} primary={false} onPress={() => markReturn('office')} />
+                <TickButton label={t('driver_return_home')} at={returnTick(ret, 'owner_home')} addr={todays.stops[0].client_addresses ?? {}}
+                  locale={locale} busy={returnBusy === 'owner_home'} primary={false} onPress={() => markReturn('owner_home')} />
+              </View>
+            </View>
           </>)
         : <Text style={styles.muted}>{t('driver_none_today')}</Text>}
       {later.map(d => (
@@ -229,6 +259,8 @@ const styles = StyleSheet.create({
   fold: { fontSize: 13, color: SLATE, marginTop: 4, fontWeight: '600' },
   muted: { fontSize: 12, color: TEXT_MUTED, marginTop: 4 },
   buttons: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  returnBox: { borderTopWidth: 1, borderTopColor: BORDER, paddingTop: 10 },
+  returnHead: { fontSize: 14, fontWeight: '700', color: TEXT },
   btn: { flex: 1, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 1, minHeight: 48 },
   btnPrimary: { backgroundColor: SLATE, borderColor: SLATE },
   btnDone: { backgroundColor: '#15803D', borderColor: '#15803D' },
