@@ -92,9 +92,12 @@ has('Start my day: checked, refused without writing', fn(home, 'async function h
   /checkClockIn[\s\S]*!gate\.allow\)[\s\S]*return\n[\s\S]*\.\.\.clockInFields\(gate\)[\s\S]*writeThrough/)
 has('the office card is on the stop\'s screen', job, '<ClockInOfficeCard')
 has('the office card uses the audited RPC', loc, "supabase.rpc('allow_clock_in_here'")
-has('the switch fails to off', loc, /if \(error \|\| !data\?\.clock_in_location_required\) return \{ required: false/)
+// Since the per-person day clock (test-day-clock-per-person.mjs) the read also
+// hands back the company location with the switch off, exact only when the
+// office placed it (tenants.home_base_precision).
+has('the switch fails to off', loc, /if \(error \|\| !data\) return \{ required: false, office: null \}[\s\S]{0,40}return \{ required: !!data\.clock_in_location_required, office: companyLocationSite\(data\) \}/)
 has('the day pack saves the switch and the property', fn(reads, 'export function jobPackReads(', '\n}\n'), /clockInRuleRead\(user\.tenant_id\),\s+clockInSiteRead\(job\.id\)/)
-has('the switch is read on its own', fn(reads, 'export const clockInRuleRead', '})'), "select('clock_in_location_required, lat, lng')")
+has('the switch is read on its own', fn(reads, 'export const clockInRuleRead', '})'), "select('clock_in_location_required, lat, lng, home_base_precision, home_base_label')")
 has('Home\'s rows carry the pin precision', fn(reads, 'export function dashTodayRead(', '\n}\n'), 'lat, lng, geocode_precision')
 for (const key of ['clock_in_refused_title', 'clock_in_refused_body', 'day_start_refused_body', 'clock_in_try_again', 'clock_in_call_office', 'clock_in_location_off', 'clock_in_office_title', 'clock_in_office_refused', 'clock_in_office_allow', 'clock_in_office_let_in', 'clock_in_office_allowed', 'clock_in_office_failed']) {
   check(`${key} is in en, es and pt`, (i18n.match(new RegExp(`\\b${key}:`, 'g')) ?? []).length, 3)

@@ -8,6 +8,7 @@ import { clockInRuleRead, clockInSiteRead } from './jobReads'
 import { linkAnswering } from './netFetch'
 import { ensureForegroundLocation, getForegroundLocationStatus } from './permissions'
 import { CLOCK_IN_FIX_WAIT_MS, runClockInGate, siteOf, type ClockInDecision, type ClockInFix, type ClockInSite } from './clockInGate'
+import { DAY_END_GATE, companyLocationSite, dayEndDecision, dayEndSites, type DayEndDecision } from './dayClock'
 
 // How long a punch waits on a read before using the saved copy, and on the
 // office's override before treating it as no answer.
@@ -23,16 +24,21 @@ function timesOut<T>(ask: PromiseLike<T>, ms: number): Promise<T> {
 }
 
 /**
- * The company's switch and office pin, from the saved copy on a weak signal. A
- * read that fails, or no saved copy, means off: before the migration the column
- * doesn't exist, and with the switch off a punch is exactly what it always was.
+ * The company's switch and its location, from the saved copy on a weak signal.
+ * A read that fails, or no saved copy, means off with no location: before a
+ * migration a column doesn't exist, and then a punch is exactly what it always
+ * was.
+ *
+ * The location comes back whether or not the switch is on: a person whose day
+ * is limited to it is checked either way (lib/dayClock). It is exact only when
+ * the office placed it (tenants.home_base_precision); a pin the geocode cron
+ * placed may be a town centre, and can't turn anyone away.
  */
 export async function clockInRule(tenantId: string): Promise<{ required: boolean; office: ClockInSite | null }> {
   try {
     const { data, error } = await readSoon<any>(clockInRuleRead(tenantId), READ_WAIT_MS)
-    if (error || !data?.clock_in_location_required) return { required: false, office: null }
-    // The company's own office pin counts as exact: an owner places it.
-    return { required: true, office: data.lat != null && data.lng != null ? { name: null, lat: data.lat, lng: data.lng, precision: 'exact' } : null }
+    if (error || !data) return { required: false, office: null }
+    return { required: !!data.clock_in_location_required, office: companyLocationSite(data) }
   } catch {
     return { required: false, office: null }
   }
@@ -80,6 +86,16 @@ export function checkClockIn(args: { sites: ClockInSite[]; jobId: string | null;
       return (data?.length ?? 0) > 0
     },
   })
+}
+
+/** Where End my day happened, against the company location (lib/dayClock). Never refuses. */
+export async function checkDayEnd(office: ClockInSite | null): Promise<DayEndDecision> {
+  return dayEndDecision(await runClockInGate({
+    sites: () => dayEndSites(office),
+    permission: async () => ((await getForegroundLocationStatus()) === 'granted' ? 'granted' : 'denied'),
+    fix: phoneFix,
+    ...DAY_END_GATE,
+  }))
 }
 
 /** Keep the refusal for the office. A refusal only happens online; losing this row costs nothing but the note. */

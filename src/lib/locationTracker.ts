@@ -16,6 +16,7 @@ import { byCrewDayOrder } from './jobOrder'
 import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
 import { noteTrail } from './siteVisits'
+import { effectiveTimeMode } from './dayClock'
 
 const LOCATION_TASK = 'crew-location-task'
 const PING_INTERVAL = 5 * 60 * 1000 // 5 minutes
@@ -393,7 +394,15 @@ async function isDailyMode(user: any): Promise<boolean> {
   try {
     const { data } = await cachedQuery(`track:mode:${user.tenant_id}`, supabase.from('tenants')
       .select('time_tracking_mode').eq('id', user.tenant_id).maybeSingle())
-    return (data as any)?.time_tracking_mode === 'daily'
+    // The person's own clock over the company's (lib/dayClock). Its own read:
+    // before the migration the column doesn't exist, and the company's stands.
+    let mine: string | null = null
+    try {
+      const { data: me } = await cachedQuery(`track:mymode:${user.id}`, supabase.from('users')
+        .select('time_tracking_mode').eq('id', user.id).maybeSingle())
+      mine = (me as any)?.time_tracking_mode ?? null
+    } catch { /* the company's */ }
+    return effectiveTimeMode(mine, (data as any)?.time_tracking_mode) === 'daily'
   } catch { return false }
 }
 

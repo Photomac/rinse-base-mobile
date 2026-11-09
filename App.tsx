@@ -32,6 +32,7 @@ import { flushQueue, pendingCount, photoQueueActive } from './src/lib/photoQueue
 import { recoverCameraPhoto } from './src/lib/cameraRecovery'
 import { flushVideoQueue } from './src/lib/videoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
+import { dayClockAtOffice, effectiveTimeMode, type DayClockAtOffice } from './src/lib/dayClock'
 import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
 import { USERS_READABLE_COLUMNS, fetchMyPay } from './src/lib/userPrivateDetails'
 import { clearDataCache, readCacheEntry } from './src/lib/dataCache'
@@ -72,6 +73,9 @@ initErrorReporting()
 // Company settings every screen reads off the profile (as `_`-prefixed fields).
 type CompanySettings = {
   _contact: { crewCanContactClient: boolean; dispatchPhone: string | null }
+  // The company's clock. _timeMode, which every screen reads, is the person's:
+  // their own (users.time_tracking_mode) over this one (loadUser, lib/dayClock).
+  _companyTimeMode: string
   _timeMode: string
   _assignmentMode: string
   _tz: string | null
@@ -80,10 +84,12 @@ type CompanySettings = {
   _laundryBonus: number
 }
 const defaultSettings = (): CompanySettings => ({
-  _contact: { crewCanContactClient: false, dispatchPhone: null }, _timeMode: 'per_job', _assignmentMode: 'default_crew', _tz: null, _multiMarket: false, _currency: null, _laundryBonus: 0,
+  _contact: { crewCanContactClient: false, dispatchPhone: null }, _companyTimeMode: 'per_job', _timeMode: 'per_job', _assignmentMode: 'default_crew', _tz: null, _multiMarket: false, _currency: null, _laundryBonus: 0,
 })
 const settingsFrom = (p: any): CompanySettings => ({
   _contact: p._contact ?? defaultSettings()._contact,
+  // A copy saved before _companyTimeMode existed held the company's in _timeMode.
+  _companyTimeMode: p._companyTimeMode ?? p._timeMode ?? 'per_job',
   _timeMode: p._timeMode ?? 'per_job',
   _assignmentMode: p._assignmentMode ?? 'default_crew',
   _tz: p._tz ?? null,
@@ -110,6 +116,8 @@ async function companySettings(tenantId: string): Promise<CompanySettings | null
   return {
     _contact: { crewCanContactClient: !!tenant?.crew_can_contact_client, dispatchPhone },
     // 'daily' → crew clock in once for the day (shift); 'per_job' (default) → per-clean timer.
+    _companyTimeMode: tenant?.time_tracking_mode || 'per_job',
+    // Replaced with the person's own in loadUser.
     _timeMode: tenant?.time_tracking_mode || 'per_job',
     // Crew job board. 'default_crew' (the default) hides the Open jobs tab
     // unless something is actually open; the broadcast modes always show it.
@@ -128,6 +136,22 @@ async function companySettings(tenantId: string): Promise<CompanySettings | null
     _laundryBonus: Math.max(
       Number(tenant?.laundry_takehome_bonus || 0), Number(tenant?.laundry_onsite_bonus || 0),
       Number(tenant?.laundry_office_bonus || 0), Number(tenant?.laundry_laundromat_bonus || 0)),
+  }
+}
+
+// This person's own clock (users.time_tracking_mode, day_clock_at_office;
+// lib/dayClock): iClean's drivers and warehouse staff clock in for the day while
+// its cleaners clock per clean, and a driver's day may be limited to the company
+// location. Its own read: before the migration the columns don't exist, and the
+// profile must still load. Null when it couldn't be read, never a guess.
+async function personalClock(userId: string): Promise<{ mode: string | null; atOffice: DayClockAtOffice | null } | null> {
+  try {
+    const { data, error } = await supabase.from('users')
+      .select('time_tracking_mode, day_clock_at_office').eq('id', userId).maybeSingle()
+    if (error) return null
+    return { mode: (data as any)?.time_tracking_mode ?? null, atOffice: dayClockAtOffice((data as any)?.day_clock_at_office) }
+  } catch {
+    return null
   }
 }
 
@@ -218,6 +242,18 @@ function AppInner() {
         settings = prev && prev.tenant_id === data.tenant_id ? settingsFrom(prev) : defaultSettings()
       }
       Object.assign(data, settings)
+      // The person's clock over the company's. Unreadable now: the last good
+      // copy for this person, else the company's with no limit (as before).
+      let personal = await personalClock(data.id)
+      if (!personal) {
+        const prev = await loadCachedProfile(authId)
+        personal = prev && prev.id === data.id
+          ? { mode: prev._personTimeMode ?? null, atOffice: dayClockAtOffice(prev._dayClockAtOffice) }
+          : { mode: null, atOffice: null }
+      }
+      data._personTimeMode = personal.mode
+      data._dayClockAtOffice = personal.atOffice
+      data._timeMode = effectiveTimeMode(personal.mode, data._companyTimeMode)
       saveCachedProfile(authId, data)
     }
     // Offline fallback: a fetch ERROR (no signal, server down) is not proof the

@@ -23,6 +23,7 @@ import { getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti, localeStatic } from './i18n'
 import { siteVisitsOn, officeLocation, markSiteFences, siteFenceKind, onSiteCrossing, flushSiteEvents } from './siteVisits'
 import { SITE_FENCE_STATUSES, OFFICE_FENCE } from './siteVisitRules'
+import { effectiveTimeMode } from './dayClock'
 
 const ARRIVAL_TASK = 'arrival-geofence-task'
 const RADIUS_M = 150
@@ -288,7 +289,14 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
       // No auto-punch before the window opens — an early arrival gets the
       // prompt instead (backdate floor already handles early manual punches).
       const windowOpen = Date.now() >= new Date((job as any).scheduled_start).getTime() - 30 * 60000
-      if (tenant?.auto_clock_in && tenant?.time_tracking_mode !== 'daily' && windowOpen) {
+      // The person's own clock over the company's (lib/dayClock): someone on
+      // the day clock never gets a per-clean entry, which would pay the same
+      // minutes twice. Before the migration this read fails: the company's.
+      const { data: mine } = tenant?.auto_clock_in && windowOpen
+        ? await supabase.from('users').select('time_tracking_mode').eq('id', user.id).maybeSingle()
+        : { data: null }
+      const daily = effectiveTimeMode((mine as any)?.time_tracking_mode, tenant?.time_tracking_mode) === 'daily'
+      if (tenant?.auto_clock_in && !daily && windowOpen) {
         const fix = await Promise.race([
           Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
           new Promise<null>(resolve => setTimeout(() => resolve(null), 8000)),
