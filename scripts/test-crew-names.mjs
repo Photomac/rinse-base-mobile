@@ -23,7 +23,7 @@ function check(name, got, want) {
   ok ? pass++ : fail++
   console.log(`${ok ? '✓' : '✗'}  ${name}${ok ? '' : ` — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`)
 }
-const { crewNames, crewLineText, shortName } = await import(join(repo, 'src/lib/crewNames.ts'))
+const { crewNames, crewLineText, shortName, showLeadTag } = await import(join(repo, 'src/lib/crewNames.ts'))
 const line = (rows, viewer, max) => crewLineText(crewNames(rows, viewer, 'You'), 'lead', max)
 
 // Melrose Manor #987, 2026-10-08.
@@ -75,6 +75,21 @@ const i18n = readFileSync(join(repo, 'src/lib/i18n.ts'), 'utf8')
 for (const key of ['crew_you', 'crew_unassigned']) {
   check(`"${key}" in all three languages`, (i18n.match(new RegExp(`\\n    ${key}: '`, 'g')) || []).length, 3)
 }
+
+// CKS Perfections, 2026-11-08: "Krystal is badged Lead on the G-House job …
+// and she isn't a lead." Alone on a clean, the Lead is just whoever is on it,
+// so the tag shows on team cleans only. The data is unchanged.
+const gHouse = [{ user_id: 'krystal', is_lead: true, users: { full_name: 'Krystal Gonzales' } }]
+check('one person on the clean: no Lead tag (office view)', line(gHouse, 'catherine'), 'Krystal G.')
+check('one person on the clean: no Lead tag (her phone)', line(gHouse, 'krystal'), 'You')
+check('one person listed twice is still one person', line([...gHouse, ...gHouse], 'catherine'), 'Krystal G.')
+check('two on the clean: the Lead tag shows', line([...gHouse, { user_id: 'ali', is_lead: false, users: { full_name: 'Ali Sanchez' } }], 'catherine'), 'Krystal G. (lead) · Ali S.')
+check('showLeadTag: team cleans only', [showLeadTag(0), showLeadTag(1), showLeadTag(2), showLeadTag(5)], [false, false, true, true])
+const jobScreen = readFileSync(join(repo, 'src/screens/JobDetailScreen.tsx'), 'utf8')
+const officeEdit = readFileSync(join(repo, 'src/components/OfficeEditSheet.tsx'), 'utf8')
+check('the job screen tags the Lead on a team clean only (crew list and record-for)',
+  [(jobScreen.match(/c\.isLead && showLeadTag\(crewOnJob\.length\)/g) || []).length, /c\.isLead \? `\$\{c\.name\}/.test(jobScreen)], [2, false])
+check('the office edit sheet tags the Lead on a team clean only', /draft\.lead === p\.id && showLeadTag\(draft\.crew\.length\)/.test(officeEdit), true)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)

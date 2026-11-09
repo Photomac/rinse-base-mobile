@@ -596,6 +596,28 @@ export function driverLinenReads(user: any, stops: any[]) {
   }
 }
 
+/** When each stop's bags are picked up at the office (CKS, 2026-11-09): the
+ *  properties' usual checkout and pickup minutes, and the company's checkout
+ *  for a property with none. Separate from the stops read on purpose:
+ *  linen_pickup_minutes arrives with web migration
+ *  driver_follows_lead_and_pickup_times, and naming it in the stops read would
+ *  empty the whole card on a database without it. This read fails alone, and
+ *  the card then shows no pickup times. */
+export function driverPickupReads(user: any, stops: any[]) {
+  const addrIds = [...new Set(stops.map((j: any) => j.client_addresses?.id).filter(Boolean))] as string[]
+  return {
+    places: {
+      key: `driver:pickup:${user.id}`,
+      q: () => supabase.from('client_addresses')
+        .select('id, default_checkout_time, linen_pickup_minutes').in('id', addrIds),
+    } as CacheRead,
+    company: {
+      key: `driver:pickupco:${user.id}`,
+      q: () => supabase.from('tenants').select('default_checkout_time').eq('id', user.tenant_id).maybeSingle(),
+    } as CacheRead,
+  }
+}
+
 /** The prep card's day-keyed reads carry the day as their last segment. */
 export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^:]+)(?::(\d{4}-\d{2}-\d{2}))?$/
 
