@@ -53,7 +53,7 @@ export function primaryTick(stop: { linen_dropped_at?: string | null; linen_coll
 }
 
 /** The day's end: where the driver took the soiled bags (linen_returns, web
- *  migration 20261109180000_linen_bags_returned; CKS, 2026-11-07: the leads
+ *  migration 20261109150521_linen_bags_returned; CKS, 2026-11-07: the leads
  *  bring them to the office or the owner's home). One per driver per day. */
 export type ReturnPlace = 'office' | 'owner_home'
 export type LinenReturn = { returned_to: string; returned_at: string } | null
