@@ -193,6 +193,8 @@ const scenarios: Record<string, () => Promise<void>> = {
       driverStopsRead: () => R.driverStopsRead(CREW, new Date()),
       driverLinenReads: () => R.driverLinenReads(CREW, [j]),
       driverPickupReads: () => R.driverPickupReads(CREW, [j]),
+      // The day's end-of-day bag return: one small key per person per day, like prep:addr.
+      driverReturnRead: () => R.driverReturnRead(CREW, '2026-10-13'),
       jobPackReads: () => [
         ...R.jobPackReads(j, CREW),
         ...R.jobPackReads({ ...j, job_type: 'inspection' }, { ...CREW, _timeMode: 'daily' }),
