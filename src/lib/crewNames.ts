@@ -34,18 +34,30 @@ export function shortName(full: string): string {
   return `${parts[0]} ${parts[parts.length - 1][0].toUpperCase()}.`
 }
 
+/** Whether a clean's Lead is worth showing: only on a team clean. Every clean
+ *  has exactly one Lead, and on a one-person clean it's simply that person,
+ *  whatever their role (the web's leadSelection), which read as a promotion:
+ *  CKS Perfections, 2026-11-08, "Krystal is badged Lead … and she isn't a
+ *  lead". The Lead only decides something with two or more on the clean (who
+ *  signs it off), so that's when the tag shows. The data is unchanged. */
+export function showLeadTag(crewCount: number): boolean {
+  return crewCount > 1
+}
+
 /** The crew on one job: the lead first, then the viewer (as "You"), then by name.
- *  A teammate whose name can't be read is left out rather than shown blank. */
+ *  A teammate whose name can't be read is left out rather than shown blank.
+ *  isLead is set on a team clean only (showLeadTag). */
 export function crewNames(rows: CrewAssignment[] | null | undefined, viewerId: string, youLabel: string): CrewName[] {
   const seen = new Set<string>()
   const out: CrewName[] = []
+  const team = showLeadTag(new Set((rows ?? []).map(r => r?.user_id).filter(Boolean)).size)
   for (const r of rows ?? []) {
     if (!r?.user_id || seen.has(r.user_id)) continue
     seen.add(r.user_id)
     const isMe = r.user_id === viewerId
     const name = String(r.users?.full_name ?? '').trim()
     if (!isMe && !name) continue
-    out.push({ id: r.user_id, label: isMe ? youLabel : shortName(name), isLead: !!r.is_lead, isMe })
+    out.push({ id: r.user_id, label: isMe ? youLabel : shortName(name), isLead: team && !!r.is_lead, isMe })
   }
   return out.sort((a, b) =>
     (Number(b.isLead) - Number(a.isLead)) || (Number(b.isMe) - Number(a.isMe)) || a.label.localeCompare(b.label))

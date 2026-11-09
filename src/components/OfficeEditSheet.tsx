@@ -16,6 +16,7 @@ import { fmtDate, fmtTimeAt, clockOf, todayKey, tomorrowKey, dayKey } from '../l
 import { parseClock, clockText, addDays, type Meridiem } from '../lib/teamDay'
 import { linkAnswering } from '../lib/netFetch'
 import { uuid4 } from '../lib/outbox'
+import { showLeadTag } from '../lib/crewNames'
 import {
   canEditClean, draftFrom, planEdit, editWarnings, resolveLead, stepLength, saveEdit, dayLimits, dayAllowed,
   loadEditBase, loadCrew, loadBookingWindow, loadDayOff, LENGTH_MIN, LENGTH_MAX,
@@ -291,7 +292,8 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
                 <Text style={styles.label}>{t('oe_crew')}</Text>
                 {people.map(p => {
                   const on = draft.crew.includes(p.id)
-                  const isLead = on && draft.lead === p.id
+                  // The Lead tag on a team clean only (lib/crewNames showLeadTag).
+                  const isLead = on && draft.lead === p.id && showLeadTag(draft.crew.length)
                   const off = offNow?.timeOffIds.includes(p.id) ? t('oe_off_time_off')
                     : offNow?.scheduleOff.get(p.id) === 'off_week' ? t('oe_off_week')
                     : offNow?.scheduleOff.has(p.id) ? t('oe_off_weekday') : null

@@ -82,6 +82,7 @@ import { RepairQuoteCard } from '../components/RepairQuoteCard'
 import { CLIENT_NOTE_MAX, clientNoteValues, takesClientNote } from '../lib/clientNote'
 import { canEditClean } from '../lib/officeEdit'
 import { finishedCleanReadOnly, walkthroughDefault } from '../lib/finishedClean'
+import { showLeadTag } from '../lib/crewNames'
 import { CrewAnswerCard } from '../components/CrewAnswerCard'
 import { OfficeEditSheet, type EditedPatch } from '../components/OfficeEditSheet'
 const TEAL = GOLD
@@ -2579,7 +2580,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                   const clock = crewClockOf(c.id)
                   return (
                     <Text key={c.id} style={styles.infoValue}>
-                      {c.isLead ? `${c.name} (${t('lead_tag')})` : c.name}
+                      {c.isLead && showLeadTag(crewOnJob.length) ? `${c.name} (${t('lead_tag')})` : c.name}
                       {clock && (
                         <Text style={[styles.crewClock, clock.state === 'on' && styles.crewClockOn]}>
                           {'  '}{crewClockLabel(clock)}
@@ -3298,7 +3299,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             )}
             {crewOnJob.map(c => (
               <TouchableOpacity key={c.id} style={[styles.reasonBtn, styles.reasonBtnActive, crewNoteNeedsAck && { opacity: 0.4 }]} onPress={() => clockInAs(c.id)} disabled={saving || crewNoteNeedsAck}>
-                <Text style={[styles.reasonBtnText, { color: '#fff' }]}>{c.isLead ? `${c.name} (${t('lead_tag')})` : c.name}</Text>
+                <Text style={[styles.reasonBtnText, { color: '#fff' }]}>{c.isLead && showLeadTag(crewOnJob.length) ? `${c.name} (${t('lead_tag')})` : c.name}</Text>
               </TouchableOpacity>
             ))}
             <TouchableOpacity style={[styles.reasonBtn, crewNoteNeedsAck && { opacity: 0.4 }]} onPress={() => clockInAs(user.id)} disabled={saving || crewNoteNeedsAck}>

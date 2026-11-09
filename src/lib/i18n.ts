@@ -17,6 +17,7 @@ export const translations = {
     bags_n: '{n} bags',
     driver_dropped: 'Dropped off',
     driver_picked_up: 'Picked up',
+    driver_pickup_at: 'Pick up at {time}',
     driver_tick_failed_title: "Couldn't save",
     driver_tick_failed: 'Check your signal and tap again.',
     // Dashboard "Get ready for today" prep card
@@ -1126,6 +1127,7 @@ export const translations = {
     bags_n: '{n} bolsas',
     driver_dropped: 'Entregada',
     driver_picked_up: 'Recogida',
+    driver_pickup_at: 'Hora de recogida: {time}',
     driver_tick_failed_title: 'No se pudo guardar',
     driver_tick_failed: 'Revisa tu señal y vuelve a tocar.',
     // Tarjeta "Prepárate para hoy"
@@ -2224,6 +2226,7 @@ export const translations = {
     bags_n: '{n} sacos',
     driver_dropped: 'Entregue',
     driver_picked_up: 'Recolhida',
+    driver_pickup_at: 'Recolher às {time}',
     driver_tick_failed_title: 'Não foi possível salvar',
     driver_tick_failed: 'Verifique o sinal e toque de novo.',
     // Cartão "Prepare-se para hoje"
