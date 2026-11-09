@@ -11,6 +11,11 @@
 // is on screen; a tap opens it again. Today is open; the next six days are
 // listed below.
 //
+// A property that sets pickup minutes (CKS, 2026-11-09: Sedona 45 before
+// checkout, Cottonwood 15) gives its stop a pickup time, and the day's stops
+// run in pickup order, so the card is the driver's morning pickup list at the
+// office (lib/driverStops: pickupMinutes, orderByPickup).
+//
 // Renders nothing for anyone who drives no clean this week, so it costs crew
 // who aren't drivers one small read.
 
@@ -22,8 +27,9 @@ import { ti, localeFor, capFirst } from '../lib/i18n'
 import { tv } from '../lib/vocab'
 import { translateTexts, normalizeText } from '../lib/machineTranslate'
 import { cachedRead } from '../lib/dataCache'
-import { driverStopsRead, driverLinenReads } from '../lib/jobReads'
-import { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames, type LinenRow, type ExtraRow } from '../lib/driverStops'
+import { driverStopsRead, driverLinenReads, driverPickupReads } from '../lib/jobReads'
+import { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames, pickupsByPlace, orderByPickup, minutesToClock, type LinenRow, type ExtraRow, type PickupPlace } from '../lib/driverStops'
+import { fmtWallTime } from '../lib/nextArrival'
 import { bagLine } from '../lib/laundryBags'
 import { fmtTimeAt, fmtDate, dayKey, todayKey } from '../lib/timezone'
 import { GOLD_MUTED, SLATE, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
@@ -38,6 +44,8 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
   const [linen, setLinen] = useState<LinenRow[]>([])
   const [extras, setExtras] = useState<ExtraRow[]>([])
   const [names, setNames] = useState<Map<string, string>>(new Map())
+  // Pickup time by property id, minutes after midnight on its clock.
+  const [pickups, setPickups] = useState<Map<string, number>>(new Map())
   // Ticks saved on this phone since the last read.
   const [ticked, setTicked] = useState<Record<string, Ticks>>({})
   const [busy, setBusy] = useState<string | null>(null)
@@ -57,7 +65,13 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
       setTicked({})
       if (rows.length === 0) return
       const reads = driverLinenReads(user, rows)
-      const [l, x] = await Promise.all([cachedRead(reads.linen), cachedRead(reads.extras)])
+      const pick = driverPickupReads(user, rows)
+      // The pickup reads fail on their own (a database without the column):
+      // no pickup times then, and the rest of the card as it was.
+      const [l, x, pp, pc] = await Promise.all([cachedRead(reads.linen), cachedRead(reads.extras),
+        cachedRead(pick.places).catch(() => ({ data: null, error: true })),
+        cachedRead(pick.company).catch(() => ({ data: null, error: true }))])
+      const places = pp.error ? [] : ((pp.data as PickupPlace[]) ?? [])
       const linenRows = ((l.data as any[]) ?? []) as LinenRow[]
       // Owner-typed linen names in the driver's language; seeded ones resolve locally.
       const m = await translateTexts(lang, [...new Set(linenRows.map(r => r.item_name))]).catch(() => new Map<string, string>())
@@ -65,11 +79,13 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
       setLinen(linenRows)
       setExtras(((x.data as any[]) ?? []) as ExtraRow[])
       setNames(m)
+      setPickups(pickupsByPlace(places, pc.error ? null : (pc.data as any)?.default_checkout_time))
     })().catch(() => { if (!cancelled) setStops([]) })
     return () => { cancelled = true }
   }, [user.id, user.tenant_id, lang, reloadKey])
 
-  const days = useMemo(() => stopsByDay(stops, at => dayKey(at)), [stops])
+  const days = useMemo(() => stopsByDay(stops, at => dayKey(at))
+    .map(d => ({ ...d, stops: orderByPickup(d.stops, (s: any) => pickups.get(s.client_addresses?.id) ?? null) })), [stops, pickups])
 
   if (stops.length === 0) return null
 
@@ -122,6 +138,8 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
     // checks; the item list folds away behind a tap.
     const bags = bagLine(addr.laundry_bag_count, addr.laundry_bag_color, n => n === 1 ? t('bags_one') : ti(t('bags_n'), { n: String(n) }))
     const primary = primaryTick(tk)
+    const pickupAt = pickups.get(addr.id)
+    const pickupText = pickupAt == null ? null : fmtWallTime(minutesToClock(pickupAt), locale)
     return (
       <View key={s.id} style={[styles.stop, finished && styles.stopDone]}>
         {finished
@@ -137,6 +155,7 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
             <Text style={styles.link}>{[addr.street, addr.city].filter(Boolean).join(', ')}  ·  {t('directions')} ›</Text>
           </TouchableOpacity>
         )}
+        {!!pickupText && <Text style={styles.pickup}>⏰ {ti(t('driver_pickup_at'), { time: pickupText })}</Text>}
         {!!bags && <Text style={styles.bags}>🧺 {bags}</Text>}
         {!!addr.lockbox_code?.trim() && <Text style={styles.line}>🔑 {t('lockbox')}: {addr.lockbox_code}</Text>}
         {crew.length > 0 && <Text style={styles.line}>{ti(t('driver_cleaning'), { names: crew.join(', ') })}</Text>}
@@ -226,6 +245,7 @@ const styles = StyleSheet.create({
   link: { fontSize: 13, color: SLATE, marginTop: 4, textDecorationLine: 'underline' },
   line: { fontSize: 13, color: TEXT, marginTop: 4 },
   bags: { fontSize: 14, fontWeight: '700', color: TEXT, marginTop: 6 },
+  pickup: { fontSize: 14, fontWeight: '700', color: SLATE, marginTop: 6 },
   fold: { fontSize: 13, color: SLATE, marginTop: 4, fontWeight: '600' },
   muted: { fontSize: 12, color: TEXT_MUTED, marginTop: 4 },
   buttons: { flexDirection: 'row', gap: 8, marginTop: 10 },

@@ -192,6 +192,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       // The linen driver's week: one key per person, kept (not a job's or a property's).
       driverStopsRead: () => R.driverStopsRead(CREW, new Date()),
       driverLinenReads: () => R.driverLinenReads(CREW, [j]),
+      driverPickupReads: () => R.driverPickupReads(CREW, [j]),
       jobPackReads: () => [
         ...R.jobPackReads(j, CREW),
         ...R.jobPackReads({ ...j, job_type: 'inspection' }, { ...CREW, _timeMode: 'daily' }),
