@@ -52,6 +52,23 @@ export function primaryTick(stop: { linen_dropped_at?: string | null; linen_coll
   return stop.linen_dropped_at && !stop.linen_collected_at ? 'pickup' : null
 }
 
+/** The day's end: where the driver took the soiled bags (linen_returns, web
+ *  migration 20261109150521_linen_bags_returned; CKS, 2026-11-07: the leads
+ *  bring them to the office or the owner's home). One per driver per day. */
+export type ReturnPlace = 'office' | 'owner_home'
+export type LinenReturn = { returned_to: string; returned_at: string } | null
+
+/** The time to show on a place's button: only the place the bags went. */
+export function returnTick(ret: LinenReturn, place: ReturnPlace): string | null {
+  return ret && ret.returned_to === place ? ret.returned_at : null
+}
+
+/** What a tap on a place sends: that place, or null (take it back) when it is
+ *  already the one ticked, like the stop buttons. */
+export function nextReturn(ret: LinenReturn, place: ReturnPlace): ReturnPlace | null {
+  return ret && ret.returned_to === place ? null : place
+}
+
 /** First names of who's cleaning there. */
 export function crewFirstNames(stop: { crew?: { users?: { full_name?: string | null } | null }[] | null }): string[] {
   return (stop.crew ?? []).map(c => (c.users?.full_name || '').trim().split(/\s+/)[0]).filter(Boolean)
