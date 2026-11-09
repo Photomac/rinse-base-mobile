@@ -9,6 +9,10 @@
 //     and another clean's rows ignored (the Pull Sheet's math);
 //   • stops grouped by day in time order; when a stop is finished (folds to one line);
 //   • crew first names;
+//   • the morning pickup (CKS, 2026-11-09): checkout less the property's
+//     pickup minutes, the company's checkout for a property with none, the
+//     day in pickup order with untimed stops after, and the time as the app
+//     writes a wall-clock time;
 // and, in the source, that the card reads only through jobReads' builders,
 // filters on driver_user_id, ticks only through driver_mark_linen, opens no
 // job (a driver isn't on the clean's crew), and that Home mounts it.
@@ -26,7 +30,8 @@ function check(name, got, want) {
   console.log(`${ok ? '✓' : '✗'}  ${name}${ok ? '' : ` — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`)
 }
 
-const { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames, returnTick, nextReturn } = await import(join(repo, 'src/lib/driverStops.ts'))
+const { linenFor, stopsByDay, stopFinished, primaryTick, crewFirstNames, clockMinutes, pickupMinutes, minutesToClock, pickupsByPlace, orderByPickup, returnTick, nextReturn } = await import(join(repo, 'src/lib/driverStops.ts'))
+const { fmtWallTime } = await import(join(repo, 'src/lib/nextArrival.ts'))
 const { bagLine } = await import(join(repo, 'src/lib/laundryBags.ts'))
 
 console.log('1. Linen to bring')
@@ -78,7 +83,47 @@ check('bags: neither', bagLine(null, null, word), '')
 check('bags: a bad count is ignored', bagLine(0, 'Red', word), 'Red')
 check('crew first names', crewFirstNames({ crew: [{ users: { full_name: 'Ana Souza' } }, { users: { full_name: ' Bia ' } }, { users: null }] }), ['Ana', 'Bia'])
 
-console.log('3. The source')
+console.log('3. The morning pickup (CKS, 2026-11-09)')
+check('clock minutes: HH:MM:SS, HH:MM, H:MM', [clockMinutes('10:00:00'), clockMinutes('11:00'), clockMinutes('9:05')], [600, 660, 545])
+check('clock minutes: nothing readable is null', [clockMinutes(null), clockMinutes(''), clockMinutes('25:00'), clockMinutes('10:75'), clockMinutes('ten')], [null, null, null, null, null])
+// Catherine's rhythm: Sedona 45 minutes before checkout, Cottonwood 15.
+check('Sedona, 10 AM checkout: 9:15', minutesToClock(pickupMinutes('10:00:00', 45)), '09:15')
+check('Sedona, 11 AM checkout: 10:15', minutesToClock(pickupMinutes('11:00:00', 45)), '10:15')
+check('Cottonwood, 10 AM checkout: 9:45', minutesToClock(pickupMinutes('10:00:00', 15)), '09:45')
+check('Cottonwood, 11 AM checkout: 10:45', minutesToClock(pickupMinutes('11:00:00', 15)), '10:45')
+check('0 minutes: at checkout', pickupMinutes('10:00', 0), 600)
+check('no pickup minutes, no checkout, or a bad number: no pickup time',
+  [pickupMinutes('10:00', null), pickupMinutes(null, 45), pickupMinutes('10:00', -5), pickupMinutes('10:00', 'x')], [null, null, null, null])
+check('never before midnight', pickupMinutes('00:30', 45), 0)
+check('written as the app writes a wall-clock time', [fmtWallTime(minutesToClock(555), 'en-US'), fmtWallTime(minutesToClock(645), 'en-US')], ['9:15 AM', '10:45 AM'])
+const places = [
+  { id: 'gh', default_checkout_time: '10:00:00', linen_pickup_minutes: 45 },   // Sedona
+  { id: 'cw', default_checkout_time: null, linen_pickup_minutes: 15 },         // Cottonwood, the company's checkout
+  { id: 'jr', default_checkout_time: '10:00:00', linen_pickup_minutes: null }, // Jerome: not set yet
+  { id: 'lt', default_checkout_time: '11:00:00', linen_pickup_minutes: 45 },   // Sedona, 11 AM
+]
+const at = pickupsByPlace(places, '10:00:00')
+check('by property: its own checkout, else the company\'s; none without minutes', [...at.entries()], [['gh', 555], ['cw', 585], ['lt', 615]])
+check('no company checkout: a property without its own has no pickup', [...pickupsByPlace(places, null).keys()], ['gh', 'lt'])
+check('no places (the read failed): nothing', pickupsByPlace(null, '10:00').size, 0)
+const dayStops = [
+  { id: 'jerome', scheduled_start: '2026-11-09T16:00:00Z', client_addresses: { id: 'jr' } },
+  { id: 'gh', scheduled_start: '2026-11-09T20:30:00Z', client_addresses: { id: 'gh' } },
+  { id: 'lt', scheduled_start: '2026-11-09T18:00:00Z', client_addresses: { id: 'lt' } },
+  { id: 'cw', scheduled_start: '2026-11-09T17:00:00Z', client_addresses: { id: 'cw' } },
+  { id: 'nowhere', scheduled_start: '2026-11-09T17:30:00Z', client_addresses: null },
+]
+const pickupOf = s => at.get(s.client_addresses?.id) ?? null
+check('the day in pickup order; stops with no pickup after, in the order they came',
+  orderByPickup(dayStops, pickupOf).map(s => s.id), ['gh', 'cw', 'lt', 'jerome', 'nowhere'])
+check('same pickup: start time, then id', orderByPickup([
+  { id: 'b', scheduled_start: '2026-11-09T18:00:00Z', client_addresses: { id: 'gh' } },
+  { id: 'a', scheduled_start: '2026-11-09T18:00:00Z', client_addresses: { id: 'gh' } },
+  { id: 'c', scheduled_start: '2026-11-09T17:00:00Z', client_addresses: { id: 'gh' } },
+], pickupOf).map(s => s.id), ['c', 'a', 'b'])
+check('a company with no pickup minutes: the order is unchanged', orderByPickup(dayStops, () => null).map(s => s.id), dayStops.map(s => s.id))
+
+console.log('4. The source')
 const card = readFileSync(join(repo, 'src/components/DriverStopsCard.tsx'), 'utf8')
 const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
 const home = readFileSync(join(repo, 'src/screens/DashboardScreen.tsx'), 'utf8')
@@ -92,6 +137,15 @@ check('the bags line comes before the item list, which folds', [card.indexOf('st
 check('a finished stop folds to one line and a tap opens it', [/finished && !openDone\[s\.id\]/.test(card), /stopFinished\(\{ status: s\.status, \.\.\.tk \}\)/.test(card), /setOpenDone\(p => \(\{ \.\.\.p, \[s\.id\]: true \}\)\)/.test(card)], [true, true, true])
 check('the stops read carries the clean\'s status (the office stop finishes on it)', /\.select\('id, tenant_id, status,/.test(reads), true)
 check('the stops read and the property read carry the bag count', [/laundry_bag_color, laundry_bag_count\)/.test(reads), /laundry_bag_color, laundry_bag_count, staging_photos/.test(reads)], [true, true])
+
+check('the pickup read is its own builder, and the stops read never names the new column', [
+  /driverPickupReads\(user, rows\)/.test(card),
+  /select\('id, default_checkout_time, linen_pickup_minutes'\)/.test(reads),
+  /driverStopsRead[\s\S]*?\n\}\n/.exec(reads)?.[0].includes('linen_pickup_minutes'),
+], [true, true, false])
+check('a failed pickup read shows no pickup times, and the rest of the card stays', [/pp\.error \? \[\]/.test(card), /pc\.error \? null/.test(card)], [true, true])
+check('each stop shows its pickup time, above the bags line', card.indexOf("t('driver_pickup_at')") > 0 && card.indexOf("t('driver_pickup_at')") < card.indexOf('styles.bags}>'), true)
+check('the days run in pickup order', /orderByPickup\(d\.stops/.test(card), true)
 
 console.log('4. The day\'s end: where the bags went (CKS, 2026-11-07)')
 const atOffice = { returned_to: 'office', returned_at: '2026-11-09T23:12:00Z' }

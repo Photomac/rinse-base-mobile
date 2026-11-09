@@ -73,3 +73,63 @@ export function nextReturn(ret: LinenReturn, place: ReturnPlace): ReturnPlace | 
 export function crewFirstNames(stop: { crew?: { users?: { full_name?: string | null } | null }[] | null }): string[] {
   return (stop.crew ?? []).map(c => (c.users?.full_name || '').trim().split(/\s+/)[0]).filter(Boolean)
 }
+
+// ── The morning pickup (CKS, 2026-11-09) ───────────────────────────────────
+// A property can say how long before checkout its bags are picked up at the
+// office (client_addresses.linen_pickup_minutes, web migration
+// 20261109144316_driver_follows_lead_and_linen_pickup): CKS picks up Sedona homes 45 minutes
+// before checkout and Cottonwood homes 15. The checkout is the property's usual
+// one (default_checkout_time), else the company's. It's a time on the
+// property's own clock, so it stays a wall-clock time ('HH:MM') and is never
+// turned into an instant.
+
+/** Minutes after midnight from 'HH:MM' or 'HH:MM:SS'; null when unreadable. */
+export function clockMinutes(hhmm: string | null | undefined): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm ?? '').trim())
+  if (!m) return null
+  const h = Number(m[1]), mi = Number(m[2])
+  if (h > 23 || mi > 59) return null
+  return h * 60 + mi
+}
+
+/** When to pick up a stop's bags, in minutes after midnight on the property's
+ *  clock: the checkout less the property's pickup minutes, never before
+ *  midnight. Null when the property sets no pickup minutes or no checkout is
+ *  known. */
+export function pickupMinutes(checkout: string | null | undefined, before: number | null | undefined): number | null {
+  if (before == null || !Number.isFinite(Number(before)) || Number(before) < 0) return null
+  const co = clockMinutes(checkout)
+  if (co == null) return null
+  return Math.max(0, co - Math.round(Number(before)))
+}
+
+/** 555 → '09:15', for the app's wall-clock formatter (nextArrival.fmtWallTime). */
+export function minutesToClock(min: number): string {
+  const m = Math.max(0, Math.min(23 * 60 + 59, Math.round(min)))
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+}
+
+export type PickupPlace = { id: string; default_checkout_time?: string | null; linen_pickup_minutes?: number | null }
+
+/** Each property's pickup, by property id; only properties that have one. */
+export function pickupsByPlace(places: PickupPlace[] | null | undefined, companyCheckout: string | null | undefined): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const p of places ?? []) {
+    if (!p?.id) continue
+    const at = pickupMinutes(p.default_checkout_time || companyCheckout, p.linen_pickup_minutes)
+    if (at != null) out.set(p.id, at)
+  }
+  return out
+}
+
+/** One day's stops in pickup order, so the card reads as the morning pickup
+ *  list: stops with a pickup time first, earliest pickup first (ties: start
+ *  time, then id); then the stops with none, in the order they came (stopsByDay
+ *  gives start order). A company that sets no pickup minutes sees no change. */
+export function orderByPickup<T extends { id: string; scheduled_start: string }>(stops: T[], pickupOf: (s: T) => number | null): T[] {
+  const timed = stops.filter(s => pickupOf(s) != null)
+  const rest = stops.filter(s => pickupOf(s) == null)
+  timed.sort((a, b) => (pickupOf(a)! - pickupOf(b)!)
+    || Date.parse(a.scheduled_start) - Date.parse(b.scheduled_start) || a.id.localeCompare(b.id))
+  return [...timed, ...rest]
+}

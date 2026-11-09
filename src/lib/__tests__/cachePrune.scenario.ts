@@ -192,6 +192,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       // The linen driver's week: one key per person, kept (not a job's or a property's).
       driverStopsRead: () => R.driverStopsRead(CREW, new Date()),
       driverLinenReads: () => R.driverLinenReads(CREW, [j]),
+      driverPickupReads: () => R.driverPickupReads(CREW, [j]),
       // The day's end-of-day bag return: one small key per person per day, like prep:addr.
       driverReturnRead: () => R.driverReturnRead(CREW, '2026-10-13'),
       jobPackReads: () => [
