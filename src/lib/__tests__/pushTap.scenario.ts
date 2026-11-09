@@ -368,7 +368,8 @@ async function main() {
 
   // ── Schedule's row, Schedule's rule, the screens' keys ──
   const schedule = src('src/screens/ScheduleScreen.tsx')
-  const schedSelect = /cachedQuery\(`sched:\$\{user\.id\}`, supabase\.from\('jobs'\)\s*\.select\('([^']+)'\)/.exec(schedule)?.[1]
+  // The read is paged (lib/fetchAll.ts), so the builder sits inside fetchAllPages(() => ...).
+  const schedSelect = /cachedQuery\(`sched:\$\{user\.id\}`, (?:fetchAllPages\(\(\) => )?supabase\.from\('jobs'\)\s*\.select\('([^']+)'\)/.exec(schedule)?.[1]
   ok('SCHEDULE_JOB_SELECT is exactly ScheduleScreen\'s select', schedSelect === SCHEDULE_JOB_SELECT, schedSelect ? '' : 'Schedule\'s select not found')
   ok('Schedule still leaves cancelled cleans out and shows crew only their own (what openable() mirrors)',
     schedule.includes(".neq('status', 'cancelled')") && /isOwner\s*\?\s*\(data \?\? \[\]\)\s*:\s*\(data \?\? \[\]\)\.filter\(\(j: any\) => isMyJob\(j, user\.id\)\)/.test(schedule) &&
