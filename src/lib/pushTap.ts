@@ -17,6 +17,18 @@
 // wherever it was (Home on a cold start), and the crew member had to go and
 // find the job.
 //
+// The office's opt-in alerts open their clean too (OWNER_ALERT_TYPES; CKS,
+// Catherine 2026-11-09: "a notice I can't click through to the clean will get
+// away from me"). owner-sms-events (rinse-base-app) pushes them to the owner,
+// admin, manager and dispatcher who switched them on, with data { type,
+// tenantId, jobId, subjectId, cleanId?, url? }: cleanId is the clean to look
+// at (a FAILED inspection's clean, a stay rated under 5), jobId the job the
+// alert is about (the clean, or for an inspection the inspection visit). The
+// text of the same alert links /jobs?job=<id> on the web. The phone opens the
+// job's screen instead: an office phone reads and opens any of the company's
+// jobs (openable below, Schedule's own rule), so the web link is not needed.
+// Their ids are used only when they are UUIDs.
+//
 // What a tap does now (App.tsx wires it; this file decides):
 // - Opens the job's screen with the row Schedule would hand it: the same
 //   columns (SCHEDULE_JOB_SELECT), and only a job Schedule lists for this
@@ -47,6 +59,21 @@ import { isMyJob, isOfficeRole } from './jobScope'
 /** The pushes a tap opens a job for (data.type). */
 export const JOB_PUSH_TYPES = ['job_reminder', 'job_assigned', 'home_prepped', 'inspection_result', 'guest_left', 'job_rescheduled']
 
+/** The office alerts a tap opens a job for (owner-sms-events' data.type, one
+ *  per event: clean_completed, job_started, en_route, inspection_filed,
+ *  inspection_reviewed, stay_rating_low). */
+export const OWNER_ALERT_TYPES = [
+  'owner_clean_completed', 'owner_job_started', 'owner_en_route',
+  'owner_inspection_filed', 'owner_inspection_reviewed', 'owner_stay_rating_low',
+]
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A job id as the database writes one (jobs.id is a uuid). */
+export function isUuid(v: unknown): v is string {
+  return typeof v === 'string' && UUID_RE.test(v)
+}
+
 /** How long a tap waits for the live job before using the saved copy. */
 export const LIVE_WAIT_MS = 4000
 
@@ -70,8 +97,17 @@ export function savedKeys(userId: string): string[] {
 
 /** The job a tapped push is about, or null when the tap should do nothing. */
 export function tappedJobId(data: any, tenantId: string | null | undefined): string | null {
-  if (!data || !JOB_PUSH_TYPES.includes(data.type)) return null
-  const id = typeof data.jobId === 'string' ? data.jobId.trim() : ''
+  if (!data) return null
+  const owner = OWNER_ALERT_TYPES.includes(data.type)
+  if (!owner && !JOB_PUSH_TYPES.includes(data.type)) return null
+  const trimmed = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+  let id = trimmed(data.jobId)
+  if (owner) {
+    // The clean the alert asks the office to look at, else the job it is
+    // about; either only as a uuid.
+    const clean = trimmed(data.cleanId)
+    id = isUuid(clean) ? clean : isUuid(id) ? id : ''
+  }
   if (!id) return null
   // Another company's push on a phone signed in to this one (a shared phone).
   if (data.tenantId && tenantId && data.tenantId !== tenantId) return null

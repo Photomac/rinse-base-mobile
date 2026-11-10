@@ -486,7 +486,8 @@ function AppInner() {
     return () => { received.remove(); tapped.remove() }
   }, [user])
 
-  // A tapped crew job push (job_assigned, job_reminder) opens its job, or the
+  // A tapped crew job push (job_assigned, job_reminder, …) or office alert
+  // (owner_clean_completed, owner_inspection_filed, …) opens its job, or the
   // Schedule tab when the job can't be had; over a full screen it waits until
   // the tabs are back (lib/pushTap). The tap that launched the app is waiting
   // in getLastNotificationResponse(); the listener hands over each one while
