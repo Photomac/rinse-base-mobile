@@ -221,9 +221,11 @@ async function runReads(queue: PackRead[], seen: Set<string>, epoch: number): Pr
   return { offline, reads }
 }
 
-/** Push payloads that mean this phone's day changed (data.type). Only
- *  notify-crew-assigned pushes today; notify-reschedule emails the crew. */
+/** Push payloads that mean this phone's day changed (data.type): the office
+ *  put them on a clean (notify-crew-assigned) or moved one of theirs
+ *  (notify-reschedule, rinse-base-app 2026-11-10: the saved day still has it
+ *  at its old time until it is fetched again). */
 export function isDayChangePush(data: any): boolean {
-  return data?.type === 'job_assigned'
+  return data?.type === 'job_assigned' || data?.type === 'job_rescheduled'
 }
 
