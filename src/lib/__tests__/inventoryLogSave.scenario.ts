@@ -87,6 +87,36 @@ const server = [
   ok('…the Shampoo row keeps the id it was minted with', net.applied[0].values[0].id === plan.minted[SH])
   ok('…then the delete, by id within the clean', net.applied[2]?.op === 'delete' &&
     net.applied[2].filters.includes(`job_id=eq.${J}`) && net.applied[2].filters.includes('id=in.(row-soap)'))
+  ok('…every written row names restock_level, null with no kind (the switch is off)',
+    net.applied.filter(a => a.op === 'upsert' && !a.opts?.ignoreDuplicates).flatMap(a => a.values).every((v: any) => 'restock_level' in v && v.restock_level === null))
+
+  // ── The two choices (tenants.restock_two_choice): which kind of low ──────
+  // "Opened the last one" / "Out" are both a flag; the line carries the kind.
+  const kindRows = [
+    ...server,
+    { id: 'row-sh', job_id: J, inventory_id: SH, item_name: 'Shampoo', qty_used: 1, qty_remaining: null, needs_restock: true, restock_level: 'last_one', notes: null, incident_id: null, ...stamps, created_at: '2026-10-12T10:00:00Z' },
+  ]
+  const kinds = readLogRows(kindRows)
+  ok('read: a flagged row\'s kind is on its line; a plain flag has none',
+    kinds.lines[SH]?.restock_level === 'last_one' && kinds.lines[TP]?.restock_level === null && kinds.lines[PT]?.restock_level === null)
+  const k2 = { ...kinds.lines }
+  k2[PT] = { ...k2[PT], needs_restock: true, restock_level: 'last_one' }   // raise with "Opened the last one"
+  k2[TP] = { ...k2[TP], needs_restock: true, restock_level: 'out' }        // an open plain flag switched to "Out"
+  k2[SH] = { ...k2[SH], needs_restock: false, restock_level: 'last_one' }  // unflagged (a stale kind on the line)
+  const kp = planInventorySave({ tenantId: T, jobId: J, lines: k2, saved: kinds.saved, catalog, minted: {}, newId: uuid4, normalizeNotes: n => n.trim() || null })
+  const kw = new Map(kp.upserts.flat().map(r => [r.inventory_id, r]))
+  ok('raise with "Opened the last one": a flag with its kind, and the only row raised (one restock email)',
+    kw.get(PT)?.needs_restock === true && kw.get(PT)?.restock_level === 'last_one' && JSON.stringify(kp.raised) === JSON.stringify([PT]))
+  ok('an open flag switched to "Out": written in place with its kind, not raised again, its client email kept',
+    kw.get(TP)?.id === 'row-tp' && kw.get(TP)?.needs_restock === true && kw.get(TP)?.restock_level === 'out' && !('client_notified_at' in (kw.get(TP) ?? {})))
+  ok('unflagged: the kind is cleared with the flag', kw.get(SH)?.id === 'row-sh' && kw.get(SH)?.needs_restock === false && kw.get(SH)?.restock_level === null)
+  ok('the baseline keeps each kind', kp.saved[PT]?.restock_level === 'last_one' && kp.saved[TP]?.restock_level === 'out' && kp.saved[SH]?.restock_level === null)
+  const k3 = { ...k2, [TP]: { ...k2[TP], restock_level: 'last_one' as const } }   // "Out" back to "Opened the last one"
+  const kp3 = planInventorySave({ tenantId: T, jobId: J, lines: k3, saved: kp.saved, catalog, minted: {}, newId: uuid4, normalizeNotes: n => n.trim() || null })
+  ok('saved again with only a kind changed: that one row, nothing raised',
+    kp3.upserts.flat().map(r => `${r.id}:${r.restock_level}`).join() === 'row-tp:last_one' && kp3.raised.length === 0 && kp3.deleteIds.length === 0)
+  const kp4 = planInventorySave({ tenantId: T, jobId: J, lines: k3, saved: kp3.saved, catalog, minted: {}, newId: uuid4, normalizeNotes: n => n.trim() || null })
+  ok('…and again unchanged: nothing written', kp4.bare.length + kp4.upserts.length + kp4.deleteIds.length === 0)
 
   console.log(failures ? `\n${failures} FAILED` : '\nall passed')
   process.exit(failures ? 1 : 0)

@@ -10,6 +10,11 @@
 // - Counts: the crew add them only when the company allows it
 //   (tenants.crew_supply_counts, the Supplies page switch); Mark low always
 //   stays. The office always sees them.
+// - Which kind of low: with the company's switch on
+//   (tenants.restock_two_choice, CKS Perfections 2026-11-10: two backup
+//   restocks at every home, so warn when the LAST pack is opened), Mark low
+//   becomes two choices, "Opened the last one" and "Out". Both are a flag;
+//   the line stores which (job_inventory_log.restock_level).
 //
 // Pure (no React, no Supabase) so scripts/test-restock-view.mjs runs it.
 import { isOfficeRole } from './jobScope'
@@ -52,4 +57,11 @@ export function crewCountsFrom(data: unknown, error: unknown): boolean {
  *  company turned them off. */
 export function countsAllowed(role: string | null | undefined, crewCounts: boolean): boolean {
   return isOfficeRole(role) || crewCounts
+}
+
+/** The two-choice switch from its read: only an explicit true turns it on. A
+ *  failed read (no signal and nothing saved, a database without the column)
+ *  or a saved copy from before the switch means off: Mark low, as before. */
+export function twoChoiceFrom(data: unknown, error: unknown): boolean {
+  return !error && (data as any)?.restock_two_choice === true
 }
