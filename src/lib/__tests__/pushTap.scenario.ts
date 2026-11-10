@@ -52,7 +52,9 @@ async function main() {
   ok('an inspection result opens the inspected clean', tappedJobId({ type: 'inspection_result', jobId: 'j4', tenantId: TENANT }, TENANT) === 'j4')
   ok('…which is completed, and still opens for a cleaner who was on it (not for one who wasn\'t)',
     openable(job('j4', ['u-mia'], { status: 'completed' }), MIA) && !openable(job('j4', ['u-other'], { status: 'completed' }), MIA))
-  ok('exactly those four types', JOB_PUSH_TYPES.slice().sort().join() === 'home_prepped,inspection_result,job_assigned,job_reminder')
+  ok('a "the guest left" push opens today\'s clean there', tappedJobId({ type: 'guest_left', jobId: 'j5', tenantId: TENANT }, TENANT) === 'j5')
+  ok('…and not another company\'s', tappedJobId({ type: 'guest_left', jobId: 'j5', tenantId: 'ten-other' }, TENANT) === null)
+  ok('exactly those five types', JOB_PUSH_TYPES.slice().sort().join() === 'guest_left,home_prepped,inspection_result,job_assigned,job_reminder')
   ok('any other type keeps doing nothing',
     tappedJobId({ type: 'chat_message', jobId: 'j1' }, TENANT) === null && tappedJobId({ type: 'sos', jobId: 'j1' }, TENANT) === null &&
     tappedJobId({ jobId: 'j1' }, TENANT) === null)
