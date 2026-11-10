@@ -29,6 +29,13 @@
 // trg_complete_inspection_job, which completes the visit job. A completed job
 // with an open time entry runs forever and corrupts payroll, so we clock out
 // FIRST (clockOut, owned by JobDetailScreen) and only file if that succeeded.
+//
+// AN INSPECTION IS FILED ON A FINISHED CLEAN (CKS 2026-11-09; rinse-base-app
+// 20261110140000_inspection_stays_with_clean refuses filing while the record's
+// clean isn't completed). Because the clock-out goes first, the clean's status
+// is asked BEFORE it (lib/inspectionCleanGate): before the confirm, and again
+// before the clock-out. Not completed: a sentence, the form stays open, the
+// inspector stays clocked in. A read that fails files as before.
 
 import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image, Modal } from 'react-native'
@@ -45,6 +52,7 @@ import { JobPhotosScreen } from './JobPhotosScreen'
 import type { StagingPhotoRow } from '../lib/stagingRooms'
 import { localeFor, ti, type TranslationKey } from '../lib/i18n'
 import { filingGaps, hasFilingGaps } from '../lib/inspectionFiling'
+import { checkCleanGate } from '../lib/inspectionCleanGate'
 import type { LineClipState } from '../lib/lineVideos'
 import type { WalkthroughLine } from '../lib/walkthrough'
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -243,6 +251,11 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
     }
     const problem = validate()
     if (problem) { Alert.alert(t('error'), problem); return }
+    // Its clean before the confirm: an early tap gets a sentence, not a filing.
+    setSaving(true)
+    const waits = await cleanNotFinished()
+    setSaving(false)
+    if (waits) return
 
     const msg = noPay
       ? `${t('insp_confirm_msg')}\n\n${t('insp_unpaid_confirm')}`
@@ -253,8 +266,22 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
     ])
   }
 
+  // The record's clean isn't completed (lib/inspectionCleanGate): says so and
+  // returns true; nothing is written. Read in this company, as the database's
+  // guard reads it. No clean, a completed one, or a read that failed: false.
+  async function cleanNotFinished(): Promise<boolean> {
+    const gate = await checkCleanGate(rec?.parent_job_id, (cleanId) =>
+      supabase.from('jobs').select('status').eq('id', cleanId).eq('tenant_id', tenantId).maybeSingle())
+    if (gate === 'file') return false
+    Alert.alert(`⏳ ${t('insp_clean_not_done_title')}`, t('insp_clean_not_done_msg'))
+    return true
+  }
+
   async function doFile() {
     setSaving(true)
+    // Its clean again, before the clock-out: the confirm may have sat open,
+    // and a filing the server would refuse must not end the inspector's time.
+    if (await cleanNotFinished()) { setSaving(false); return }
     // Clock out BEFORE filing — see the ordering note at the top of this file.
     // One of the two writes has to go first, and this is the safer failure: if
     // the record write below fails the inspector is clocked out with the form
