@@ -2,14 +2,14 @@ import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { writeThrough, uuid4 } from '../lib/outbox'
-import { planInventorySave, type InventoryLine, type SavedLogRow } from '../lib/inventoryLogSave'
+import { planInventorySave, type InventoryLine, type SavedLogRow, type RestockLevel } from '../lib/inventoryLogSave'
 // The screen's reads (the shared builders the offline day pack saves), and
 // how soon the saved copy shows on a weak signal.
 import { suppliesCard, rebaseLines, type SuppliesView } from '../lib/suppliesCard'
 import { inventorySaveWrites } from '../lib/inventoryLogOutbox'
 import { useLang } from '../contexts/LangContext'
 import { tv } from '../lib/vocab'
-import { ti, localeFor } from '../lib/i18n'
+import { ti, localeFor, type TranslationKey } from '../lib/i18n'
 import { fmtDate } from '../lib/timezone'
 // What's already flagged low at the home, and who sees counts.
 import { countsAllowed, type ItemFlag } from '../lib/restockView'
@@ -18,6 +18,10 @@ import { SLATE_DARK, GOLD } from '../lib/theme'
 const NAVY = SLATE_DARK
 const AMBER = '#F59E0B'
 const GREEN = '#10B981'
+
+// The two choices (tenants.restock_two_choice), in the order they show.
+const RESTOCK_KINDS: RestockLevel[] = ['last_one', 'out']
+const RESTOCK_KIND_LABEL: Record<RestockLevel, TranslationKey> = { last_one: 'restock_last_one', out: 'restock_out' }
 
 interface Props {
   job: any
@@ -80,6 +84,9 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
   // office always sees them. Off: Mark low only (CKS, 2026-10-22).
   const [crewCounts, setCrewCounts] = useState(true)
   const countsOk = countsAllowed(user?.role, crewCounts)
+  // The company's two-choice switch (tenants.restock_two_choice, lib/restockView):
+  // "Opened the last one" / "Out" in place of Mark low. Off: as before.
+  const [twoChoice, setTwoChoice] = useState(false)
   const [card] = useState(() => suppliesCard({ show, setLoading }))
 
   useEffect(() => { card.load(job, addrId, tenantId).catch(() => {}) }, [])
@@ -94,6 +101,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
     setExtras(v.extras)
     setOpen(v.open)
     setCrewCounts(v.crewCounts)
+    setTwoChoice(v.twoChoice === true)
     savedRef.current = v.saved
     if (late) {
       setLog(prev => rebaseLines(v.lines, prev, editedRef.current))
@@ -124,10 +132,20 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
     setLog(prev => ({ ...prev, [id]: { ...ensureRow(id), qty_remaining: cleaned } }))
   }
 
+  // Mark low sets no kind of low: only the two choices below do.
   function toggleLow(id: string) {
     const row = ensureRow(id)
     editedRef.current.add(id)
-    setLog(prev => ({ ...prev, [id]: { ...row, needs_restock: !row.needs_restock } }))
+    setLog(prev => ({ ...prev, [id]: { ...row, needs_restock: !row.needs_restock, restock_level: null } }))
+  }
+
+  // The two choices (switch on). Both are a flag; the line keeps which one.
+  // Tapping the lit one clears the flag; tapping the other switches the kind.
+  function setRestockKind(id: string, kind: RestockLevel) {
+    const row = ensureRow(id)
+    const lit = row.needs_restock && row.restock_level === kind
+    editedRef.current.add(id)
+    setLog(prev => ({ ...prev, [id]: { ...row, needs_restock: !lit, restock_level: lit ? null : kind } }))
   }
 
   function setNotes(id: string, notes: string) {
@@ -261,7 +279,11 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
             </View>
           )}
           {/* No mention of Add counts where the crew don't have it */}
-          <Text style={styles.helper}>{t(countsOk ? 'supplies_helper' : 'supplies_helper_low_only')}</Text>
+          <Text style={styles.helper}>
+            {twoChoice
+              ? t(countsOk ? 'supplies_helper_two_choice' : 'supplies_helper_two_choice_low_only')
+              : t(countsOk ? 'supplies_helper' : 'supplies_helper_low_only')}
+          </Text>
           {/* The home's restocking info: what's already low here (CKS: "what
               the home needs ... while they're standing in the home"). */}
           {openItems.length > 0 && (
@@ -368,7 +390,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                         {open[item.id].note ? ` · ${open[item.id].note}` : ''}
                       </Text>
                     )}
-                    <View style={styles.itemControls}>
+                    <View style={[styles.itemControls, twoChoice && styles.itemControlsWrap]}>
                       {showCounts && (<>
                       {/* Cycle count — primary action */}
                       <View style={styles.countGroup}>
@@ -398,7 +420,27 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                           <Text style={styles.addCounts}>+ {t('add_counts')}</Text>
                         </TouchableOpacity>
                       )}
-                      {/* Manual low toggle — for items the crew didn't count but knows are low */}
+                      {twoChoice ? (
+                        // Two choices in place of Mark low (CKS: warn when the
+                        // last pack is opened, not when it's gone).
+                        <View style={styles.kindGroup}>
+                          {RESTOCK_KINDS.map(kind => {
+                            const lit = row.needs_restock && row.restock_level === kind
+                            return (
+                              <TouchableOpacity
+                                key={kind}
+                                onPress={() => setRestockKind(item.id, kind)}
+                                style={[styles.lowToggle, styles.kindBtn, lit && styles.lowToggleOn]}
+                                accessibilityRole="button"
+                                accessibilityState={{ selected: lit }}
+                              >
+                                <Text style={[styles.lowToggleText, lit && { color: '#fff' }]}>{t(RESTOCK_KIND_LABEL[kind])}</Text>
+                              </TouchableOpacity>
+                            )
+                          })}
+                        </View>
+                      ) : (
+                      /* Manual low toggle — for items the crew didn't count but knows are low */
                       <TouchableOpacity
                         onPress={() => toggleLow(item.id)}
                         style={[styles.lowToggle, (row.needs_restock || belowPar) && styles.lowToggleOn]}
@@ -408,6 +450,7 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                           {belowPar ? t('low') : row.needs_restock ? t('low') : t('mark_low')}
                         </Text>
                       </TouchableOpacity>
+                      )}
                     </View>
                     {belowPar && (
                       <Text style={styles.belowParHint}>{t('below_par')}</Text>
@@ -425,9 +468,14 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
           <View style={{ marginTop: 8, paddingHorizontal: 4 }}>
             <Text style={styles.helper}>{t('note_helper')}</Text>
             {/* Linen notes come from the incident report, not from here. */}
-            {items.filter(i => i.category !== 'Linens' && log[i.id]?.needs_restock).map(item => (
+            {items.filter(i => i.category !== 'Linens' && log[i.id]?.needs_restock).map(item => {
+              const kind = twoChoice ? log[item.id]?.restock_level : null
+              return (
               <View key={`note-${item.id}`} style={styles.noteCard}>
-                <Text style={styles.noteLabel}>{tv(lang, item.item_name)}</Text>
+                <Text style={styles.noteLabel}>
+                  {tv(lang, item.item_name)}
+                  {kind ? <Text style={styles.noteKind}>{` · ${t(RESTOCK_KIND_LABEL[kind])}`}</Text> : null}
+                </Text>
                 <TextInput
                   style={styles.noteInput}
                   placeholder={t('add_note_placeholder')}
@@ -437,7 +485,8 @@ export function JobInventoryScreen({ job, user, onBack, focusRoomId }: Props) {
                   multiline
                 />
               </View>
-            ))}
+              )
+            })}
           </View>
         </ScrollView>
       )}
@@ -493,6 +542,8 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 14, fontWeight: '600', color: NAVY },
   itemMeta: { fontSize: 11, color: '#94A3B8', marginTop: 2 },
   itemControls: { flexDirection: 'row', alignItems: 'flex-end', gap: 12 },
+  // Two choices beside counts can be wider than a small phone: they wrap to their own line.
+  itemControlsWrap: { flexWrap: 'wrap' },
   countGroup: { alignItems: 'flex-start' },
   countLabel: { fontSize: 10, fontWeight: '700', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },
   countInput: {
@@ -515,6 +566,8 @@ const styles = StyleSheet.create({
   },
   lowToggleOn: { backgroundColor: AMBER, borderColor: AMBER },
   lowToggleText: { color: '#92400E', fontWeight: '700', fontSize: 11 },
+  kindGroup: { flexDirection: 'row', gap: 6, marginLeft: 'auto', alignSelf: 'flex-end' },
+  kindBtn: { marginLeft: 0 },
   belowParHint: { fontSize: 10, color: '#92400E', fontWeight: '700', marginTop: 6, fontStyle: 'italic' },
   addCountsBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: '#CBD5E1' },
   addCounts: { fontSize: 12, color: '#64748B', fontWeight: '600' },
@@ -524,6 +577,7 @@ const styles = StyleSheet.create({
     padding: 10, marginBottom: 8,
   },
   noteLabel: { fontSize: 12, fontWeight: '700', color: NAVY, marginBottom: 6 },
+  noteKind: { color: '#B45309' },
   noteInput: {
     borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, padding: 8,
     fontSize: 13, color: NAVY, minHeight: 38,

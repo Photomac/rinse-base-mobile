@@ -187,13 +187,20 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
       if (arrivalLines.length) out.push({ key: 'arrivals', icon: '⏰', title: t('prep_turnaround_title'), lines: arrivalLines })
 
       // 🧴 Restock
-      const low: Record<string, Set<string>> = {}
+      // Each item once per home, with its kind of low when the crew gave one
+      // ("Opened the last one" / "Out", restock_level): Out wins over the last one.
+      const low: Record<string, Map<string, string | null>> = {}
       ;(restockRes.data ?? []).forEach((r: any) => {
         const id = r.jobs?.address_id
-        if (id && nameByAddr[id] && r.item_name) (low[id] ||= new Set()).add(r.item_name)
+        if (!id || !nameByAddr[id] || !r.item_name) return
+        const items = (low[id] ||= new Map())
+        const kind = r.restock_level === 'out' || r.restock_level === 'last_one' ? r.restock_level : null
+        const had = items.get(r.item_name) ?? null
+        items.set(r.item_name, had === 'out' || kind === 'out' ? 'out' : had ?? kind)
       })
-      const rx = await mtx(Object.values(low).flatMap(s => [...s]))
-      const restockLines = Object.entries(low).map(([id, items]) => ({ text: `${nameByAddr[id]}: ${[...items].map(n => rx(n)).join(', ')}`, job: jobByAddr[id] }))
+      const rx = await mtx(Object.values(low).flatMap(m => [...m.keys()]))
+      const kindTag = (kind: string | null) => (kind ? ` (${t(kind === 'out' ? 'restock_tag_out' : 'restock_tag_last_one')})` : '')
+      const restockLines = Object.entries(low).map(([id, items]) => ({ text: `${nameByAddr[id]}: ${[...items].map(([n, kind]) => rx(n) + kindTag(kind)).join(', ')}`, job: jobByAddr[id] }))
       if (restockLines.length) out.push({ key: 'restock', icon: '🧴', title: t('prep_restock_title'), sub: t('prep_restock_sub'), lines: restockLines })
 
       // 🔑 Access — only judge properties we actually loaded, so an offline

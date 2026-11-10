@@ -182,6 +182,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       linenExtrasRead: () => R.linenExtrasRead(J),
       openRestockRead: () => R.openRestockRead(A),
       supplyCountsTenantRead: () => R.supplyCountsTenantRead(T),
+      restockTwoChoiceTenantRead: () => R.restockTwoChoiceTenantRead(T),
       videosOwedRead: () => R.videosOwedRead(J),
       walkthroughLinesRead: () => R.walkthroughLinesRead(J),
       walkthroughPhotosRead: () => R.walkthroughPhotosRead(J),

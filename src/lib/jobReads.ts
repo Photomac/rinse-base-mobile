@@ -402,7 +402,9 @@ export const inventoryItemsRead = (addrId: string): CacheRead => ({
 export const inventoryLogRead = (jobId: string): CacheRead => ({
   key: `inv:log:${jobId}`,
   q: () => supabase.from('job_inventory_log')
-    .select('id, job_id, inventory_id, item_name, qty_used, qty_remaining, needs_restock, notes, incident_id, restocked_at, client_notified_at, created_at')
+    // restock_level: which kind of low ("Opened the last one" / "Out"), web
+    // migration 20261110183341_restock_level (lib/inventoryLogSave).
+    .select('id, job_id, inventory_id, item_name, qty_used, qty_remaining, needs_restock, restock_level, notes, incident_id, restocked_at, client_notified_at, created_at')
     .eq('job_id', jobId),
 })
 
@@ -444,6 +446,16 @@ export const supplyCountsTenantRead = (tenantId: string): CacheRead => ({
   key: `scten:${tenantId}`,
   q: () => supabase.from('tenants')
     .select('crew_supply_counts').eq('id', tenantId).maybeSingle(),
+})
+
+/** The company's switch (tenants.restock_two_choice, web migration
+ *  20261110183317_restock_two_choice_switch): the crew mark a low supply
+ *  "Opened the last one" or "Out" instead of one Mark low. Its own read, so a
+ *  database without the column fails this one alone, which means off. */
+export const restockTwoChoiceTenantRead = (tenantId: string): CacheRead => ({
+  key: `rtcten:${tenantId}`,
+  q: () => supabase.from('tenants')
+    .select('restock_two_choice').eq('id', tenantId).maybeSingle(),
 })
 
 // ── The inspection walkthrough (WalkthroughChecklist) ───────────────────────
@@ -527,10 +539,11 @@ export function prepReads(user: any, cleans: any[], ymd: string) {
         .select('id, address_id, platform, guest_name, calendar_id, checkin_date, checkout_date, checkin_time').in('address_id', addrIds)
         .gte('checkout_date', shiftYmd(ymd, -1)).lte('checkin_date', shiftYmd(ymd, 1)).eq('status', 'confirmed'),
     } as CacheRead,
+    // restock_level: "Opened the last one" / "Out" on the line (web migration 20261110183341_restock_level).
     restock: {
       key: `prep:restock:${user.id}:${ymd}`,
       q: () => supabase.from('job_inventory_log')
-        .select('item_name, jobs!inner(address_id)').eq('needs_restock', true).in('jobs.address_id', addrIds),
+        .select('item_name, restock_level, jobs!inner(address_id)').eq('needs_restock', true).in('jobs.address_id', addrIds),
     } as CacheRead,
     linen: {
       key: `prep:linen:${user.id}:${ymd}`,
@@ -729,10 +742,11 @@ export function jobPackReads(job: any, user: any): PackRead[] {
   // (the crew card at the top of the clean).
   if (!isTask && addrId) reads.push(carriedLinesRead(job.id))
   // The Supplies screen (cleans and inspections), with what's already
-  // flagged low at the home and the company's counts switch.
+  // flagged low at the home, the company's counts switch and its two-choice
+  // restock switch.
   if ((!isTask || job.job_type === 'inspection') && addrId) {
     reads.push(inventoryItemsRead(addrId), inventoryLogRead(job.id), inventoryRoomsRead(addrId), linenExtrasRead(job.id),
-      openRestockRead(addrId), supplyCountsTenantRead(user.tenant_id))
+      openRestockRead(addrId), supplyCountsTenantRead(user.tenant_id), restockTwoChoiceTenantRead(user.tenant_id))
   }
   // loadCheckFirst (cleans only): the clean's ticks, line photos and start are
   // read only at a property that has lines.

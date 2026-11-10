@@ -25,8 +25,8 @@
 // The reads are the shared builders in lib/jobReads, the ones the day pack
 // saves (scripts/test-offline-day-pack.mjs checks this file too).
 import { readSoon, type SoonRead } from './dataCache'
-import { inventoryItemsRead, inventoryLogRead, inventoryRoomsRead, linenExtrasRead, openRestockRead, supplyCountsTenantRead } from './jobReads'
-import { openFlagsByItem, crewCountsFrom, type ItemFlag } from './restockView'
+import { inventoryItemsRead, inventoryLogRead, inventoryRoomsRead, linenExtrasRead, openRestockRead, supplyCountsTenantRead, restockTwoChoiceTenantRead } from './jobReads'
+import { openFlagsByItem, crewCountsFrom, twoChoiceFrom, type ItemFlag } from './restockView'
 import { overlayPending } from './outbox'
 import { readLogRows, type InventoryLine, type LogRowRead, type SavedLogRow } from './inventoryLogSave'
 import { lastTripFailed } from './netFetch'
@@ -48,13 +48,16 @@ export interface SuppliesView {
   open: Record<string, ItemFlag>
   /** The company lets the crew add counts (tenants.crew_supply_counts). */
   crewCounts: boolean
+  /** "Opened the last one" / "Out" in place of Mark low (tenants.restock_two_choice).
+   *  Off unless the company's read says on. */
+  twoChoice: boolean
   /** Showing the phone's saved copy, not live data. */
   offline: boolean
 }
 
 const list = (x: any): any[] => (Array.isArray(x) ? x : [])
 
-async function viewOf(job: any, [inv, log, rooms, extras, open, counts]: { data: any; error?: any; fromCache: boolean }[]): Promise<SuppliesView> {
+async function viewOf(job: any, [inv, log, rooms, extras, open, counts, two]: { data: any; error?: any; fromCache: boolean }[]): Promise<SuppliesView> {
   // A save still waiting in the outbox shows as saved, not as the old rows.
   const logRows = await overlayPending('job_inventory_log', list(log.data), v => v.job_id === job.id)
   const { lines, saved } = readLogRows(logRows as LogRowRead[])
@@ -65,6 +68,7 @@ async function viewOf(job: any, [inv, log, rooms, extras, open, counts]: { data:
     lines, saved,
     open: openFlagsByItem(open.data, job.id),
     crewCounts: crewCountsFrom(counts.data, counts.error),
+    twoChoice: twoChoiceFrom(two?.data, two?.error),
     offline: inv.fromCache || log.fromCache,
   }
 }
@@ -95,6 +99,8 @@ export async function readSupplies(job: any, addrId: string, wait: number, tenan
     readSoon(openRestockRead(addrId), wait),
     // The company: the signed-in person's (a job row may not carry it), the key the day pack saves.
     readSoon(supplyCountsTenantRead(tenantId), wait),
+    // The company's two-choice restock switch (lib/restockView twoChoiceFrom), on its own read.
+    readSoon(restockTwoChoiceTenantRead(tenantId), wait),
   ])
   const first = await viewOf(job, reads)
   const fresh = reads.some(r => r.late)
