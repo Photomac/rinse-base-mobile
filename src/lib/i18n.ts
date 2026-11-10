@@ -818,6 +818,10 @@ export const translations = {
     upd_failed_msg: 'Check your connection and try again. ({{error}})',
     insp_unpaid_banner: 'This visit will pay nothing. Nobody clocked in, and the property has no inspection rate, so it is paid hourly on zero minutes. Clock in on the job screen first, or ask your manager to set a rate for this property.',
     insp_unpaid_confirm: 'Heads up: nobody clocked in and there is no rate, so this visit pays nothing.',
+    // The clean an inspection checks isn't completed yet: nothing is filed and
+    // the inspector stays clocked in (lib/inspectionCleanGate).
+    insp_clean_not_done_title: "The clean isn't finished yet",
+    insp_clean_not_done_msg: 'File the inspection once the crew has completed the clean. Ask them to tap Complete, then file again.',
     // Crew-facing inspection results (read-only card on a completed clean).
     // Findings, never scores — Blueprint Ch.7 §7.9.
     insp_results_title: 'Inspection results',
@@ -1928,6 +1932,8 @@ export const translations = {
     upd_failed_msg: 'Revisa tu conexión e inténtalo de nuevo. ({{error}})',
     insp_unpaid_banner: 'Esta visita no pagará nada. Nadie marcó entrada y la propiedad no tiene tarifa de inspección, así que se paga por hora sobre cero minutos. Marca entrada primero en la pantalla del trabajo, o pide a tu gerente que fije una tarifa para esta propiedad.',
     insp_unpaid_confirm: 'Aviso: nadie marcó entrada y no hay tarifa, así que esta visita no pagará nada.',
+    insp_clean_not_done_title: 'La limpieza aún no está terminada',
+    insp_clean_not_done_msg: 'Registra la inspección cuando el equipo haya completado la limpieza. Pídeles que toquen Completar y vuelve a registrarla.',
     insp_results_title: 'Resultados de la inspección',
     insp_results_by: 'Inspeccionado por',
     insp_results_passed_note: '¡Buen trabajo! Esta limpieza aprobó la inspección.',
@@ -3036,6 +3042,8 @@ export const translations = {
     upd_failed_msg: 'Verifique sua conexão e tente novamente. ({{error}})',
     insp_unpaid_banner: 'Esta visita não pagará nada. Ninguém bateu o ponto e a propriedade não tem tarifa de inspeção, então é paga por hora sobre zero minutos. Bata o ponto na tela do trabalho primeiro, ou peça à sua gerente para definir uma tarifa para esta propriedade.',
     insp_unpaid_confirm: 'Atenção: ninguém bateu o ponto e não há tarifa, então esta visita não pagará nada.',
+    insp_clean_not_done_title: 'A limpeza ainda não terminou',
+    insp_clean_not_done_msg: 'Registre a inspeção quando a equipe tiver concluído a limpeza. Peça que toquem em Concluir e registre de novo.',
     insp_results_title: 'Resultados da inspeção',
     insp_results_by: 'Inspecionado por',
     insp_results_passed_note: 'Bom trabalho — esta limpeza foi aprovada na inspeção.',
