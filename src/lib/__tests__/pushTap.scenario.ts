@@ -54,7 +54,9 @@ async function main() {
     openable(job('j4', ['u-mia'], { status: 'completed' }), MIA) && !openable(job('j4', ['u-other'], { status: 'completed' }), MIA))
   ok('a "the guest left" push opens today\'s clean there', tappedJobId({ type: 'guest_left', jobId: 'j5', tenantId: TENANT }, TENANT) === 'j5')
   ok('…and not another company\'s', tappedJobId({ type: 'guest_left', jobId: 'j5', tenantId: 'ten-other' }, TENANT) === null)
-  ok('exactly those five types', JOB_PUSH_TYPES.slice().sort().join() === 'guest_left,home_prepped,inspection_result,job_assigned,job_reminder')
+  ok('a "clean moved" push opens that clean at its new time', tappedJobId({ type: 'job_rescheduled', jobId: 'j6', tenantId: TENANT }, TENANT) === 'j6')
+  ok('…and not another company\'s', tappedJobId({ type: 'job_rescheduled', jobId: 'j6', tenantId: 'ten-other' }, TENANT) === null)
+  ok('exactly those six types', JOB_PUSH_TYPES.slice().sort().join() === 'guest_left,home_prepped,inspection_result,job_assigned,job_reminder,job_rescheduled')
   ok('any other type keeps doing nothing',
     tappedJobId({ type: 'chat_message', jobId: 'j1' }, TENANT) === null && tappedJobId({ type: 'sos', jobId: 'j1' }, TENANT) === null &&
     tappedJobId({ jobId: 'j1' }, TENANT) === null)
@@ -364,9 +366,9 @@ async function main() {
     /supabase\.from\('jobs'\)\.select\(SCHEDULE_JOB_SELECT\)\s*\.eq\('id', jobId\)\.eq\('tenant_id', user\.tenant_id\)\.maybeSingle\(\)/.test(app))
   ok('the saved copies come through readCacheEntry, the queued writes through overlayPending(\'jobs\')',
     /saved: \(key\) => readCacheEntry\(key\)/.test(app) && /overlay: \(rows\) => overlayPending\('jobs', rows\)/.test(app))
-  ok('the day-change prefetch on a job_assigned push is still there, untouched',
+  ok('the day-change prefetch runs on a job_assigned push and, since 2026-11-10, a job_rescheduled one',
     /if \(isDayChangePush\(data\)\) prefetchDays\(user, \{ force: true \}\)/.test(app) &&
-    /return data\?\.type === 'job_assigned'/.test(src('src/lib/offlinePrefetch.ts')))
+    /return data\?\.type === 'job_assigned' \|\| data\?\.type === 'job_rescheduled'\n\}/.test(src('src/lib/offlinePrefetch.ts')))
 
   // ── Schedule's row, Schedule's rule, the screens' keys ──
   const schedule = src('src/screens/ScheduleScreen.tsx')

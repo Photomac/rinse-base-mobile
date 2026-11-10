@@ -474,7 +474,8 @@ function AppInner() {
   }), [])
 
   // The office assigned this phone a clean (notify-crew-assigned, data.type
-  // 'job_assigned'): save the day for offline now, whether the push arrives
+  // 'job_assigned') or moved one of its cleans (notify-reschedule,
+  // 'job_rescheduled'): save the day for offline now, whether the push arrives
   // with the app open or is tapped. They dispatch the night before, while
   // phones are on home Wi-Fi.
   useEffect(() => {
