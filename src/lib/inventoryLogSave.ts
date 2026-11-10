@@ -38,10 +38,20 @@
 // client_notified_at (which recorded an email about an earlier flag) is
 // cleared with them. A row that stays flagged keeps client_notified_at.
 //
+// Which kind of low (restock_level, 20261110 restock two-choice; CKS
+// Perfections asked 2026-11-10): with the company's switch on, the crew mark
+// an item "Opened the last one" ('last_one': order more) or "Out" ('out'),
+// both of them a flag (needs_restock). The kind lives only while the line is
+// flagged: unflagging writes null. A line read from a row with no kind (an
+// older row, or a screen without the switch) has none, and saving it sends
+// null, so a screen that never sets the kind never invents one.
+//
 // Import-free on purpose. The same file is src/lib/inventoryLogSave.ts in both
 // rinsebase-app (InventoryTab in JobPanel; unit test
 // scripts/inventory-log-save.test.ts) and rinsebase-mobile (JobInventoryScreen).
 // Keep the two identical.
+
+export type RestockLevel = 'last_one' | 'out'
 
 /** One line on the screen, keyed by inventory_id. qty_remaining '' = not counted. */
 export interface InventoryLine {
@@ -50,6 +60,8 @@ export interface InventoryLine {
   needs_restock: boolean
   notes: string
   incident_id?: string | null
+  /** Which kind of low, while flagged (see the header). */
+  restock_level?: RestockLevel | null
 }
 
 /** What the database holds for a line, as last read or written by this screen. */
@@ -61,6 +73,7 @@ export interface SavedLogRow {
   needs_restock: boolean
   notes: string | null
   incident_id: string | null
+  restock_level: RestockLevel | null
   /** needs_restock as the database has it, including the cycle-count trigger's auto-flag. */
   flagged: boolean
   /** Restocked, client notified or linked to an incident: emptying it must not delete it. */
@@ -77,6 +90,7 @@ export interface LogRowRead {
   needs_restock?: boolean | null
   notes?: string | null
   incident_id?: string | null
+  restock_level?: string | null
   restocked_at?: string | null
   client_notified_at?: string | null
   created_at?: string | null
@@ -99,6 +113,7 @@ export interface LogRowWrite {
   needs_restock?: boolean
   notes?: string | null
   incident_id?: string | null
+  restock_level?: RestockLevel | null
   restocked_at?: null
   restocked_by_role?: null
   client_notified_at?: null
@@ -132,6 +147,11 @@ export interface PlanInput {
   normalizeNotes?: (notes: string) => string | null
 }
 
+/** A stored kind of low, or null for anything else. */
+export function restockLevelOf(v: unknown): RestockLevel | null {
+  return v === 'last_one' || v === 'out' ? v : null
+}
+
 /** The screen's line for a row it read. */
 export function lineFromRow(r: LogRowRead): InventoryLine {
   return {
@@ -140,6 +160,7 @@ export function lineFromRow(r: LogRowRead): InventoryLine {
     needs_restock: !!r.needs_restock,
     notes: r.notes ?? '',
     incident_id: r.incident_id ?? null,
+    restock_level: r.needs_restock ? restockLevelOf(r.restock_level) : null,
   }
 }
 
@@ -152,6 +173,7 @@ export function savedFromRow(r: LogRowRead): SavedLogRow {
     needs_restock: !!r.needs_restock,
     notes: r.notes ?? null,
     incident_id: r.incident_id ?? null,
+    restock_level: r.needs_restock ? restockLevelOf(r.restock_level) : null,
     flagged: !!r.needs_restock,
     // A row read without the stamp columns (the crew app's offline copy from
     // before they were selected) can't show it has none: keep it if emptied.
@@ -204,6 +226,7 @@ export function planInventorySave(input: PlanInput): InventorySavePlan {
       needs_restock: !!line?.needs_restock,
       notes: line ? normalizeNotes(line.notes ?? '') : null,
       incident_id: line?.incident_id ?? prev?.incident_id ?? null,
+      restock_level: line?.needs_restock ? restockLevelOf(line.restock_level) : null,
     }
     const empty = !(values.qty_used > 0 || values.needs_restock || values.qty_remaining !== null)
 
@@ -216,6 +239,7 @@ export function planInventorySave(input: PlanInput): InventorySavePlan {
         && values.needs_restock === prev.needs_restock
         && values.notes === prev.notes
         && values.incident_id === prev.incident_id
+        && values.restock_level === prev.restock_level
       if (unchanged) { next[inv] = prev; continue }
       if (empty && !prev.history) { deleteIds.push(prev.id); continue }
     }

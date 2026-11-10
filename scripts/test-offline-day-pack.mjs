@@ -189,6 +189,7 @@ const SCENARIOS = [
   'photoCountNotEnforcedAsksNothingMore',
   'suppliesOnAHangingLink',
   'suppliesLiveAnswerKeepsHerLines',
+  'suppliesTwoChoiceSwitch',
   'spinnersAlwaysClear',
   'walkthroughOnAHangingLink',
   'walkthroughTrickle',

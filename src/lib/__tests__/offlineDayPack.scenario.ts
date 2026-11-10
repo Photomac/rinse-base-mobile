@@ -118,7 +118,7 @@ function seedServer() {
   server.tables = {
     jobs,
     client_addresses: Object.values(ADDR).map(addressRow),
-    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true, crew_supply_counts: true, clock_in_location_required: false, lat: 34.87, lng: -111.76, home_base_precision: null, home_base_label: null }],
+    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true, crew_supply_counts: true, restock_two_choice: false, clock_in_location_required: false, lat: 34.87, lng: -111.76, home_base_precision: null, home_base_label: null }],
     job_assignments: jobs.flatMap(j => j.crew.map((c: any) => ({ job_id: j.id, user_id: c.user_id, is_lead: c.is_lead, users: { id: c.user_id, full_name: NAMES[c.user_id] } }))),
     address_checklist_templates: [
       { id: 'tp1', address_id: 'A2', room: 'Kitchen', title: 'Wipe counters', sort_order: 1, requires_photo: false },
@@ -147,7 +147,7 @@ function seedServer() {
       { id: 'inv-tp', address_id: 'A2', item_name: 'Toilet paper', category: 'Bathroom', par_level: 6, unit: 'roll', room_id: null, sort_order: 2 },
     ],
     job_inventory_log: [
-      { id: 'lg1', job_id: 'J-prev', inventory_id: 'inv-tp', item_name: 'Toilet paper', qty_used: 4, qty_remaining: 1, needs_restock: true, notes: null, incident_id: null, restocked_at: null, client_notified_at: null, created_at: at('2026-10-10T00:00:00Z'), jobs: { address_id: 'A2' }, address_inventory: { address_id: 'A2' } },
+      { id: 'lg1', job_id: 'J-prev', inventory_id: 'inv-tp', item_name: 'Toilet paper', qty_used: 4, qty_remaining: 1, needs_restock: true, restock_level: null, notes: null, incident_id: null, restocked_at: null, client_notified_at: null, created_at: at('2026-10-10T00:00:00Z'), jobs: { address_id: 'A2' }, address_inventory: { address_id: 'A2' } },
     ],
     turnover_linen_extras: [{ job_id: 'J-red', inventory_id: 'inv-towel', extra_qty: 2 }],
     // Check first at Red Rock Casita (rinse-base-app 20261015130534): two lines,
@@ -167,6 +167,7 @@ function seedServer() {
   server.tables.job_checklist_items = server.tables.job_checklist_items
     .map(r => ({ video_mode: 'off', answer_type: 'tick', flag_answer: null, answer: null, ...r }))
   server.beforeLineAsks = false
+  server.missingColumns = {}
 }
 
 // ── Mock Supabase server ────────────────────────────────────────────────────
@@ -197,6 +198,9 @@ const server = {
   /** A database before 20261106190000_checklist_line_videos: a read naming its
    *  columns is refused (400, 42703), as PostgREST refuses an unknown column. */
   beforeLineAsks: false,
+  /** A database before a migration that adds these columns (table → columns):
+   *  a read naming one is refused (400, 42703), as PostgREST refuses it. */
+  missingColumns: {} as Record<string, string[]>,
 }
 
 function splitTop(s: string): string[] {
@@ -334,6 +338,8 @@ const noAnswer = (init: any) => new Promise<Response>((_, reject) => {
     if (server.beforeLineAsks && table === 'job_checklist_items' && /\bvideo_mode\b/.test(url.searchParams.get('select') || '')) {
       return json(400, { code: '42703', message: 'column job_checklist_items.video_mode does not exist' })
     }
+    const unknownCol = (server.missingColumns[table] ?? []).find(col => new RegExp(`\\b${col}\\b`).test(url.searchParams.get('select') || ''))
+    if (unknownCol) return json(400, { code: '42703', message: `column ${table}.${unknownCol} does not exist` })
     let rows = (server.tables[table] ?? []).slice()
     for (const [k, v] of url.searchParams) {
       if (k === 'select' || k === 'order' || k === 'limit' || k === 'offset') continue
@@ -542,8 +548,8 @@ const scenarios: Record<string, () => Promise<void>> = {
       // Its Supplies screen (JobInventoryScreen)
       invItems: R.inventoryItemsRead(addrId), invLog: R.inventoryLogRead(job.id),
       invRooms: R.inventoryRoomsRead(addrId), invExtras: R.linenExtrasRead(job.id),
-      // …what's already flagged low at the home, and the company's counts switch
-      invOpen: R.openRestockRead(addrId), scten: R.supplyCountsTenantRead(T),
+      // …what's already flagged low at the home, the company's counts switch and its two-choice restock switch
+      invOpen: R.openRestockRead(addrId), scten: R.supplyCountsTenantRead(T), rtcten: R.restockTwoChoiceTenantRead(T),
       // Its Check first card and the local check before Complete
       cften: R.checkFirstTenantRead(T), cflines: R.checkFirstLinesRead(addrId),
       cfticks: R.checkFirstTicksRead(job.id), cfphotos: R.checkFirstPhotosRead(job.id), cfstart: R.checkFirstStartRead(job.id),
@@ -567,8 +573,9 @@ const scenarios: Record<string, () => Promise<void>> = {
     ok('the next arrival', (got.nextarr.data || []).some((r: any) => r.guest_name === 'Rivera'))
     ok('"Stop 1 of 2"', (got.route.data || []).length === 2, ids(got.route.data || []))
     ok('supplies, with the office\'s extra linen', (got.invItems.data || []).length === 2 && got.invExtras.data?.[0]?.extra_qty === 2)
-    ok('supplies: what an earlier visit flagged low here (toilet paper), and the counts switch',
-      (got.invOpen.data || []).map((r: any) => `${r.job_id}:${r.inventory_id}`).join('|') === 'J-prev:inv-tp' && got.scten.data?.crew_supply_counts === true,
+    ok('supplies: what an earlier visit flagged low here (toilet paper), the counts switch and the two-choice switch',
+      (got.invOpen.data || []).map((r: any) => `${r.job_id}:${r.inventory_id}`).join('|') === 'J-prev:inv-tp' && got.scten.data?.crew_supply_counts === true &&
+      got.rtcten.data?.restock_two_choice === false,
       JSON.stringify(got.invOpen.data))
     ok('Check first: the lines in the office\'s order, not the archived one, the tick and who made it, the company\'s switch',
       (got.cflines.data || []).map((l: any) => l.body).join('|') === 'Water all the plants|Spa photo' &&
@@ -1726,6 +1733,47 @@ const scenarios: Record<string, () => Promise<void>> = {
     ok('a save before the live answer: that answer is not shown', o2.log.length === 1, `${o2.log.length} show(s)`)
   },
 
+  // The two-choice restock switch (tenants.restock_two_choice, CKS Perfections
+  // 2026-11-10): the pack saves it, so with no signal the Supplies screen still
+  // shows the two choices. A pack saved before this build has no copy of the
+  // switch's read, and a database before its migration refuses the read: both
+  // mean Mark low, as before, and the list shows either way.
+  async suppliesTwoChoiceSwitch() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.tables.tenants[0].restock_two_choice = true
+    let c = load()
+    await c.prefetchDays(CREW)
+    ok('the pack saves the company\'s two-choice switch', cachedVal(`rtcten:${T}`)?.restock_two_choice === true, JSON.stringify(cachedVal(`rtcten:${T}`)))
+    setClock(MORNING); seedSession()
+    server.mode = 'offline'
+    c = relaunch(); scaleDeadlines(c)
+    let o = openSupplies(c, JOBS.red, 'A2')
+    await o.done
+    let v = o.log[0]?.v
+    ok('no signal: the saved switch shows the two choices, over the saved list', v?.twoChoice === true && v?.items?.length === 2 && v?.offline === true,
+      JSON.stringify({ twoChoice: v?.twoChoice, items: v?.items?.length, offline: v?.offline }))
+
+    // A pack from before this build: everything saved but the switch.
+    store.delete(`dataCache:rtcten:${T}`)
+    c = relaunch(); scaleDeadlines(c)
+    o = openSupplies(c, JOBS.red, 'A2')
+    await o.done
+    v = o.log[0]?.v
+    ok('no saved copy of the switch: Mark low, and the saved list still shows', v?.twoChoice === false && v?.items?.length === 2 && !o.spinnerOn(),
+      JSON.stringify({ twoChoice: v?.twoChoice, items: v?.items?.length, shows: o.log.length }))
+
+    // Signal back, on a database without the column: its read fails alone.
+    server.mode = 'online'
+    server.missingColumns = { tenants: ['restock_two_choice'] }
+    c = relaunch(); scaleDeadlines(c)
+    o = openSupplies(c, JOBS.red, 'A2')
+    await o.done
+    v = o.log.at(-1)?.v
+    ok('a database without the column: Mark low, the counts switch and the live list as before',
+      v?.twoChoice === false && v?.crewCounts === true && v?.items?.length === 2 && v?.offline === false,
+      JSON.stringify({ twoChoice: v?.twoChoice, crewCounts: v?.crewCounts, items: v?.items?.length, offline: v?.offline }))
+  },
+
   // Whatever goes wrong inside a load, Supplies' and the walkthrough's
   // spinners go.
   async spinnersAlwaysClear() {
@@ -1919,7 +1967,7 @@ function queuedShot(id: string, req: string, createdAt: number, extra: any = {})
 const localShot = (id: string) => `file:///harness/pending_photos/${id}.jpg`
 const storedShot = (id: string) => `https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/public/job-photos/${T}/J-red/${id}.jpg`
 function logRow(id: string, job: string, inv: string, name: string, extra: any = {}) {
-  return { id, job_id: job, inventory_id: inv, item_name: name, qty_used: 0, qty_remaining: null, needs_restock: false,
+  return { id, job_id: job, inventory_id: inv, item_name: name, qty_used: 0, qty_remaining: null, needs_restock: false, restock_level: null,
     notes: null, incident_id: null, restocked_at: null, client_notified_at: null, created_at: new Date().toISOString(),
     jobs: { address_id: 'A2' }, ...extra }
 }
