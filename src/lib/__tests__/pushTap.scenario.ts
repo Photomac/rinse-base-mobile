@@ -5,7 +5,9 @@
 // { type: 'job_assigned', jobId, tenantId } and send-job-reminders
 // { type: 'job_reminder', jobId, tenantId } (rinse-base-app #1687) and
 // notify-home-prepped { type: 'home_prepped', jobId, tenantId } and
-// notify-crew-inspection { type: 'inspection_result', jobId, tenantId } — then
+// notify-crew-inspection { type: 'inspection_result', jobId, tenantId }, and the
+// office's opt-in alerts from owner-sms-events { type: 'owner_…', tenantId,
+// jobId, subjectId, cleanId?, url? } — then
 // checks App.tsx's wiring on its source text (src/ and App.tsx are copied next
 // to the scenario by the runner): the launching tap and the warm tap go
 // through one ledger, the Schedule fallback reaches the navigator, the job
@@ -18,8 +20,8 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  tappedJobId, onScreen, tapWhen, stillWanted, openable, loadTappedJob, tapRouter, tapLedger, savedKeys,
-  SCHEDULE_JOB_SELECT, JOB_PUSH_TYPES, LIVE_WAIT_MS, QUEUE_MAX_MS, HANDLED_KEEP, HANDLED_TAPS_KEY,
+  tappedJobId, onScreen, tapWhen, stillWanted, openable, loadTappedJob, tapRouter, tapLedger, savedKeys, isUuid,
+  SCHEDULE_JOB_SELECT, JOB_PUSH_TYPES, OWNER_ALERT_TYPES, LIVE_WAIT_MS, QUEUE_MAX_MS, HANDLED_KEEP, HANDLED_TAPS_KEY,
   type TapIO, type OnScreen,
 } from '../pushTap'
 
@@ -69,6 +71,46 @@ async function main() {
   ok('a push without a tenant still opens (the read is the company\'s own anyway)',
     tappedJobId({ type: 'job_assigned', jobId: 'j1' }, TENANT) === 'j1')
 
+  // ── the office's alerts (owner-sms-events, rinse-base-app #1937) ──
+  // data { type, tenantId, jobId, subjectId, cleanId?, url? }, as the server
+  // builds it: cleanId only on a FAILED inspection with a clean and a low stay
+  // rating; url (the text's /jobs?job=<id> link) on the same two.
+  const CLEAN = '3f1c2a9e-8b4d-4e2f-9a61-0c7d5e8b2f14'
+  const VISIT = 'a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d'
+  const alert = (type: string, extra: Record<string, any> = {}) =>
+    ({ type, tenantId: TENANT, jobId: CLEAN, subjectId: CLEAN, ...extra })
+  ok('exactly the six office alerts owner-sms-events sends, none of them a crew type',
+    OWNER_ALERT_TYPES.slice().sort().join() === 'owner_clean_completed,owner_en_route,owner_inspection_filed,owner_inspection_reviewed,owner_job_started,owner_stay_rating_low' &&
+    !OWNER_ALERT_TYPES.some(t => JOB_PUSH_TYPES.includes(t)))
+  ok('clean completed, clean started, on the way: the clean opens',
+    ['owner_clean_completed', 'owner_job_started', 'owner_en_route'].every(t => tappedJobId(alert(t), TENANT) === CLEAN))
+  ok('a stay rated under 5 (cleanId and url on it): the clean opens',
+    tappedJobId(alert('owner_stay_rating_low', { cleanId: CLEAN, url: `https://app.rinsebase.com/jobs?job=${CLEAN}` }), TENANT) === CLEAN)
+  ok('a FAILED inspection: the clean it inspected (cleanId), not the inspection visit (jobId)',
+    tappedJobId(alert('owner_inspection_filed', { jobId: VISIT, subjectId: 'insp-1', cleanId: CLEAN, url: `https://app.rinsebase.com/jobs?job=${CLEAN}` }), TENANT) === CLEAN)
+  ok('a pass, or a FAILED one with no clean, and an inspection reviewed: the job it is about (the visit)',
+    tappedJobId(alert('owner_inspection_filed', { jobId: VISIT }), TENANT) === VISIT &&
+    tappedJobId(alert('owner_inspection_filed', { jobId: VISIT, url: `https://app.rinsebase.com/jobs?job=${VISIT}` }), TENANT) === VISIT &&
+    tappedJobId(alert('owner_inspection_reviewed', { jobId: VISIT, subjectId: 'rev-1' }), TENANT) === VISIT)
+  ok('another company\'s alert on a phone signed in to this one: nothing',
+    tappedJobId(alert('owner_clean_completed', { tenantId: 'ten-other' }), TENANT) === null &&
+    tappedJobId(alert('owner_inspection_filed', { tenantId: 'ten-other', cleanId: CLEAN }), TENANT) === null)
+  ok('an alert without a tenant still opens', tappedJobId(alert('owner_clean_completed', { tenantId: undefined }), TENANT) === CLEAN)
+  ok('an alert\'s ids are used only as uuids: none → nothing',
+    ['j1', '', '   ', 42, null, `${CLEAN}x`, `${CLEAN}&x=1`, `../${CLEAN}`, `https://app.rinsebase.com/jobs?job=${CLEAN}`, "'; drop table jobs;--"]
+      .every(bad => tappedJobId(alert('owner_clean_completed', { jobId: bad }), TENANT) === null))
+  ok('…a cleanId that isn\'t one falls back to the jobId; neither → nothing',
+    tappedJobId(alert('owner_stay_rating_low', { cleanId: 'nope' }), TENANT) === CLEAN &&
+    tappedJobId(alert('owner_inspection_filed', { jobId: 'nope', cleanId: 'nope' }), TENANT) === null)
+  ok('…the url is never followed: no job id, nothing',
+    tappedJobId({ type: 'owner_stay_rating_low', tenantId: TENANT, url: `https://app.rinsebase.com/jobs?job=${CLEAN}` }, TENANT) === null)
+  ok('…padded or upper-case, it is still the id', tappedJobId(alert('owner_job_started', { jobId: `  ${CLEAN.toUpperCase()} ` }), TENANT) === CLEAN.toUpperCase())
+  ok('isUuid: 8-4-4-4-12 hex only',
+    isUuid(CLEAN) && isUuid(VISIT.toUpperCase()) && !isUuid('j1') && !isUuid(`${CLEAN} `) && !isUuid(42) && !isUuid(null) && !isUuid(CLEAN.replace(/-/g, '')))
+  ok('crew pushes keep their rule (any non-blank id), unchanged',
+    tappedJobId({ type: 'job_reminder', jobId: 'j1', tenantId: TENANT }, TENANT) === 'j1' &&
+    tappedJobId({ type: 'inspection_result', jobId: CLEAN, cleanId: VISIT, tenantId: TENANT }, TENANT) === CLEAN)
+
   // ── what is on screen, in App.tsx's render order ──
   const tabs = onScreen({ selectedJob: null, activeChannel: null, showSOS: false, subScreen: null })
   const onJob = onScreen({ selectedJob: { id: 'j9' }, activeChannel: null, showSOS: false, subScreen: null })
@@ -100,6 +142,14 @@ async function main() {
   ok('cancelled since the push: no, for anyone (Schedule leaves it out, and the job screen would offer Start)',
     !openable(job('j1', [MIA.id], { status: 'cancelled' }), MIA) && !openable(job('j1', [], { status: 'cancelled' }), OWNER))
   ok('no row: no', !openable(null, MIA) && !openable({}, OWNER))
+  ok('every role an office alert goes to (owner, admin, manager, dispatcher) opens any of the company\'s: a finished clean, an inspection visit',
+    ['owner', 'admin', 'manager', 'dispatcher'].every(role => {
+      const office = { id: 'u-office', tenant_id: TENANT, role }
+      return openable(job('j1', ['u-mia'], { status: 'completed' }), office) &&
+        openable(job('j2', [], { job_type: 'inspection', status: 'completed' }), office)
+    }))
+  ok('an office alert on a phone signed in as crew since: only a clean they are on (else Schedule)',
+    !openable(job('j1', ['u-lilly'], { status: 'completed' }), MIA))
 
   // ── loading the job ──
   const NEVER = new Promise<any>(() => {})
@@ -198,6 +248,21 @@ async function main() {
     const f = fakeIO({ live: { data: mine, error: null, status: 200 }, overlayThrows: true })
     const r = await loadTappedJob('j1', MIA, f.io)
     ok('an unreadable outbox: the row as read', r?.job.id === 'j1' && r.job.status === 'scheduled')
+  }
+  {
+    // Catherine taps "Clean completed — CAYUSE B by Mia E." on her phone.
+    const done = job(CLEAN, [MIA.id], { status: 'completed' })
+    const jobId = tappedJobId(alert('owner_clean_completed'), OWNER.tenant_id)
+    const f = fakeIO({ live: { data: done, error: null, status: 200 } })
+    const r = jobId ? await loadTappedJob(jobId, OWNER, f.io) : null
+    ok('an owner taps a "clean completed" alert: that finished clean opens, though she was not on it',
+      r?.job.id === CLEAN && r.job.status === 'completed' && r.fromCache === false)
+  }
+  {
+    // No signal: Home's saved day is the whole company's on an office phone.
+    const f = fakeIO({ live: { data: null, error: { message: 'offline' }, status: 0 }, saved: { [`dash:today:${OWNER.id}`]: [job(CLEAN, [MIA.id])] } })
+    const r = await loadTappedJob(CLEAN, OWNER, f.io)
+    ok('an owner\'s alert with no signal: the company\'s saved day has it', r?.job.id === CLEAN && r.fromCache === true)
   }
 
   // ── the sequences a phone goes through ──
