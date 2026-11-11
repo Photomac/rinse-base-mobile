@@ -84,7 +84,7 @@ const STOP_KEYS = (J: string) => [
   `chkrows:${J}`, `jobmeta:${J}`, `crew:${J}`, `crewclock:${J}`, `time:${J}:${U}`, `time:${J}:job`,
   `photos:${J}`, `pshot:${J}`, `signoffs:${J}`, `inv:log:${J}`, `inv:extras:${J}`, `nextarr:${J}`,
   `route:${J}:${U}`, `cilsite:${J}`, `crewnote:${J}`, `crewnoteack:${J}:${U}`, `crewNoteAck:${J}:${U}`, `wtlines:${J}`, `wtphotos:${J}`, `wtcarry:${J}`, `wtasks:${J}`,
-  `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`, `videosowed:${J}`, `linevids:${J}`,
+  `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`, `videosowed:${J}`, `linevids:${J}`, `srphotos:${J}`,
 ]
 const PROPERTY_KEYS = (A: string) => [
   `tmpl:${A}`, `rooms:${A}`, `addrmode:${A}`, `preq:${A}`, `propmeta:${A}`, `leadnotes:${A}`,
@@ -183,6 +183,8 @@ const scenarios: Record<string, () => Promise<void>> = {
       openRestockRead: () => R.openRestockRead(A),
       supplyCountsTenantRead: () => R.supplyCountsTenantRead(T),
       restockTwoChoiceTenantRead: () => R.restockTwoChoiceTenantRead(T),
+      stayPhotosTenantRead: () => R.stayPhotosTenantRead(T),
+      stayPhotosRead: () => R.stayPhotosRead(J),
       videosOwedRead: () => R.videosOwedRead(J),
       walkthroughLinesRead: () => R.walkthroughLinesRead(J),
       walkthroughPhotosRead: () => R.walkthroughPhotosRead(J),

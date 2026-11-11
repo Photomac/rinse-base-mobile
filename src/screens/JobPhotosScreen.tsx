@@ -49,14 +49,17 @@ interface Props {
   /** A finished clean the crew only read (lib/finishedClean): the photos and
    *  their upload state, no capture, no note or delete. */
   readOnly?: boolean
+  /** The type the screen opens on (one of PHOTO_TYPES' ids). The stay rating
+   *  opens it on 'before' for its photos (lib/stayPhotos); otherwise 'after'. */
+  initialType?: string
 }
 
-export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOutstanding = 0, readOnly = false }: Props) {
+export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOutstanding = 0, readOnly = false, initialType }: Props) {
   const { t, lang } = useLang()
   const [serverPhotos, setServerPhotos] = useState<any[]>([])
   const [devicePhotos, setDevicePhotos] = useState<QueuedJobPhoto[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedType, setSelectedType] = useState('after')
+  const [selectedType, setSelectedType] = useState(() => PHOTO_TYPES.some(pt => pt.id === initialType) ? initialType as string : 'after')
   // null = the crew hasn't touched the note: it shows the checklist line in
   // their language, and saves as the line's own text (lib/photoCaption).
   const [caption, setCaption] = useState<string | null>(preselectedItem?.title ? null : '')

@@ -118,7 +118,7 @@ function seedServer() {
   server.tables = {
     jobs,
     client_addresses: Object.values(ADDR).map(addressRow),
-    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true, crew_supply_counts: true, restock_two_choice: false, clock_in_location_required: false, lat: 34.87, lng: -111.76, home_base_precision: null, home_base_label: null }],
+    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true, crew_supply_counts: true, restock_two_choice: false, stay_rating_photos_required: 0, clock_in_location_required: false, lat: 34.87, lng: -111.76, home_base_precision: null, home_base_label: null }],
     job_assignments: jobs.flatMap(j => j.crew.map((c: any) => ({ job_id: j.id, user_id: c.user_id, is_lead: c.is_lead, users: { id: c.user_id, full_name: NAMES[c.user_id] } }))),
     address_checklist_templates: [
       { id: 'tp1', address_id: 'A2', room: 'Kitchen', title: 'Wipe counters', sort_order: 1, requires_photo: false },
@@ -1772,6 +1772,26 @@ const scenarios: Record<string, () => Promise<void>> = {
     ok('a database without the column: Mark low, the counts switch and the live list as before',
       v?.twoChoice === false && v?.crewCounts === true && v?.items?.length === 2 && v?.offline === false,
       JSON.stringify({ twoChoice: v?.twoChoice, crewCounts: v?.crewCounts, items: v?.items?.length, offline: v?.offline }))
+  },
+
+  // The stay rating's photo rule (tenants.stay_rating_photos_required, CKS
+  // 2026-11-10): the pack saves the company's number with the day, so a rating
+  // under 5 stars is held to it with no signal. A database before its
+  // migration refuses the read: the pack still saves, and nothing is saved for
+  // it (StayRatingCard reads that as off).
+  async stayPhotosRuleRidesAlong() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.tables.tenants[0].stay_rating_photos_required = 2
+    const c = load()
+    ok('the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+    ok('…with the company\'s number of photos for a rating under 5 stars', cachedVal(`srpten:${T}`)?.stay_rating_photos_required === 2, JSON.stringify(cachedVal(`srpten:${T}`)))
+  },
+  async stayPhotosRuleBeforeMigration() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.missingColumns = { tenants: ['stay_rating_photos_required'] }
+    const c = load()
+    ok('a database without the column: the pack still saves', (await c.prefetchDays(CREW)).status === 'saved')
+    ok('…and nothing saved for the refused read', !cached(`srpten:${T}`))
   },
 
   // Whatever goes wrong inside a load, Supplies' and the walkthrough's
