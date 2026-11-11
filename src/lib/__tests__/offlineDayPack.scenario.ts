@@ -143,8 +143,10 @@ function seedServer() {
       { id: 'rq1', address_id: 'A2', room_id: 'pr1', required: true, area_name: 'Kitchen wide', sort_order: 1, created_at: at('2026-09-01T00:00:00Z') },
     ],
     address_inventory: [
-      { id: 'inv-towel', address_id: 'A2', item_name: 'Bath towel', category: 'Linens', par_level: 4, unit: 'each', room_id: null, sort_order: 1 },
-      { id: 'inv-tp', address_id: 'A2', item_name: 'Toilet paper', category: 'Bathroom', par_level: 6, unit: 'roll', room_id: null, sort_order: 2 },
+      { id: 'inv-towel', address_id: 'A2', item_name: 'Bath towel', category: 'Linens', par_level: 4, unit: 'each', room_id: null, sort_order: 1, not_supplied: false },
+      { id: 'inv-tp', address_id: 'A2', item_name: 'Toilet paper', category: 'Bathroom', par_level: 6, unit: 'roll', room_id: null, sort_order: 2, not_supplied: false },
+      // Marked "Not at this home" by the office (no dishwasher): never on the crew's list.
+      { id: 'inv-pods', address_id: 'A2', item_name: 'Dishwasher pods', category: 'Kitchen', par_level: 12, unit: 'pods', room_id: null, sort_order: 3, not_supplied: true },
     ],
     job_inventory_log: [
       { id: 'lg1', job_id: 'J-prev', inventory_id: 'inv-tp', item_name: 'Toilet paper', qty_used: 4, qty_remaining: 1, needs_restock: true, restock_level: null, notes: null, incident_id: null, restocked_at: null, client_notified_at: null, created_at: at('2026-10-10T00:00:00Z'), jobs: { address_id: 'A2' }, address_inventory: { address_id: 'A2' } },
@@ -654,6 +656,7 @@ const scenarios: Record<string, () => Promise<void>> = {
     ok('the next arrival', (got.nextarr.data || []).some((r: any) => r.guest_name === 'Rivera'))
     ok('"Stop 1 of 2"', (got.route.data || []).length === 2, ids(got.route.data || []))
     ok('supplies, with the office\'s extra linen', (got.invItems.data || []).length === 2 && got.invExtras.data?.[0]?.extra_qty === 2)
+    ok('a line the office marked "Not at this home" isn\'t on the crew\'s supplies', !(got.invItems.data || []).some((i: any) => i.id === 'inv-pods'))
     ok('supplies: what an earlier visit flagged low here (toilet paper), the counts switch and the two-choice switch',
       (got.invOpen.data || []).map((r: any) => `${r.job_id}:${r.inventory_id}`).join('|') === 'J-prev:inv-tp' && got.scten.data?.crew_supply_counts === true &&
       got.rtcten.data?.restock_two_choice === false,
