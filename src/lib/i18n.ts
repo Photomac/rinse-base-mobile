@@ -679,6 +679,12 @@ export const translations = {
     stay_tap_star: 'Tap a star to rate',
     stay_ask_save_complete: 'Save and complete',
     stay_ask_skip: 'Skip',
+    // Under 5 stars needs photos when the company asks for them
+    // (tenants.stay_rating_photos_required; lib/stayPhotos.ts, CKS 2026-11-10).
+    stay_photos_count: '📷 Photos {{n}} of {{need}}',
+    stay_photos_need_one: 'A rating under 5 stars needs a photo of how the guests left it (Before or Damage).',
+    stay_photos_need_many: 'A rating under 5 stars needs {{need}} photos of how the guests left it (Before or Damage).',
+    stay_photos_take: 'Take photos',
     // Lost & found (crew logs a guest belonging left behind)
     lf_title: 'Lost & found',
     lf_sub: 'Found something a guest left behind? Log it — your manager reviews it before the host is told.',
@@ -828,7 +834,17 @@ export const translations = {
     // The clean an inspection checks isn't completed yet: nothing is filed and
     // the inspector stays clocked in (lib/inspectionCleanGate).
     insp_clean_not_done_title: "The clean isn't finished yet",
-    insp_clean_not_done_msg: 'File the inspection once the crew has completed the clean. Ask them to tap Complete, then file again.',
+    insp_clean_not_done_msg: 'Only an inspector can file before the crew completes the clean. Ask them to tap Complete, then file again.',
+    // Filed before the clean is completed by an inspector (or the office): the
+    // record is HELD and files itself when the clean is completed
+    // (lib/inspectionCleanGate, CKS 2026-11-10).
+    insp_hold_title: "The clean isn't finished yet",
+    insp_hold_msg: 'Your inspection is saved and held. It goes through, and guest ready goes out, the moment the crew completes the clean. This clocks you out and closes the visit.',
+    insp_hold_confirm: "Hold until it's done",
+    insp_held_title: 'Held',
+    insp_held_msg: 'It goes through when the crew completes the clean.',
+    insp_held_banner: 'Held since {{time}}. It files itself when the crew completes the clean.',
+    insp_held_locked: "You filed this before the clean was done. It's held and can't be edited.",
     // Crew-facing inspection results (read-only card on a completed clean).
     // Findings, never scores — Blueprint Ch.7 §7.9.
     insp_results_title: 'Inspection results',
@@ -1800,6 +1816,10 @@ export const translations = {
     stay_tap_star: 'Toca una estrella para calificar',
     stay_ask_save_complete: 'Guardar y completar',
     stay_ask_skip: 'Omitir',
+    stay_photos_count: '📷 Fotos {{n}} de {{need}}',
+    stay_photos_need_one: 'Una calificación de menos de 5 estrellas necesita una foto de cómo dejaron la propiedad los huéspedes (Antes o Daño).',
+    stay_photos_need_many: 'Una calificación de menos de 5 estrellas necesita {{need}} fotos de cómo dejaron la propiedad los huéspedes (Antes o Daño).',
+    stay_photos_take: 'Tomar fotos',
     // Objetos perdidos (la cuadrilla registra algo que dejó un huésped)
     lf_title: 'Objetos perdidos',
     lf_sub: '¿Encontraste algo que dejó un huésped? Regístralo — tu gerente lo revisa antes de avisarle al anfitrión.',
@@ -1946,7 +1966,14 @@ export const translations = {
     insp_unpaid_banner: 'Esta visita no pagará nada. Nadie marcó entrada y la propiedad no tiene tarifa de inspección, así que se paga por hora sobre cero minutos. Marca entrada primero en la pantalla del trabajo, o pide a tu gerente que fije una tarifa para esta propiedad.',
     insp_unpaid_confirm: 'Aviso: nadie marcó entrada y no hay tarifa, así que esta visita no pagará nada.',
     insp_clean_not_done_title: 'La limpieza aún no está terminada',
-    insp_clean_not_done_msg: 'Registra la inspección cuando el equipo haya completado la limpieza. Pídeles que toquen Completar y vuelve a registrarla.',
+    insp_clean_not_done_msg: 'Solo un inspector puede registrar antes de que el equipo complete la limpieza. Pídeles que toquen Completar y vuelve a registrarla.',
+    insp_hold_title: 'La limpieza aún no está terminada',
+    insp_hold_msg: 'Tu inspección se guarda y queda en espera. Se registra, y sale el aviso de lista para huéspedes, en cuanto el equipo complete la limpieza. Esto marca tu salida y cierra la visita.',
+    insp_hold_confirm: 'Dejar en espera',
+    insp_held_title: 'En espera',
+    insp_held_msg: 'Se registra cuando el equipo complete la limpieza.',
+    insp_held_banner: 'En espera desde {{time}}. Se registra sola cuando el equipo complete la limpieza.',
+    insp_held_locked: 'La registraste antes de que terminara la limpieza. Está en espera y no se puede editar.',
     insp_results_title: 'Resultados de la inspección',
     insp_results_by: 'Inspeccionado por',
     insp_results_passed_note: '¡Buen trabajo! Esta limpieza aprobó la inspección.',
@@ -2916,6 +2943,10 @@ export const translations = {
     stay_tap_star: 'Toque em uma estrela para avaliar',
     stay_ask_save_complete: 'Salvar e concluir',
     stay_ask_skip: 'Pular',
+    stay_photos_count: '📷 Fotos {{n}} de {{need}}',
+    stay_photos_need_one: 'Uma avaliação abaixo de 5 estrelas precisa de uma foto de como os hóspedes deixaram o imóvel (Antes ou Dano).',
+    stay_photos_need_many: 'Uma avaliação abaixo de 5 estrelas precisa de {{need}} fotos de como os hóspedes deixaram o imóvel (Antes ou Dano).',
+    stay_photos_take: 'Tirar fotos',
     // Lost & found (crew logs a guest belonging left behind)
     lf_title: 'Achados e perdidos',
     lf_sub: 'Encontrou algo que um hóspede esqueceu? Registre — seu gerente revisa antes de avisar o anfitrião.',
@@ -3062,7 +3093,14 @@ export const translations = {
     insp_unpaid_banner: 'Esta visita não pagará nada. Ninguém bateu o ponto e a propriedade não tem tarifa de inspeção, então é paga por hora sobre zero minutos. Bata o ponto na tela do trabalho primeiro, ou peça à sua gerente para definir uma tarifa para esta propriedade.',
     insp_unpaid_confirm: 'Atenção: ninguém bateu o ponto e não há tarifa, então esta visita não pagará nada.',
     insp_clean_not_done_title: 'A limpeza ainda não terminou',
-    insp_clean_not_done_msg: 'Registre a inspeção quando a equipe tiver concluído a limpeza. Peça que toquem em Concluir e registre de novo.',
+    insp_clean_not_done_msg: 'Só um inspetor pode registrar antes de a equipe concluir a limpeza. Peça que toquem em Concluir e registre de novo.',
+    insp_hold_title: 'A limpeza ainda não terminou',
+    insp_hold_msg: 'Sua inspeção fica salva e em espera. Ela é registrada, e o aviso de pronto para hóspedes sai, assim que a equipe concluir a limpeza. Isto encerra seu ponto e fecha a visita.',
+    insp_hold_confirm: 'Deixar em espera',
+    insp_held_title: 'Em espera',
+    insp_held_msg: 'Ela é registrada quando a equipe concluir a limpeza.',
+    insp_held_banner: 'Em espera desde {{time}}. Ela é registrada sozinha quando a equipe concluir a limpeza.',
+    insp_held_locked: 'Você registrou antes de a limpeza terminar. Está em espera e não pode ser editada.',
     insp_results_title: 'Resultados da inspeção',
     insp_results_by: 'Inspecionado por',
     insp_results_passed_note: 'Bom trabalho — esta limpeza foi aprovada na inspeção.',

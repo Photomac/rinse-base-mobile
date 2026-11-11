@@ -219,6 +219,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const [clientNote, setClientNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [showPhotos, setShowPhotos] = useState(false)
+  // The type the photo screen opens on: 'before' from the stay rating's Take
+  // photos (lib/stayPhotos); otherwise its own default.
+  const [photosType, setPhotosType] = useState<string | undefined>(undefined)
   // true = plain open; { roomId } = opened from a room's Restock task, the
   // supplies screen fronts that room's section.
   const [showInventory, setShowInventory] = useState<boolean | { roomId: string }>(false)
@@ -1722,6 +1725,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     setStayAskOpen(false)
     setTimeout(stayAskGone, 600)
   }
+  // The stay rating's Take photos (lib/stayPhotos): the photo screen on
+  // Before. From the ask at Complete the sheet stays open underneath (the
+  // photo screen takes this screen's place), so it's back, Complete still
+  // waiting on it, when the photo screen closes and the count is re-read.
+  function takeStayPhotos() {
+    setActivePhotoItem(null)
+    setPhotosType('before')
+    setShowPhotos(true)
+  }
   function stayAskGone() {
     const resolve = stayAnswer.current
     if (!resolve || stayGo.current === null) return
@@ -2200,9 +2212,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
 
   // The inspection form already clocked out and filed the record; the DB trigger
   // trg_complete_inspection_job has completed the visit job. Nothing left to
-  // write — just tear down and tell the list.
-  function finishFiledInspection() {
-    if (clockOutQueuedRef.current) Alert.alert('📡', t('queued_offline'))
+  // write — just tear down and tell the list. `held`: filed before its clean
+  // was completed (lib/inspectionCleanGate); the server completed the visit
+  // and files the record when the crew completes the clean. One alert, so
+  // iOS shows it (a second one raised at once is dropped).
+  function finishFiledInspection(held?: boolean) {
+    if (held) Alert.alert(`⏳ ${t('insp_held_title')}`, clockOutQueuedRef.current ? `${t('insp_held_msg')}\n\n${t('queued_offline')}` : t('insp_held_msg'))
+    else if (clockOutQueuedRef.current) Alert.alert('📡', t('queued_offline'))
     maybeStopLocationTracking(user).catch(() => {})
     onStatusChange(job, 'completed')
     setShowInspection(false)
@@ -2293,7 +2309,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       onFiled={finishFiledInspection}
     />
   )
-  if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} requiredOutstanding={Math.max(0, reqTotal - reqDone)} readOnly={readOnly} onBack={() => { setShowPhotos(false); loadChecklist(); loadPhotoRequirements() }} />
+  if (showPhotos) return <JobPhotosScreen job={job} user={user} preselectedItem={activePhotoItem} requiredOutstanding={Math.max(0, reqTotal - reqDone)} initialType={photosType} readOnly={readOnly} onBack={() => { setShowPhotos(false); setPhotosType(undefined); loadChecklist(); loadPhotoRequirements(); stay.refreshPhotos() }} />
   if (lineFor) {
     // Back from the recorder: no checklist reload, which could beat the tick's
     // write and show the line unticked. The tick is on screen already; the line
@@ -2819,7 +2835,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             stay at the bottom. Complete still asks for a missing rating once
             (lib/stayAsk). */}
         {/* Stay condition rating — how the guests left it (host sees it with photos) */}
-        {stayShows && <StayRatingCard stay={stay} readOnly={readOnly} onError={m => Alert.alert(t('error'), m)} />}
+        {stayShows && <StayRatingCard stay={stay} readOnly={readOnly} onError={m => Alert.alert(t('error'), m)} onTakePhotos={takeStayPhotos} />}
 
         {/* Property incident report — damage / missing / maintenance / pest /
             safety / lost & found (manager reviews before the host is told).
@@ -3242,7 +3258,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           if (error) setTimeout(() => Alert.alert(t('error'), error.message || String(error)), 650)
         }}
         onSkip={() => answerStayAsk(true)}
-        onClose={() => answerStayAsk(false)} />
+        onClose={() => answerStayAsk(false)}
+        onTakePhotos={takeStayPhotos} />
 
       {/* The office's edit. A save updates this screen's clean in place (time
           on the card, crew re-read), and Home / Schedule re-read on the way back. */}
