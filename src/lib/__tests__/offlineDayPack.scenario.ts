@@ -163,7 +163,7 @@ function seedServer() {
     job_time_entries: [], job_room_signoffs: [], job_photos: [], job_crew_note_acks: [],
     // J-red hangs off an arrival prep the office linked (rinse-base-app
     // 20261111123505_arrival_hangs_off_its_turnover), embedded as PostgREST
-    // returns it: the arrival, its crew, its photos and its video ids.
+    // returns it: the arrival, its crew, its photos and its videos.
     job_arrivals: [
       { job_id: 'J-arr', parent_job_id: 'J-red', arrival: {
         id: 'J-arr', status: 'completed', scheduled_start: at('2026-10-14T15:00:00Z'), started_at: at('2026-10-14T15:04:00Z'),
@@ -171,7 +171,10 @@ function seedServer() {
         job_photos: [
           { id: 'ap1', photo_url: 'https://x/storage/v1/object/public/job-photos/arr/1.jpg', photo_type: 'before', caption: null, created_at: at('2026-10-14T15:06:00Z'), taken_at: at('2026-10-14T15:05:00Z'), users: { full_name: 'Dana Reyes' } },
         ],
-        job_videos: [{ id: 'av1' }, { id: 'av2' }],
+        job_videos: [
+          { id: 'av1', video_url: 'https://x/storage/v1/object/public/job-videos/arr/1.mp4', video_type: 'before', caption: null, duration_seconds: 48, recorded_at: at('2026-10-14T15:05:00Z'), created_at: at('2026-10-14T15:07:00Z'), users: { full_name: 'Dana Reyes' } },
+          { id: 'av2', video_url: 'https://x/storage/v1/object/public/job-videos/arr/2.mp4', video_type: 'after', caption: null, duration_seconds: 75, recorded_at: at('2026-10-14T15:40:00Z'), created_at: at('2026-10-14T15:41:00Z'), users: { full_name: 'Dana Reyes' } },
+        ],
       } },
     ],
   }
@@ -522,7 +525,7 @@ const scenarios: Record<string, () => Promise<void>> = {
     const v = o.log[0]?.v
     ok('the card shows within the wait, not after a read deadline', (o.log[0]?.at ?? Infinity) < CARD_WAIT + 400, `${fmt(o.log[0]?.at)} (deadline ${READ_DEADLINE} ms)`)
     ok('...the saved copy: who, the photo as the guest left it, 2 videos',
-      v?.who?.join() === 'Dana R.' && v?.photos?.length === 1 && v?.photos?.[0]?.group === 'before' && v?.videos === 2 && v?.stage === 'done',
+      v?.who?.join() === 'Dana R.' && v?.photos?.length === 1 && v?.photos?.[0]?.group === 'before' && v?.videos?.length === 2 && v?.videos?.[0]?.url?.endsWith('/1.mp4') && v?.stage === 'done',
       JSON.stringify(v))
     await o.done
     ok('the live read gives up: nothing newer, one show', o.log.length === 1, `${o.log.length} show(s)`)
@@ -638,7 +641,7 @@ const scenarios: Record<string, () => Promise<void>> = {
     ok('the door code', got.propmeta.data?.lockbox_code === '4321', String(got.propmeta.data?.lockbox_code))
     ok('the arrival prep it hangs off: who, its photo, its 2 videos',
       got.arrprep.data?.[0]?.arrival?.crew?.[0]?.users?.full_name === 'Dana Reyes' &&
-      got.arrprep.data?.[0]?.arrival?.job_photos?.[0]?.photo_type === 'before' && got.arrprep.data?.[0]?.arrival?.job_videos?.length === 2,
+      got.arrprep.data?.[0]?.arrival?.job_photos?.[0]?.photo_type === 'before' && got.arrprep.data?.[0]?.arrival?.job_videos?.length === 2 && got.arrprep.data?.[0]?.arrival?.job_videos?.[1]?.video_url?.endsWith('/2.mp4'),
       JSON.stringify(got.arrprep.data))
     ok('the WiFi, name and password exactly as stored', got.propmeta.data?.wifi_name === 'RedRockCasita-Guest' && got.propmeta.data?.wifi_password === 'desert sky 22!',
       `${got.propmeta.data?.wifi_name} / ${got.propmeta.data?.wifi_password}`)

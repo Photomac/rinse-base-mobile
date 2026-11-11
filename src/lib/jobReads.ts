@@ -522,14 +522,14 @@ export const carriedLinesRead = (jobId: string): CacheRead => ({
 /** The arrival prep this clean hangs off, if the office linked one
  *  (rinse-base-app job_arrivals, 20261111123505_arrival_hangs_off_its_turnover:
  *  job_id = the arrival, parent_job_id = this clean), with who was on it, its
- *  photos and its video ids, in one read (lib/arrivalPrep). Every embed is
+ *  photos and its videos, in one read (lib/arrivalPrep). Every embed is
  *  hinted: job_arrivals has two foreign keys into jobs, job_assignments two
  *  into users. Crew can read all of it company-wide (job_arrivals_select,
  *  job_photos_select, job_videos_select). An empty list: nothing linked. */
 export const arrivalPrepRead = (jobId: string): CacheRead => ({
   key: `arrprep:${jobId}`,
   q: () => supabase.from('job_arrivals')
-    .select('job_id, arrival:jobs!job_arrivals_job_id_fkey(id, status, scheduled_start, started_at, crew:job_assignments!job_assignments_job_id_fkey(is_lead, users!job_assignments_user_id_fkey(full_name)), job_photos!job_photos_job_id_fkey(id, photo_url, photo_type, caption, created_at, taken_at, users!job_photos_user_id_fkey(full_name)), job_videos!job_videos_job_id_fkey(id))')
+    .select('job_id, arrival:jobs!job_arrivals_job_id_fkey(id, status, scheduled_start, started_at, crew:job_assignments!job_assignments_job_id_fkey(is_lead, users!job_assignments_user_id_fkey(full_name)), job_photos!job_photos_job_id_fkey(id, photo_url, photo_type, caption, created_at, taken_at, users!job_photos_user_id_fkey(full_name)), job_videos!job_videos_job_id_fkey(id, video_url, video_type, caption, duration_seconds, recorded_at, created_at, users!job_videos_user_id_fkey(full_name)))')
     .eq('parent_job_id', jobId)
     .limit(1),
 })

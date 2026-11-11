@@ -11,9 +11,10 @@
 // photos and videos on the turnover's Photos tab (web #1959,
 // src/components/ArrivalMedia.tsx). This is the crew app's half.
 //
-// Read-only. Photos show as thumbnails in four groups; videos are only
-// counted, because playing one in the app needs a native module (a store
-// build) and this ships over the air.
+// Read-only. Photos show as thumbnails in four groups. Videos are listed, and
+// a tap plays one in the phone's own video player (the job-videos bucket is
+// public): playing one inside the app needs a native module (expo-video, a
+// store build), and this ships over the air.
 //
 // Pure: no React Native, no Supabase (scripts/test-arrival-prep.mjs runs it).
 import { shortName } from './crewNames'
@@ -31,6 +32,20 @@ export function arrivalGroupOf(photoType: unknown): ArrivalGroup {
   if (photoType === 'issue' || photoType === 'damage') return 'damage'
   if (photoType === 'after') return 'after'
   return 'other'
+}
+
+export interface ArrivalVideo {
+  id: string
+  /** The public https URL of the file (job-videos bucket). */
+  url: string
+  group: ArrivalGroup
+  caption: string | null
+  /** Its length in seconds, when the phone that recorded it said. */
+  secs: number | null
+  /** When it was recorded (recorded_at), else when it was saved. */
+  at: string | null
+  /** Who filmed it, short ("Dana R."). */
+  by: string | null
 }
 
 export interface ArrivalPhoto {
@@ -55,11 +70,12 @@ export interface ArrivalPrepView {
   /** When the prep happened: its start, else its booked start. */
   at: string | null
   /** Who was on it, lead first ("Dana R."); with nobody assigned, whoever
-   *  took its photos. Empty when neither is known. */
+   *  took its photos or filmed it. Empty when neither is known. */
   who: string[]
   /** In ARRIVAL_GROUPS order, then oldest first. */
   photos: ArrivalPhoto[]
-  videos: number
+  /** Only the ones with a file to play, in the same order as the photos. */
+  videos: ArrivalVideo[]
 }
 
 const WAITING = ['draft', 'pending_approval', 'scheduled', 'en_route']
@@ -70,6 +86,20 @@ const time = (v: string | null): number => {
   return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t
 }
 const one = (v: unknown): any => (Array.isArray(v) ? v[0] : v)
+
+/** A video's URL only when it is a plain https link: the tap hands it to the
+ *  phone, so never a tel:, sms: or app link out of a row. */
+export function playableVideoUrl(v: unknown): string | null {
+  const u = str(v)
+  return u && /^https:\/\/[^\s]+$/i.test(u) ? u : null
+}
+
+/** 0:42, 1:05, 2:00. Null for no length or a nonsense one. */
+export function videoLength(secs: unknown): string | null {
+  const n = typeof secs === 'number' && Number.isFinite(secs) ? Math.round(secs) : NaN
+  if (!(n >= 0)) return null
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`
+}
 
 function nameOf(user: unknown): string | null {
   const full = str(one(user)?.full_name)
@@ -84,7 +114,7 @@ export function arrivalStage(status: string, startedAt: string | null): ArrivalS
 
 /**
  * The read's answer (arrivalPrepRead: job_arrivals rows for this clean, the
- * arrival embedded with its crew, photos and video ids) → what the card shows.
+ * arrival embedded with its crew, photos and videos) → what the card shows.
  * Null when the clean has no arrival prep linked, when its row can't be read
  * (an embed RLS hides comes back null), or when the arrival was called off
  * with nothing recorded.
@@ -109,9 +139,22 @@ export function arrivalFromRows(data: unknown): ArrivalPrepView | null {
     }))
     .sort((x: ArrivalPhoto, y: ArrivalPhoto) =>
       ARRIVAL_GROUPS.indexOf(x.group) - ARRIVAL_GROUPS.indexOf(y.group) || time(x.at) - time(y.at))
-  const videos = Array.isArray(a.job_videos) ? a.job_videos.filter(Boolean).length : 0
+  const videos: ArrivalVideo[] = (Array.isArray(a.job_videos) ? a.job_videos : [])
+    .filter((v: any) => v && playableVideoUrl(v.video_url))
+    .map((v: any): ArrivalVideo => ({
+      id: str(v.id) ?? str(v.video_url)!,
+      url: playableVideoUrl(v.video_url)!,
+      // job_videos.video_type: before | after | line (a checklist line's clip → Other).
+      group: arrivalGroupOf(v.video_type),
+      caption: str(v.caption),
+      secs: typeof v.duration_seconds === 'number' && Number.isFinite(v.duration_seconds) ? v.duration_seconds : null,
+      at: str(v.recorded_at) ?? str(v.created_at),
+      by: nameOf(v.users),
+    }))
+    .sort((x: ArrivalVideo, y: ArrivalVideo) =>
+      ARRIVAL_GROUPS.indexOf(x.group) - ARRIVAL_GROUPS.indexOf(y.group) || time(x.at) - time(y.at))
 
-  if (status === 'cancelled' && photos.length === 0 && videos === 0) return null
+  if (status === 'cancelled' && photos.length === 0 && videos.length === 0) return null
 
   const crew: string[] = (Array.isArray(a.crew) ? a.crew : [])
     .filter(Boolean)
@@ -119,7 +162,8 @@ export function arrivalFromRows(data: unknown): ArrivalPrepView | null {
     .sort((x: any, y: any) => Number(!!y.is_lead) - Number(!!x.is_lead))
     .map((c: any) => nameOf(c.users))
     .filter((n: string | null): n is string => !!n)
-  const named: string[] = crew.length ? crew : photos.map(p => p.by).filter((n): n is string => !!n)
+  const named: string[] = crew.length ? crew
+    : [...photos.map(p => p.by), ...videos.map(v => v.by)].filter((n): n is string => !!n)
   const who = named.filter((n, i) => named.indexOf(n) === i)
 
   return {
@@ -143,6 +187,6 @@ export function arrivalPhotoGroups(photos: ArrivalPhoto[]): { group: ArrivalGrou
 /** What the card says when the arrival recorded nothing yet, by stage. Null
  *  when there is something to show. */
 export function arrivalEmptyLine(v: ArrivalPrepView): 'arrival_not_started' | 'arrival_under_way' | 'arrival_nothing' | null {
-  if (v.photos.length || v.videos) return null
+  if (v.photos.length || v.videos.length) return null
   return v.stage === 'waiting' ? 'arrival_not_started' : v.stage === 'under_way' ? 'arrival_under_way' : 'arrival_nothing'
 }
