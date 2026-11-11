@@ -131,9 +131,12 @@ ok('the card\'s load: the saved copy after a short wait, at once after a failed 
 const card = src('src/components/ArrivalPrepCard.tsx')
 ok('the card makes no reads of its own', !/\b(?:cachedRead|cachedQuery|readSoon)\(|supabase\./.test(card) && /loadArrivalPrep\(job, /.test(card))
 ok('thumbnails open the app\'s full-screen photo viewer', /<PhotoViewer photos=\{viewerPhotos\} startIndex=\{open\}/.test(card) && /<ShotThumb uri=\{p\.url\}/.test(card))
-ok('no video module in the app (a native module moves the fingerprint): a tap opens the phone\'s player',
+ok('the card loads no video module itself; without the in-app player a tap opens the phone\'s player (scripts/test-in-app-video.mjs)',
   !/(?:from|require\()\s*'(?:expo-av|expo-video|react-native-video|react-native-webview)'/.test(card) && /Linking\.openURL\(v\.url\)\.catch\(\(\) => Alert\.alert\(t\('arrival_video_failed'\)\)\)/.test(card) && /onPress=\{\(\) => play\(v\)\}/.test(card))
-ok('the app has no video module at all', !['expo-av', 'expo-video', 'react-native-video', 'react-native-webview'].some(m => m in (JSON.parse(src('package.json')).dependencies || {})))
+ok('the only video module is expo-video (the in-app player, store builds from 1.1.7)', (() => {
+  const deps = JSON.parse(src('package.json')).dependencies || {}
+  return 'expo-video' in deps && !['expo-av', 'react-native-video', 'react-native-webview'].some(m => m in deps)
+})())
 ok('nothing renders without an arrival', /if \(!view\) return null/.test(card))
 const screen = src('src/screens/JobDetailScreen.tsx')
 ok('the clean\'s screen shows it on cleans, under the inspection\'s missed lines', /<CarriedLinesCard job=\{job\} \/>\}[\s\S]{0,400}\{!isTask && <ArrivalPrepCard job=\{job\} \/>\}/.test(screen))

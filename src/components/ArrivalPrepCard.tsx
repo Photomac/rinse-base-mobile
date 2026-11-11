@@ -3,8 +3,9 @@
 // The office links the arrival to its turnover on the web; its photos show
 // here as thumbnails in groups (as the guest left it, damage, other, after the
 // prep), tap for the full-screen viewer; its videos are listed, and a tap
-// plays one in the phone's own video player (a player inside the app needs a
-// native module, expo-video: a store build). Rules:
+// plays one full screen inside the app (components/VideoPlayerModal) on a
+// build that has the player (expo-video, store builds from 1.1.7), else in the
+// phone's own video player, as on 1.1.5 / 1.1.6 (lib/inAppVideo.ts). Rules:
 // lib/arrivalPrep.ts; reads: lib/arrivalPrepCard.ts (the day pack saves the
 // rows, not the photo files).
 //
@@ -18,8 +19,10 @@ import { clockOf, dayKey, fmtDatePart, fmtTimeAt } from '../lib/timezone'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { arrivalEmptyLine, arrivalPhotoGroups, videoLength, type ArrivalGroup, type ArrivalPrepView, type ArrivalVideo } from '../lib/arrivalPrep'
 import { loadArrivalPrep } from '../lib/arrivalPrepCard'
+import { inAppVideo } from '../lib/inAppVideo'
 import { PhotoViewer } from './PhotoViewer'
 import { ShotThumb } from './ShotThumb'
+import { VideoPlayerModal } from './VideoPlayerModal'
 
 const INK = '#1A1408'
 const INK_MUTED = '#6B5E42'
@@ -37,6 +40,7 @@ export function ArrivalPrepCard({ job, refreshKey = 0 }: { job: any; refreshKey?
   const locale = localeFor(lang)
   const [view, setView] = useState<ArrivalPrepView | null>(null)
   const [open, setOpen] = useState<number | null>(null)
+  const [playing, setPlaying] = useState<number | null>(null)
 
   useEffect(() => {
     let live = true
@@ -50,6 +54,9 @@ export function ArrivalPrepCard({ job, refreshKey = 0 }: { job: any; refreshKey?
   // its page can't point past the end of the list.
   const count = view?.photos.length ?? 0
   useEffect(() => { setOpen(null) }, [count])
+  // Same for the videos and the player.
+  const videoCount = view?.videos.length ?? 0
+  useEffect(() => { setPlaying(null) }, [videoCount])
 
   const groups = useMemo(() => arrivalPhotoGroups(view?.photos ?? []), [view])
   const tx = useMachineTranslation(lang, [...(view?.photos ?? []).map(p => p.caption), ...(view?.videos ?? []).map(v => v.caption)])
@@ -68,10 +75,21 @@ export function ArrivalPrepCard({ job, refreshKey = 0 }: { job: any; refreshKey?
     : t('arrival_title')
   const empty = arrivalEmptyLine(view)
   const label = (g: ArrivalGroup) => t(GROUP_LABEL[g])
-  // The phone's own player (Safari / the browser on Android): the file is a
-  // public https link, so no sign-in. Off signal it says it can't open.
+  // In the app on a build with the player; otherwise the phone's own player
+  // (Safari / the browser on Android): the file is a public https link, so no
+  // sign-in. Off signal it says it can't open.
+  const inApp = inAppVideo() != null
   const play = (v: ArrivalVideo) => {
+    if (inApp) { setPlaying(view.videos.indexOf(v)); return }
     Linking.openURL(v.url).catch(() => Alert.alert(t('arrival_video_failed')))
+  }
+  // A row's lines, also the player's caption: what it shows and its length,
+  // then the group (when captioned), who filmed it and when.
+  const videoLines = (v: ArrivalVideo) => {
+    const len = videoLength(v.secs)
+    const what = v.caption ? tx(v.caption) : label(v.group)
+    const sub = [v.caption ? label(v.group) : null, v.by, v.at ? fmtTimeAt(v.at, addr, locale) : null].filter(Boolean).join(' · ')
+    return { len, what, sub }
   }
   const viewerPhotos = view.photos.map(p => ({
     url: p.url,
@@ -104,9 +122,7 @@ export function ArrivalPrepCard({ job, refreshKey = 0 }: { job: any; refreshKey?
         <View style={{ marginTop: 10 }} testID="arrival-videos">
           <Text style={styles.group}>{t('arrival_videos_head')} · {view.videos.length}</Text>
           {view.videos.map((v, i) => {
-            const len = videoLength(v.secs)
-            const what = v.caption ? tx(v.caption) : label(v.group)
-            const sub = [v.caption ? label(v.group) : null, v.by, v.at ? fmtTimeAt(v.at, addr, locale) : null].filter(Boolean).join(' · ')
+            const { len, what, sub } = videoLines(v)
             return (
               <TouchableOpacity key={v.id} style={styles.videoRow} onPress={() => play(v)}
                 accessibilityRole="button" accessibilityLabel={`${t('arrival_video_play')} ${i + 1}: ${what}${len ? `, ${len}` : ''}`}
@@ -119,12 +135,22 @@ export function ArrivalPrepCard({ job, refreshKey = 0 }: { job: any; refreshKey?
               </TouchableOpacity>
             )
           })}
-          <Text style={styles.videoHint}>{t('arrival_video_hint')}</Text>
+          <Text style={styles.videoHint}>{inApp ? t('arrival_video_hint_app') : t('arrival_video_hint')}</Text>
         </View>
       )}
       {!!empty && <Text style={styles.empty}>{t(empty)}</Text>}
       {open != null && viewerPhotos.length > 0 && (
         <PhotoViewer photos={viewerPhotos} startIndex={open} onClose={() => setOpen(null)} />
+      )}
+      {playing != null && playing >= 0 && view.videos.length > 0 && (
+        <VideoPlayerModal
+          videos={view.videos.map(v => {
+            const { len, what, sub } = videoLines(v)
+            return { url: v.url, title: `${what}${len ? ` · ${len}` : ''}`, meta: sub || null }
+          })}
+          startIndex={playing}
+          onClose={() => setPlaying(null)}
+        />
       )}
     </View>
   )
