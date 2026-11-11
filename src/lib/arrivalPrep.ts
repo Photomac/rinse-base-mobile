@@ -12,9 +12,9 @@
 // src/components/ArrivalMedia.tsx). This is the crew app's half.
 //
 // Read-only. Photos show as thumbnails in four groups. Videos are listed, and
-// a tap plays one in the phone's own video player (the job-videos bucket is
-// public): playing one inside the app needs a native module (expo-video, a
-// store build), and this ships over the air.
+// a tap plays one inside the app on a build with expo-video (store builds from
+// 1.1.7), else in the phone's own video player (the job-videos bucket is
+// public): lib/inAppVideo.ts.
 //
 // Pure: no React Native, no Supabase (scripts/test-arrival-prep.mjs runs it).
 import { shortName } from './crewNames'
