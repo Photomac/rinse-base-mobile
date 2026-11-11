@@ -458,6 +458,25 @@ export const restockTwoChoiceTenantRead = (tenantId: string): CacheRead => ({
     .select('restock_two_choice').eq('id', tenantId).maybeSingle(),
 })
 
+/** The company's number (tenants.stay_rating_photos_required, rinse-base-app
+ *  CKS 2026-11-10): how many Before/Damage photos a rating under 5 stars needs
+ *  before it saves (lib/stayPhotos). Its own read, so a database without the
+ *  column fails this one alone, which means off. */
+export const stayPhotosTenantRead = (tenantId: string): CacheRead => ({
+  key: `srpten:${tenantId}`,
+  q: () => supabase.from('tenants')
+    .select('stay_rating_photos_required').eq('id', tenantId).maybeSingle(),
+})
+
+/** The clean's photos that show how the guests left it (lib/stayPhotos
+ *  STAY_PHOTO_TYPES), counted for a rating under 5 stars. Read only when the
+ *  company asks for photos; photos still on the phone are counted apart. */
+export const stayPhotosRead = (jobId: string): CacheRead => ({
+  key: `srphotos:${jobId}`,
+  q: () => supabase.from('job_photos')
+    .select('id, photo_type').eq('job_id', jobId).in('photo_type', ['before', 'issue', 'damage']),
+})
+
 // ── The inspection walkthrough (WalkthroughChecklist) ───────────────────────
 
 export const walkthroughLinesRead = (jobId: string): CacheRead => ({
@@ -660,6 +679,8 @@ export const PREP_DAY_KEY = /^prep:(addr|resv2|restock|linen|extras|cflines):([^
 // scripts/test-cache-prune.mjs fails until it is.
 const JOB_KEYS = new Set(['cilsite', 'chkrows', 'jobmeta', 'crew', 'crewclock', 'time', 'photos', 'pshot', 'signoffs',
   'route', 'crewnote', 'crewnoteack', 'wtlines', 'wtphotos', 'wtcarry', 'wtasks', 'cfticks', 'cfphotos', 'cfstart',
+  // the stay rating's photo count (stayPhotosRead), pruned with its clean
+  'srphotos',
   // lib/lineVideos: the clean's lines that ask for a clip or a question, with their clips and answers
   'linevids',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
@@ -748,6 +769,9 @@ export function jobPackReads(job: any, user: any): PackRead[] {
     reads.push(inventoryItemsRead(addrId), inventoryLogRead(job.id), inventoryRoomsRead(addrId), linenExtrasRead(job.id),
       openRestockRead(addrId), supplyCountsTenantRead(user.tenant_id), restockTwoChoiceTenantRead(user.tenant_id))
   }
+  // The stay rating's photo rule (StayRatingCard, lib/stayPhotos): the
+  // company's number, so a rating under 5 stars is held to it with no signal.
+  if (!isTask) reads.push(stayPhotosTenantRead(user.tenant_id))
   // loadCheckFirst (cleans only): the clean's ticks, line photos and start are
   // read only at a property that has lines.
   if (!isTask && addrId) {

@@ -31,11 +31,19 @@
 // FIRST (clockOut, owned by JobDetailScreen) and only file if that succeeded.
 //
 // AN INSPECTION IS FILED ON A FINISHED CLEAN (CKS 2026-11-09; rinse-base-app
-// 20261110140000_inspection_stays_with_clean refuses filing while the record's
-// clean isn't completed). Because the clock-out goes first, the clean's status
+// 20261110145359_inspection_stays_with_clean refuses filing while the record's
+// clean isn't completed). Because the clock-out goes first, what filing does
 // is asked BEFORE it (lib/inspectionCleanGate): before the confirm, and again
-// before the clock-out. Not completed: a sentence, the form stays open, the
-// inspector stays clocked in. A read that fails files as before.
+// before the clock-out.
+//   'file': as always.
+//   'hold' (CKS 2026-11-10): the clean isn't completed, and this person is an
+//     inspector or the office. They confirm, clock out, and the record is
+//     written with held_at instead of completed_at: the server keeps it, and
+//     files it itself the moment the crew completes the clean. Shown as held.
+//   'wait': the clean isn't completed and they can't hold it. A sentence, the
+//     form stays open, the inspector stays clocked in.
+// A server that can't answer (before the hold migration, no signal) falls
+// back to the status read: not completed waits, a failed read files.
 
 import React, { useState, useEffect, useRef } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image, Modal } from 'react-native'
@@ -52,7 +60,7 @@ import { JobPhotosScreen } from './JobPhotosScreen'
 import type { StagingPhotoRow } from '../lib/stagingRooms'
 import { localeFor, ti, type TranslationKey } from '../lib/i18n'
 import { filingGaps, hasFilingGaps } from '../lib/inspectionFiling'
-import { checkCleanGate } from '../lib/inspectionCleanGate'
+import { checkFilingMode, isHeld, type FilingMode } from '../lib/inspectionCleanGate'
 import type { LineClipState } from '../lib/lineVideos'
 import type { WalkthroughLine } from '../lib/walkthrough'
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -95,8 +103,9 @@ interface Props {
   /** Clocks out the active time entry. Returns false if that failed — do not
    *  file the inspection in that case; see the ordering note above. */
   clockOut: () => Promise<boolean>
-  /** Called after the record is filed; JobDetailScreen closes the visit out. */
-  onFiled: () => void
+  /** Called after the record is filed (or held: `held`, lib/inspectionCleanGate);
+   *  JobDetailScreen closes the visit out and says so. */
+  onFiled: (held?: boolean) => void
 }
 
 export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Props) {
@@ -251,52 +260,68 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
     }
     const problem = validate()
     if (problem) { Alert.alert(t('error'), problem); return }
-    // Its clean before the confirm: an early tap gets a sentence, not a filing.
+    // What filing does, before the confirm: an early tap gets a sentence
+    // ('wait') or the offer to hold it ('hold'), not a filing.
     setSaving(true)
-    const waits = await cleanNotFinished()
+    const mode = await filingModeNow()
     setSaving(false)
-    if (waits) return
+    if (mode === 'wait') { sayWait(); return }
 
-    const msg = noPay
-      ? `${t('insp_confirm_msg')}\n\n${t('insp_unpaid_confirm')}`
-      : t('insp_confirm_msg')
-    Alert.alert(t('insp_confirm_title'), msg, [
+    const unpaid = noPay ? `\n\n${t('insp_unpaid_confirm')}` : ''
+    if (mode === 'hold') {
+      Alert.alert(`⏳ ${t('insp_hold_title')}`, `${t('insp_hold_msg')}${unpaid}`, [
+        { text: t('cancel'), style: 'cancel' },
+        { text: t('insp_hold_confirm'), onPress: () => { doFile() } },
+      ])
+      return
+    }
+    Alert.alert(t('insp_confirm_title'), `${t('insp_confirm_msg')}${unpaid}`, [
       { text: t('cancel'), style: 'cancel' },
-      { text: t('insp_complete'), onPress: doFile },
+      { text: t('insp_complete'), onPress: () => { doFile() } },
     ])
   }
 
-  // The record's clean isn't completed (lib/inspectionCleanGate): says so and
-  // returns true; nothing is written. Read in this company, as the database's
-  // guard reads it. No clean, a completed one, or a read that failed: false.
-  async function cleanNotFinished(): Promise<boolean> {
-    const gate = await checkCleanGate(rec?.parent_job_id, (cleanId) =>
-      supabase.from('jobs').select('status').eq('id', cleanId).eq('tenant_id', tenantId).maybeSingle())
-    if (gate === 'file') return false
+  // What filing does now (lib/inspectionCleanGate): the server's answer, or,
+  // when it can't give one, the record's clean read in this company, as the
+  // database's guard reads it. No clean, or a completed one: 'file'.
+  function filingModeNow(): Promise<FilingMode> {
+    return checkFilingMode(rec?.parent_job_id, tenantId,
+      (cleanId, tid) => supabase.rpc('inspection_filing_mode', { p_parent_job_id: cleanId, p_tenant_id: tid }),
+      (cleanId) => supabase.from('jobs').select('status').eq('id', cleanId).eq('tenant_id', tenantId).maybeSingle())
+  }
+
+  // 'wait': the clean isn't completed and this person can't hold the record.
+  // Nothing is written.
+  function sayWait() {
     Alert.alert(`⏳ ${t('insp_clean_not_done_title')}`, t('insp_clean_not_done_msg'))
-    return true
   }
 
   async function doFile() {
     setSaving(true)
-    // Its clean again, before the clock-out: the confirm may have sat open,
-    // and a filing the server would refuse must not end the inspector's time.
-    if (await cleanNotFinished()) { setSaving(false); return }
+    // Asked again, before the clock-out: the confirm may have sat open (the
+    // clean may have been completed meanwhile: then it files), and a write the
+    // server would refuse must not end the inspector's time.
+    const mode = await filingModeNow()
+    if (mode === 'wait') { sayWait(); setSaving(false); return }
     // Clock out BEFORE filing — see the ordering note at the top of this file.
     // One of the two writes has to go first, and this is the safer failure: if
     // the record write below fails the inspector is clocked out with the form
     // still open and retryable, whereas the other order would leave a completed
-    // job carrying an open time entry.
+    // job carrying an open time entry. A hold completes the visit too (the
+    // server's trigger), so the same order holds.
     if (!(await clockOut())) { setSaving(false); return }
 
     const patch: any = fields()
     patch.started_at = rec?.started_at ?? new Date().toISOString()
-    patch.completed_at = new Date().toISOString()
+    // Held: the server stamps its own time and who held it, and files the
+    // record (completed_at) when the clean is completed. Never both.
+    if (mode === 'hold') patch.held_at = new Date().toISOString()
+    else patch.completed_at = new Date().toISOString()
     const { error } = await supabase.from('job_inspections')
       .update(patch).eq('id', rec.id).eq('tenant_id', tenantId)
     setSaving(false)
     if (error) { Alert.alert(t('could_not_save'), error.message); return }
-    onFiled()
+    onFiled(mode === 'hold')
   }
 
   if (loading) {
@@ -320,7 +345,10 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
     )
   }
 
-  const done = !!rec.completed_at
+  // Held (filed before its clean was completed, lib/inspectionCleanGate): kept
+  // as filed on this screen; it files itself when the crew completes the clean.
+  const held = isHeld(rec)
+  const done = !!rec.completed_at || held
   const triggerKey = TRIGGER_KEY[rec.trigger_reason]
 
   return (
@@ -334,8 +362,16 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
           <Text style={styles.whyTitle}>
             {t('insp_why')}: {triggerKey ? t(triggerKey) : rec.trigger_reason}
           </Text>
-          <Text style={styles.whySub}>{done ? t('insp_locked') : t('insp_not_completed')}</Text>
+          <Text style={styles.whySub}>{held ? t('insp_held_locked') : done ? t('insp_locked') : t('insp_not_completed')}</Text>
         </View>
+
+        {held && (
+          <View style={styles.heldBanner}>
+            <Text style={styles.heldBannerText}>
+              ⏳ {ti(t('insp_held_banner'), { time: fmtDateTime(rec.held_at, localeFor(lang)) })}
+            </Text>
+          </View>
+        )}
 
         {/* How the property is SUPPOSED to look — the owner's reference shots.
             Above the executed checklist on purpose: an inspector judges against
@@ -586,6 +622,8 @@ const styles = StyleSheet.create({
   },
   whyTitle: { fontSize: 14, fontWeight: '800', color: NAVY },
   whySub: { fontSize: 12, color: '#64748B', marginTop: 3, lineHeight: 17 },
+  heldBanner: { backgroundColor: '#FEF3C7', borderColor: '#F59E0B', borderWidth: 1, borderRadius: 10, padding: 10, marginBottom: 14 },
+  heldBannerText: { fontSize: 13, fontWeight: '700', color: '#92400E', lineHeight: 18 },
 
   label: { fontSize: 14, fontWeight: '800', color: NAVY, marginBottom: 3 },
   hint: { fontSize: 12, color: '#64748B', lineHeight: 17, marginBottom: 8 },

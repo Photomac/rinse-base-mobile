@@ -167,8 +167,10 @@ check('the Complete still goes through the outbox', has(detail, "const { error: 
 
 const sheet = card.slice(card.indexOf('export function StayAskModal'))
 check('the ask: the card\'s question, stars and flags, Save and complete, Skip',
-  ["t('stay_rating_title')", '<StayPicker stay={stay} />', "t('stay_ask_save_complete')", "t('stay_ask_skip')", 'onRequestClose={onClose}', 'disabled={!picked || stay.saving}'].map(s => has(sheet, s)),
+  ["t('stay_rating_title')", '<StayPicker stay={stay} />', "t('stay_ask_save_complete')", "t('stay_ask_skip')", 'onRequestClose={onClose}', 'disabled={!picked || stay.saving || short > 0}'].map(s => has(sheet, s)),
   [true, true, true, true, true, true])
+// (Under 5 stars, short of the company's photos, the ask neither saves nor
+// skips: scripts/test-stay-photos.mjs.)
 check('the new strings in English, Spanish and Portuguese',
   ['stay_ask_save_complete', 'stay_ask_skip'].map(k => (i18n.match(new RegExp(`\\b${k}: '`, 'g')) ?? []).length), [3, 3])
 

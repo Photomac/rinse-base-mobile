@@ -12,6 +12,12 @@
 // The state lives in useStayRating, owned by the screen: the card and the ask
 // at Complete pick and save the same rating, so a star tapped on the card is
 // already picked in the ask, and a rating saved by the ask shows on the card.
+//
+// Under 5 stars needs photos when the company asks for them (CKS 2026-11-10,
+// lib/stayPhotos): the card's Save and the ask's "Save and complete" wait for
+// them, and the ask hides Skip meanwhile ("so they can't save it, or back out
+// of it, without taking the pictures"); the stars can still change. The app is
+// the gate: nothing on the server refuses the rating (see lib/stayPhotos).
 
 import React, { useEffect, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Modal, ActivityIndicator } from 'react-native'
@@ -19,6 +25,11 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { STAY_FLAGS, type StayValue } from '../lib/stayAsk'
 import { saveStayRating } from '../lib/stayRating'
+import { requiredFromRead, stayPhotoCount, photosShort, needsPhotos } from '../lib/stayPhotos'
+import { cachedRead } from '../lib/dataCache'
+import { stayPhotosTenantRead, stayPhotosRead } from '../lib/jobReads'
+import { queuedJobPhotos } from '../lib/photoQueue'
+import { ti } from '../lib/i18n'
 import { SLATE_DARK, GOLD, CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT } from '../lib/theme'
 
 export interface StayRating {
@@ -33,6 +44,14 @@ export interface StayRating {
   setNote: (text: string) => void
   /** Save what is picked (lib/stayRating: the outbox). */
   save: () => Promise<{ error: any; queued: boolean }>
+  /** The company's number of photos a rating under 5 stars needs (0 = off). */
+  photosRequired: number
+  /** The clean's Before/Damage photos, landed or on their way. */
+  photoCount: number
+  /** How many more the picked rating needs before it saves (0 = none). */
+  photosShort: number
+  /** Count the photos again (the photo screen closed). */
+  refreshPhotos: () => void
 }
 
 /** The clean's stay rating. `enabled` = the card shows: nothing is read before. */
@@ -45,6 +64,11 @@ export function useStayRating(job: any, user: any, enabled: boolean): StayRating
   const [dirty, setDirty] = useState(false)
   // The crew picked something before the read came back: their picks stay.
   const touched = useRef(false)
+  // The photo rule (lib/stayPhotos): the company's number, and the count.
+  const [required, setRequired] = useState(0)
+  const [photoCount, setPhotoCount] = useState(0)
+  const [photoTick, setPhotoTick] = useState(0)
+  const tenantId: string | undefined = user?.tenant_id || job?.tenant_id
 
   // Any rating already on this clean (read-back if reopened).
   useEffect(() => {
@@ -64,6 +88,25 @@ export function useStayRating(job: any, user: any, enabled: boolean): StayRating
     return () => { active = false }
   }, [job.id, enabled])
 
+  // The company's number (a database without the column, or no answer and
+  // nothing saved, is 0: off), then, only when it asks for photos, the count.
+  useEffect(() => {
+    if (!enabled || !tenantId) return
+    let active = true
+    ;(async () => {
+      const need = requiredFromRead(await cachedRead(stayPhotosTenantRead(tenantId)).catch(() => null))
+      if (!active) return
+      setRequired(need)
+      if (!need) return
+      const [server, queued] = await Promise.all([
+        cachedRead(stayPhotosRead(job.id)).then(r => r.data, () => null),
+        queuedJobPhotos(job.id).catch(() => []),
+      ])
+      if (active) setPhotoCount(stayPhotoCount(server, queued))
+    })()
+    return () => { active = false }
+  }, [job.id, enabled, tenantId, photoTick])
+
   function edit() { touched.current = true; setDirty(true) }
 
   return {
@@ -79,7 +122,37 @@ export function useStayRating(job: any, user: any, enabled: boolean): StayRating
       if (!res.error) { setSaved(true); setDirty(false) }
       return res
     },
+    photosRequired: required,
+    photoCount,
+    photosShort: photosShort(rating, required, photoCount),
+    refreshPhotos: () => setPhotoTick(n => n + 1),
   }
+}
+
+/** Under 5 stars, with the company asking for photos: "Photos k of N", what
+ *  is still needed, and Take photos. Nothing otherwise. */
+function StayPhotosRow({ stay, onTakePhotos }: { stay: StayRating; onTakePhotos?: () => void }) {
+  const { t } = useLang()
+  if (!needsPhotos(stay.value.rating, stay.photosRequired)) return null
+  const need = stay.photosRequired
+  const short = stay.photosShort > 0
+  return (
+    <View style={[styles.photosRow, short ? styles.photosRowShort : styles.photosRowOk]}>
+      <Text style={[styles.photosCount, { color: short ? '#92400E' : '#065F46' }]}>
+        {ti(t('stay_photos_count'), { n: String(Math.min(stay.photoCount, need)), need: String(need) })}{short ? '' : ' ✓'}
+      </Text>
+      {short && (
+        <Text style={styles.photosNeed}>
+          {need === 1 ? t('stay_photos_need_one') : ti(t('stay_photos_need_many'), { need: String(need) })}
+        </Text>
+      )}
+      {!!onTakePhotos && (
+        <TouchableOpacity style={styles.photosBtn} onPress={onTakePhotos} disabled={stay.saving}>
+          <Text style={styles.photosBtnText}>📷 {t('stay_photos_take')}</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  )
 }
 
 /** The five stars and the flags: the card's and the ask's. */
@@ -111,15 +184,16 @@ function StayPicker({ stay }: { stay: StayRating }) {
   )
 }
 
-export function StayRatingCard({ stay, readOnly = false, onError }: { stay: StayRating; readOnly?: boolean; onError?: (message: string) => void }) {
+export function StayRatingCard({ stay, readOnly = false, onError, onTakePhotos }: { stay: StayRating; readOnly?: boolean; onError?: (message: string) => void; onTakePhotos?: () => void }) {
   const { t } = useLang()
   const { rating, flags, note } = stay.value
 
-  const canSave = rating > 0 && !(stay.saved && !stay.dirty)
+  // Under 5 stars, short of the company's photos: not saved (lib/stayPhotos).
+  const canSave = rating > 0 && !(stay.saved && !stay.dirty) && stay.photosShort === 0
   const btnLabel = stay.saving ? '…' : (stay.saved && !stay.dirty) ? `✓ ${t('stay_saved')}` : stay.saved ? t('stay_update') : t('stay_save')
 
   async function save() {
-    if (!rating) return
+    if (!rating || stay.photosShort > 0) return
     const { error } = await stay.save()
     if (error) onError?.(error.message || String(error))
   }
@@ -154,6 +228,7 @@ export function StayRatingCard({ stay, readOnly = false, onError }: { stay: Stay
       <Text style={styles.sub}>{t('stay_rating_sub')}</Text>
 
       <StayPicker stay={stay} />
+      <StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />
 
       <TextInput
         style={styles.note}
@@ -179,15 +254,20 @@ export function StayRatingCard({ stay, readOnly = false, onError }: { stay: Stay
  * and didn't save is already picked here. Closing it any other way (Android's
  * back button) neither saves nor completes.
  */
-export function StayAskModal({ visible, stay, onSaveAndComplete, onSkip, onClose }: {
+export function StayAskModal({ visible, stay, onSaveAndComplete, onSkip, onClose, onTakePhotos }: {
   visible: boolean
   stay: StayRating
   onSaveAndComplete: () => void
   onSkip: () => void
   onClose: () => void
+  /** Opens the photo screen on Before; the sheet comes back when it closes. */
+  onTakePhotos?: () => void
 }) {
   const { t } = useLang()
   const picked = stay.value.rating > 0
+  // Under 5 stars and short of the company's photos (lib/stayPhotos): neither
+  // saved nor skipped. Picking 5 stars, or taking the photos, opens both again.
+  const short = stay.photosShort
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.askOverlay}>
@@ -195,17 +275,20 @@ export function StayAskModal({ visible, stay, onSaveAndComplete, onSkip, onClose
           <Text style={styles.askTitle}>{t('stay_rating_title')}</Text>
           <Text style={styles.sub}>{t('stay_rating_sub')}</Text>
           <StayPicker stay={stay} />
-          <TouchableOpacity style={[styles.askSaveBtn, (!picked || stay.saving) && styles.saveBtnDisabled]}
-            onPress={onSaveAndComplete} disabled={!picked || stay.saving}>
+          <StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />
+          <TouchableOpacity style={[styles.askSaveBtn, (!picked || stay.saving || short > 0) && styles.saveBtnDisabled]}
+            onPress={onSaveAndComplete} disabled={!picked || stay.saving || short > 0}>
             {stay.saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.saveBtnText}>✓ {t('stay_ask_save_complete')}</Text>}
           </TouchableOpacity>
           {/* Kept in place once a star is picked: the sheet sits on the bottom
               edge, so a line going away would move the stars and flags up
               under the next tap. */}
           <Text style={[styles.hint, picked && { opacity: 0 }]}>{t('stay_tap_star')}</Text>
-          <TouchableOpacity style={styles.askSkipBtn} onPress={onSkip} disabled={stay.saving}>
-            <Text style={styles.askSkipText}>{t('stay_ask_skip')}</Text>
-          </TouchableOpacity>
+          {short === 0 && (
+            <TouchableOpacity style={styles.askSkipBtn} onPress={onSkip} disabled={stay.saving}>
+              <Text style={styles.askSkipText}>{t('stay_ask_skip')}</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </Modal>
@@ -235,4 +318,12 @@ const styles = StyleSheet.create({
   askSaveBtn: { backgroundColor: '#10B981', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 10 },
   askSkipBtn: { borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 8, backgroundColor: '#F3F4F6' },
   askSkipText: { color: TEXT_MUTED, fontSize: 14, fontWeight: '700' },
+  // Under 5 stars: the photos it needs (StayPhotosRow).
+  photosRow: { borderWidth: 1, borderRadius: 10, padding: 10, marginBottom: 10 },
+  photosRowShort: { borderColor: '#FDE68A', backgroundColor: '#FFFBEB' },
+  photosRowOk: { borderColor: '#A7F3D0', backgroundColor: '#ECFDF5' },
+  photosCount: { fontSize: 13, fontWeight: '800' },
+  photosNeed: { fontSize: 12, color: '#92400E', marginTop: 4, lineHeight: 17 },
+  photosBtn: { marginTop: 8, borderRadius: 8, paddingVertical: 9, alignItems: 'center', backgroundColor: SLATE_DARK },
+  photosBtnText: { color: '#fff', fontSize: 13, fontWeight: '800' },
 })

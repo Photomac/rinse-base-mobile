@@ -4,7 +4,7 @@
 // "An inspection passed while the cleaner was still working at TQ": in the 60
 // days to 2026-11-10, 37 of CKS's 335 filed inspections were filed before
 // their clean was completed (16 of them within 15 minutes). rinse-base-app
-// 20261110140000_inspection_stays_with_clean refuses it in the database
+// 20261110145359_inspection_stays_with_clean refuses it in the database
 // (trg_zy_guard_inspection_waits_for_clean, errcode 23514): filing a record
 // (job_inspections.completed_at going from empty to set) while its clean
 // (parent_job_id → jobs.status, read in the record's company) isn't
@@ -20,6 +20,19 @@
 // 'completed' (another status, or no row) waits. Only a read that fails (no
 // signal, an error) can't tell, and filing goes ahead as it did before this:
 // the server still refuses, and its message is shown.
+//
+// HELD UNTIL THE CLEAN IS DONE (CKS, Catherine 2026-11-10): "Nichole and I
+// can be done and off work before some of our cleaners are." An INSPECTOR (or
+// the office) who files before the clean is completed now has the record
+// HELD: the app writes job_inspections.held_at instead of completed_at, the
+// server stamps the time and who held it, completes the visit, and files the
+// record itself the moment the crew completes the clean (guest ready goes out
+// then). Anyone else (Mia at TQ: not an inspector) still waits, as above.
+// Who may hold is the server's call, asked through the RPC
+// inspection_filing_mode(p_parent_job_id, p_tenant_id) -> 'file' | 'hold' |
+// 'wait' (rinse-base-app, the hold migration), the same rule its guard uses.
+// Before that migration (or with no signal) the RPC fails and the app falls
+// back to the status read above: not completed waits, a failed read files.
 //
 // Pure: no imports, so scripts/test-inspection-waits.mjs loads it as is.
 
@@ -49,4 +62,47 @@ export async function checkCleanGate(
   let read: CleanRead | null = null
   try { read = await readStatus(parentJobId) } catch { read = null }
   return cleanGate(parentJobId, read)
+}
+
+/** What filing does now: 'file' (no clean, or it's completed), 'hold' (its
+ *  clean isn't completed and the server lets this person hold it until it
+ *  is), 'wait' (its clean isn't completed; nothing is written). */
+export type FilingMode = 'file' | 'hold' | 'wait'
+
+/** The server's answer, as supabase-js returns an rpc(). */
+export interface ModeRead {
+  data: unknown
+  error: unknown
+}
+
+/** The RPC's answer as a mode, or null when it can't tell (an error: the
+ *  function isn't there yet, no signal; or an answer it doesn't know). */
+export function modeFromRpc(read: ModeRead | null): FilingMode | null {
+  if (!read || read.error) return null
+  return read.data === 'file' || read.data === 'hold' || read.data === 'wait' ? read.data : null
+}
+
+/** Asks the server (only when the record has a clean); when it can't tell,
+ *  falls back to reading the clean's status (checkCleanGate: 'file' or
+ *  'wait', never 'hold': only the server says who may hold). */
+export async function checkFilingMode(
+  parentJobId: unknown,
+  tenantId: unknown,
+  askMode: (cleanId: string, tenantId: string) => PromiseLike<ModeRead>,
+  readStatus: (cleanId: string) => PromiseLike<CleanRead>,
+): Promise<FilingMode> {
+  if (typeof parentJobId !== 'string' || parentJobId.trim() === '') return 'file'
+  let mode: FilingMode | null = null
+  if (typeof tenantId === 'string' && tenantId.trim() !== '') {
+    let read: ModeRead | null = null
+    try { read = await askMode(parentJobId, tenantId) } catch { read = null }
+    mode = modeFromRpc(read)
+  }
+  return mode ?? checkCleanGate(parentJobId, readStatus)
+}
+
+/** A record the inspector filed early, waiting for its clean: held_at set,
+ *  completed_at still empty. A row from before the column reads as not held. */
+export function isHeld(rec: { held_at?: unknown; completed_at?: unknown } | null | undefined): boolean {
+  return !!rec && !!rec.held_at && !rec.completed_at
 }

@@ -195,6 +195,8 @@ const SCENARIOS = [
   'walkthroughTrickle',
   'carriedLinesRideAlong',
   'carriedPhotoFailureNeverFailsThePack',
+  'stayPhotosRuleRidesAlong',
+  'stayPhotosRuleBeforeMigration',
 ]
 
 try {
