@@ -390,11 +390,16 @@ export const clockInSiteRead = (jobId: string): CacheRead => ({
 
 // ── Supplies (JobInventoryScreen) ───────────────────────────────────────────
 
+// A line the office marked "Not at this home" (address_inventory.not_supplied,
+// web migration 20261111164723: no dishwasher, no pods) isn't on the crew's
+// list. The column must be live before this ships: filtering on a column that
+// doesn't exist is a 400 and an empty Supplies screen.
 export const inventoryItemsRead = (addrId: string): CacheRead => ({
   key: `inv:items:${addrId}`,
   q: () => supabase.from('address_inventory')
     .select('id, item_name, category, par_level, unit, room_id')
     .eq('address_id', addrId)
+    .eq('not_supplied', false)
     .order('category', { nullsFirst: false })
     .order('item_name'),
 })
