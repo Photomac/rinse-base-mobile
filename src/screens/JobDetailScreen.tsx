@@ -27,6 +27,7 @@ import { IncidentReportCard } from '../components/IncidentReportCard'
 import { uploadImageToJobPhotos } from '../lib/chatAttachments'
 import { InspectionResultCard } from '../components/InspectionResultCard'
 import { CarriedLinesCard } from '../components/CarriedLinesCard'
+import { ArrivalPrepCard } from '../components/ArrivalPrepCard'
 import { PickupBagsCard } from '../components/PickupBagsCard'
 import { CrewNoteBanner, CrewNoteModal } from '../components/CrewNoteModal'
 import { CheckFirstCard, CheckFirstModal, type CheckFirstView } from '../components/CheckFirst'
@@ -2368,6 +2369,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
         {/* What the last inspection here found and no inspection has cleared
             since: before and after Start (open cleans only; lib/carriedLines). */}
         {!isTask && !walkthroughJob && <CarriedLinesCard job={job} />}
+        {/* What the arrival prep recorded of how the guest left the home, when
+            the office linked one to this clean (lib/arrivalPrep): its photos,
+            and how many videos to watch on the web. Nothing without one. */}
+        {!isTask && <ArrivalPrepCard job={job} />}
         {/* A laundry pickup lists the bags for its crew's cleans that day. */}
         <PickupBagsCard job={job} />
         {/* The office's note for this clean, pinned on top. */}

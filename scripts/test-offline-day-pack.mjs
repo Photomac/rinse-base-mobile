@@ -53,6 +53,7 @@ const SCREENS = {
   'src/lib/suppliesCard.ts': 'Supplies',
   'src/lib/walkthroughCard.ts': 'the walkthrough',
   'src/lib/carriedLinesCard.ts': 'the stop\'s "Missed at the last inspection" card',
+  'src/lib/arrivalPrepCard.ts': 'the stop\'s "From the arrival prep" card',
 }
 for (const [file, what] of Object.entries(SCREENS)) {
   const src = read(file)
@@ -99,6 +100,9 @@ const carriedCard = read('src/components/CarriedLinesCard.tsx')
 const ownReads = src => /\b(?:cachedRead|cachedQuery|readSoon)\(|supabase\.from\(/.test(src)
 check('the "Missed at the last inspection" card makes no reads of its own',
   !ownReads(carriedCard) && /loadCarried\(job, /.test(carriedCard))
+const arrivalCard = read('src/components/ArrivalPrepCard.tsx')
+check('the "From the arrival prep" card makes no reads of its own',
+  !ownReads(arrivalCard) && /loadArrivalPrep\(job, /.test(arrivalCard))
 check('Supplies and the walkthrough make no reads of their own',
   !ownReads(supplies) && /suppliesCard\(\{ show, setLoading \}\)/.test(supplies) && !ownReads(walk) && /walkthroughCard\(\{ show, setLoading \}\)/.test(walk))
 const setters = ['function setQty(', 'function setRemaining(', 'function toggleLow(', 'function setNotes(']
@@ -194,6 +198,8 @@ const SCENARIOS = [
   'walkthroughOnAHangingLink',
   'walkthroughTrickle',
   'carriedLinesRideAlong',
+  'arrivalPrepOnAHangingLink',
+  'arrivalPrepTrickle',
   'carriedPhotoFailureNeverFailsThePack',
   'stayPhotosRuleRidesAlong',
   'stayPhotosRuleBeforeMigration',

@@ -65,7 +65,7 @@ for (const L of ['es', 'pt']) {
 
 // The same word in that language (or no words at all), on purpose.
 const SAME = {
-  es: ['error', 'no', 'ok', 'ok_btn', 'verify_ok', 'role_inspector', 'to_type_personal', 'check_first_ticked_by', 'team_m', 'tab_chat', 'oe_len_m', 'oe_len_hm'],
+  es: ['error', 'no', 'ok', 'ok_btn', 'verify_ok', 'role_inspector', 'to_type_personal', 'check_first_ticked_by', 'team_m', 'tab_chat', 'oe_len_m', 'oe_len_hm', 'arrival_videos_head'],
   pt: ['ok', 'ok_btn', 'verify_ok', 'check_first_ticked_by', 'team_m', 'tab_chat', 'oe_len_m', 'oe_len_hm'],
 }
 for (const L of ['es', 'pt']) {
