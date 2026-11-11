@@ -84,7 +84,7 @@ const STOP_KEYS = (J: string) => [
   `chkrows:${J}`, `jobmeta:${J}`, `crew:${J}`, `crewclock:${J}`, `time:${J}:${U}`, `time:${J}:job`,
   `photos:${J}`, `pshot:${J}`, `signoffs:${J}`, `inv:log:${J}`, `inv:extras:${J}`, `nextarr:${J}`,
   `route:${J}:${U}`, `cilsite:${J}`, `crewnote:${J}`, `crewnoteack:${J}:${U}`, `crewNoteAck:${J}:${U}`, `wtlines:${J}`, `wtphotos:${J}`, `wtcarry:${J}`, `wtasks:${J}`,
-  `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`, `videosowed:${J}`, `linevids:${J}`, `srphotos:${J}`,
+  `cfticks:${J}`, `cfphotos:${J}`, `cfstart:${J}`, `videosowed:${J}`, `linevids:${J}`, `srphotos:${J}`, `arrprep:${J}`,
 ]
 const PROPERTY_KEYS = (A: string) => [
   `tmpl:${A}`, `rooms:${A}`, `addrmode:${A}`, `preq:${A}`, `propmeta:${A}`, `leadnotes:${A}`,
@@ -191,6 +191,7 @@ const scenarios: Record<string, () => Promise<void>> = {
       walkthroughAsksRead: () => R.walkthroughAsksRead(J),
       trashDaysRead: () => R.trashDaysRead(A),
       carriedLinesRead: () => R.carriedLinesRead(J),
+      arrivalPrepRead: () => R.arrivalPrepRead(J),
       prepReads: () => R.prepReads(CREW, [j], '2026-10-13'),
       // The linen driver's week: one key per person, kept (not a job's or a property's).
       driverStopsRead: () => R.driverStopsRead(CREW, new Date()),

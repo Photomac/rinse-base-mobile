@@ -519,6 +519,21 @@ export const carriedLinesRead = (jobId: string): CacheRead => ({
   q: () => supabase.rpc('walkthrough_carried_lines', { p_job_id: jobId }, { get: true }),
 })
 
+/** The arrival prep this clean hangs off, if the office linked one
+ *  (rinse-base-app job_arrivals, 20261111123505_arrival_hangs_off_its_turnover:
+ *  job_id = the arrival, parent_job_id = this clean), with who was on it, its
+ *  photos and its video ids, in one read (lib/arrivalPrep). Every embed is
+ *  hinted: job_arrivals has two foreign keys into jobs, job_assignments two
+ *  into users. Crew can read all of it company-wide (job_arrivals_select,
+ *  job_photos_select, job_videos_select). An empty list: nothing linked. */
+export const arrivalPrepRead = (jobId: string): CacheRead => ({
+  key: `arrprep:${jobId}`,
+  q: () => supabase.from('job_arrivals')
+    .select('job_id, arrival:jobs!job_arrivals_job_id_fkey(id, status, scheduled_start, started_at, crew:job_assignments!job_assignments_job_id_fkey(is_lead, users!job_assignments_user_id_fkey(full_name)), job_photos!job_photos_job_id_fkey(id, photo_url, photo_type, caption, created_at, taken_at, users!job_photos_user_id_fkey(full_name)), job_videos!job_videos_job_id_fkey(id))')
+    .eq('parent_job_id', jobId)
+    .limit(1),
+})
+
 // ── "Get ready for today" (PrepCard) ────────────────────────────────────────
 
 /** The cleans the prep card covers: still ahead of (or under) the crew, at a
@@ -683,6 +698,8 @@ const JOB_KEYS = new Set(['cilsite', 'chkrows', 'jobmeta', 'crew', 'crewclock', 
   'srphotos',
   // lib/lineVideos: the clean's lines that ask for a clip or a question, with their clips and answers
   'linevids',
+  // lib/arrivalPrep: the arrival prep this clean hangs off, with its photos
+  'arrprep',
   // lib/crewNote: "Got it" remembered on this device (dataCache:crewNoteAck:<job>:<user>)
   'crewNoteAck', 'videosowed'])
 const PROPERTY_KEYS = new Set(['tmpl', 'rooms', 'addrmode', 'preq', 'propmeta', 'leadnotes', 'wttrash', 'cflines'])
@@ -762,6 +779,9 @@ export function jobPackReads(job: any, user: any): PackRead[] {
   // What the last inspection here found and no inspection has cleared since
   // (the crew card at the top of the clean).
   if (!isTask && addrId) reads.push(carriedLinesRead(job.id))
+  // The arrival prep this clean hangs off, with its photos (the crew card
+  // "From the arrival prep"). The rows only: the photo files are not saved.
+  if (!isTask) reads.push(arrivalPrepRead(job.id))
   // The Supplies screen (cleans and inspections), with what's already
   // flagged low at the home, the company's counts switch and its two-choice
   // restock switch.

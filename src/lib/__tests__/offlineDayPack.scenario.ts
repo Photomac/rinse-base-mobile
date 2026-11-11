@@ -161,6 +161,19 @@ function seedServer() {
       { id: 'tk1', tenant_id: T, job_id: 'J-red', line_id: 'cf1', user_id: U, line_text: 'Water all the plants', ticked_at: at('2026-10-13T20:00:00Z'), created_at: at('2026-10-13T20:00:00Z'), users: { full_name: 'Nichole' } },
     ],
     job_time_entries: [], job_room_signoffs: [], job_photos: [], job_crew_note_acks: [],
+    // J-red hangs off an arrival prep the office linked (rinse-base-app
+    // 20261111123505_arrival_hangs_off_its_turnover), embedded as PostgREST
+    // returns it: the arrival, its crew, its photos and its video ids.
+    job_arrivals: [
+      { job_id: 'J-arr', parent_job_id: 'J-red', arrival: {
+        id: 'J-arr', status: 'completed', scheduled_start: at('2026-10-14T15:00:00Z'), started_at: at('2026-10-14T15:04:00Z'),
+        crew: [{ is_lead: true, users: { full_name: 'Dana Reyes' } }],
+        job_photos: [
+          { id: 'ap1', photo_url: 'https://x/storage/v1/object/public/job-photos/arr/1.jpg', photo_type: 'before', caption: null, created_at: at('2026-10-14T15:06:00Z'), taken_at: at('2026-10-14T15:05:00Z'), users: { full_name: 'Dana Reyes' } },
+        ],
+        job_videos: [{ id: 'av1' }, { id: 'av2' }],
+      } },
+    ],
   }
   // What a line asks beyond its tick (rinse-base-app 20261106190000_checklist_line_videos):
   // every line a plain tick unless a scenario says otherwise.
@@ -484,6 +497,65 @@ const scenarios: Record<string, () => Promise<void>> = {
     h.download = undefined
   },
 
+  // CKS, 2026-11-11: the arrival prep films and photographs how the guest
+  // left the home before the turnover crew get there (lib/arrivalPrep). Its
+  // card is one read, saved with the stop; on a dead link the saved copy shows
+  // within the wait, and at once once the phone knows the link is down.
+  async arrivalPrepOnAHangingLink() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    ok('evening: the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+    ok('the arrival prep rides along with her stop, none for a stop with no arrival linked',
+      cachedVal('arrprep:J-red')?.[0]?.arrival?.id === 'J-arr' && Array.isArray(cachedVal('arrprep:J-chapel')) && cachedVal('arrprep:J-chapel').length === 0,
+      JSON.stringify(cachedVal('arrprep:J-chapel')))
+    setClock(MORNING); seedSession()
+    server.mode = 'hang'
+    c = relaunch(); scaleDeadlines(c)
+    const openCard = (job: any) => {
+      const t0 = performance.now()
+      const log: { at: number; v: any }[] = []
+      const done = c.loadArrivalPrep(job, (v: any) => { log.push({ at: performance.now() - t0, v }) })
+      return { log, done }
+    }
+    const o = openCard(JOBS.red)
+    await sleep(CARD_WAIT + 400)
+    const v = o.log[0]?.v
+    ok('the card shows within the wait, not after a read deadline', (o.log[0]?.at ?? Infinity) < CARD_WAIT + 400, `${fmt(o.log[0]?.at)} (deadline ${READ_DEADLINE} ms)`)
+    ok('...the saved copy: who, the photo as the guest left it, 2 videos',
+      v?.who?.join() === 'Dana R.' && v?.photos?.length === 1 && v?.photos?.[0]?.group === 'before' && v?.videos === 2 && v?.stage === 'done',
+      JSON.stringify(v))
+    await o.done
+    ok('the live read gives up: nothing newer, one show', o.log.length === 1, `${o.log.length} show(s)`)
+    const n = openCard(JOBS.chapel)
+    await n.done
+    ok('a stop with no arrival: nothing to show, at once (the last request failed)', n.log.length === 1 && n.log[0].v === null && n.log[0].at < 150, fmt(n.log[0]?.at))
+  },
+
+  // A trickle: the arrival is under way, and its photos land while the card
+  // is open on a slow link. The saved copy shows within the wait; the live
+  // answer replaces it.
+  async arrivalPrepTrickle() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    ok('evening: the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+    setClock(MORNING); seedSession()
+    const arr = server.tables.job_arrivals[0].arrival
+    arr.job_photos.push(
+      { id: 'ap2', photo_url: 'https://x/storage/v1/object/public/job-photos/arr/2.jpg', photo_type: 'issue', caption: 'Wine on the rug', created_at: '2026-10-14T15:08:00.000Z', taken_at: null, users: { full_name: 'Dana Reyes' } },
+      { id: 'ap3', photo_url: 'https://x/storage/v1/object/public/job-photos/arr/3.jpg', photo_type: 'after', caption: null, created_at: '2026-10-14T15:40:00.000Z', taken_at: null, users: { full_name: 'Dana Reyes' } },
+    )
+    server.slow.job_arrivals = 900
+    c = relaunch(); scaleDeadlines(c)
+    const t0 = performance.now()
+    const log: { at: number; v: any }[] = []
+    await c.loadArrivalPrep(JOBS.red, (v: any) => { log.push({ at: performance.now() - t0, v }) })
+    ok('two shows: the saved copy within the wait, then the live answer', log.length === 2 && log[0].at < CARD_WAIT + 400, log.map(l => fmt(l.at)).join(', '))
+    ok('the live answer: as the guest left it, then the damage, then after the prep',
+      log[1]?.v?.photos?.map((p: any) => `${p.group}:${p.id}`).join() === 'before:ap1,damage:ap2,after:ap3',
+      JSON.stringify(log[1]?.v?.photos?.map((p: any) => p.id)))
+    delete server.slow.job_arrivals
+  },
+
 
   // The CKS morning: the office dispatches tonight, the phone is on home Wi-Fi
   // with the app open, and tomorrow the first stop has no signal at all.
@@ -553,6 +625,8 @@ const scenarios: Record<string, () => Promise<void>> = {
       // Its Check first card and the local check before Complete
       cften: R.checkFirstTenantRead(T), cflines: R.checkFirstLinesRead(addrId),
       cfticks: R.checkFirstTicksRead(job.id), cfphotos: R.checkFirstPhotosRead(job.id), cfstart: R.checkFirstStartRead(job.id),
+      // Its "From the arrival prep" card
+      arrprep: R.arrivalPrepRead(job.id),
     }
     const got: Record<string, any> = {}
     const missing: string[] = []
@@ -562,6 +636,10 @@ const scenarios: Record<string, () => Promise<void>> = {
     }
     ok('every read the stop\'s screen makes comes back from the phone', missing.length === 0, missing.join(', ') || `${Object.keys(screen).length} reads`)
     ok('the door code', got.propmeta.data?.lockbox_code === '4321', String(got.propmeta.data?.lockbox_code))
+    ok('the arrival prep it hangs off: who, its photo, its 2 videos',
+      got.arrprep.data?.[0]?.arrival?.crew?.[0]?.users?.full_name === 'Dana Reyes' &&
+      got.arrprep.data?.[0]?.arrival?.job_photos?.[0]?.photo_type === 'before' && got.arrprep.data?.[0]?.arrival?.job_videos?.length === 2,
+      JSON.stringify(got.arrprep.data))
     ok('the WiFi, name and password exactly as stored', got.propmeta.data?.wifi_name === 'RedRockCasita-Guest' && got.propmeta.data?.wifi_password === 'desert sky 22!',
       `${got.propmeta.data?.wifi_name} / ${got.propmeta.data?.wifi_password}`)
     ok('the arrival instructions', /gate code 1122/.test(got.propmeta.data?.arrival_instructions || ''), String(got.propmeta.data?.arrival_instructions))
@@ -1896,6 +1974,7 @@ function scaleDeadlines(c: any) {
   c.PHOTO_COUNT_WAIT.ms = CARD_WAIT
   c.SUPPLIES_WAIT.ms = CARD_WAIT
   c.WALKTHROUGH_WAIT.ms = CARD_WAIT
+  c.ARRIVAL_WAIT.ms = CARD_WAIT
 }
 
 /** Open the stop's screen: a new card, its first load, every show and every
