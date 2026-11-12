@@ -34,6 +34,7 @@ import { fmtWallTime } from '../lib/nextArrival'
 import { bagLine } from '../lib/laundryBags'
 import { fmtTimeAt, fmtDate, dayKey, todayKey } from '../lib/timezone'
 import { GOLD_MUTED, SLATE, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
+import { mapsUrl } from '../lib/mapsLink'
 
 type Ticks = { linen_dropped_at: string | null; linen_collected_at: string | null }
 
@@ -126,8 +127,8 @@ export function DriverStopsCard({ user, reloadKey }: { user: any; reloadKey?: un
   }
 
   function openMaps(addr: any) {
-    const q = addr?.lat ? `${addr.lat},${addr.lng}` : [addr?.street, addr?.city].filter(Boolean).join(', ')
-    if (q) Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(q)}`).catch(() => {})
+    const url = mapsUrl(addr)
+    if (url) Linking.openURL(url).catch(() => {})
   }
 
   const dayLabel = (day: string, first: any) => day === today ? t('today')
