@@ -53,6 +53,7 @@ import { completeWhileUploading, type WhileUploading } from '../lib/photoBlocker
 import { readHoldAnswer, whoHasThePhotos, type HoldAnswer } from '../lib/photosOnTheWay'
 import { cachedRead } from '../lib/dataCache'
 import { noteCachedJobs } from '../lib/cachePrune'
+import { mapsUrl, withPropertyLocation, type MapsAddress } from '../lib/mapsLink'
 // Every cached read here is built in lib/jobReads, shared with the offline day
 // pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
 import { crewClockRead, checkFirstStartRead, videosOwedRead } from '../lib/jobReads'
@@ -326,7 +327,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const [jobStartAt, setJobStartAt] = useState<string | null>(job.started_at ?? null)
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
-  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null; lockbox_code?: string | null; wifi_name?: string | null; wifi_password?: string | null; arrival_instructions?: string | null } | null>(null)
+  const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null; lockbox_code?: string | null; wifi_name?: string | null; wifi_password?: string | null; arrival_instructions?: string | null } & MapsAddress | null>(null)
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
   // What the clock-in location check decided, for the punch that follows it.
@@ -2499,10 +2500,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           })()}
           {(!isTask || hasTaskLocation) && (
           <TouchableOpacity onPress={() => {
-            const q = addr?.lat ? `${addr.lat},${addr.lng}` : `${addr?.street}, ${addr?.city}`
-            Linking.openURL(`https://maps.google.com/?q=${encodeURIComponent(q)}`)
+            // The property's own read (pin, zip) over whatever the opening list
+            // carried: lib/mapsLink.
+            const url = mapsUrl(withPropertyLocation(addr, propMeta))
+            if (url) Linking.openURL(url).catch(() => {})
           }}>
-            <Text style={styles.address}>📍 {addr?.street}, {addr?.city}</Text>
+            <Text style={styles.address}>📍 {[addr?.street, addr?.city].filter(Boolean).join(', ')}</Text>
           </TouchableOpacity>
           )}
           {(propMeta?.bedrooms != null || propMeta?.bathrooms != null || propMeta?.sqft != null) && (
