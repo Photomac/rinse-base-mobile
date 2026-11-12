@@ -32,6 +32,7 @@ import { SLATE_DARK, GOLD, SLATE } from '../lib/theme'
 import { cachedQuery } from '../lib/dataCache'
 import { fmtTimeAt, fmtDate, fmtDatePart, dayClocksOf } from '../lib/timezone'
 import { boardQuery, boardJobsFor, offeredFirstTo } from '../lib/openJobs'
+import { isCalendarMade } from '../lib/calendarMade'
 
 const RESULT_KEY: Record<string, string> = {
   full: 'open_jobs_r_full',
@@ -65,7 +66,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const now = new Date()
     const res = await cachedQuery(`openjobs:${user.tenant_id}`, boardQuery(supabase
       .from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, max_crew, open_for_claims_at, open_to_all_at, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, default_crew, timezone), service_types(name), job_assignments(user_id, claimed_at)'),
+      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, reservation_id, max_crew, open_for_claims_at, open_to_all_at, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, default_crew, timezone), service_types(name), job_assignments(user_id, claimed_at)'),
       user.tenant_id, now))
     setOffline(res.fromCache)
     const rows = res.data ?? []
@@ -151,7 +152,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
                   <TouchableOpacity style={{ flex: 1 }} onPress={() => onJobPress(job)}>
                     <Text style={styles.mineTitle} numberOfLines={1}>
                       {addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street)}
-                      {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
+                      {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}
                     </Text>
                     <Text style={styles.jobMeta}>{fmtDate(job.scheduled_start, localeFor(lang), { weekday: 'short', month: 'short', day: 'numeric' })} · {fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang), boardDays)}</Text>
                   </TouchableOpacity>
@@ -199,7 +200,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
                 <View style={{ flex: 1 }}>
                   <Text style={styles.jobTitle} numberOfLines={2}>
                     {label}
-                    {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
+                    {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}
                   </Text>
                   <Text style={styles.jobMeta}>
                     {fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang), boardDays)} · {ti(t('open_jobs_hours'), { h: String(hrs) })}

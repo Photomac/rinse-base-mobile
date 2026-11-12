@@ -86,7 +86,7 @@ export const HANDLED_TAPS_KEY = 'pushTap:handled'
 
 /** ScheduleScreen's columns, so the job screen gets the row it gets from
  *  Schedule. scripts/test-push-tap.mjs fails if the two drift apart. */
-export const SCHEDULE_JOB_SELECT = 'id, job_number, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url, timezone), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))'
+export const SCHEDULE_JOB_SELECT = 'id, job_number, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, reservation_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url, timezone), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))'
 
 /** The saved reads a tap looks in with no signal, best first: Home's day
  *  (lib/jobReads dashTodayRead, which the offline day pack keeps), then
