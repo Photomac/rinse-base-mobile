@@ -50,6 +50,12 @@ check('the recorder: muted, 720p, the walkthrough bitrate, H.264 on iPhone, at m
    /maxDuration: REPORT_CLIP_MAX_SECONDS/.test(rec), /activateKeepAwakeAsync\(KEEP_AWAKE_TAG\)/.test(rec), /ImagePicker|MediaLibrary/.test(rec)],
   [true, true, true, true, true, true, false])
 check('a report clip runs at most a minute', /export const REPORT_CLIP_MAX_SECONDS = 60/.test(queue), true)
+check('its file is never overwritten (x-upsert false); "already there" is taken as landed',
+  [/'x-upsert': entry\.video_type === 'report' \? 'false' : 'true'/.test(queue), /const alreadyThere = entry\.video_type === 'report' && \(res\.status === 409 \|\| \/Duplicate\|already exists\/i\.test\(message\)\)/.test(queue)],
+  [true, true])
+check('its file is named after its row (the web table requires <company>/<clean>/report_<row id>.<ext>)',
+  /storagePath: `\$\{p\.tenant_id\}\/\$\{p\.job_id\}\/\$\{p\.video_type === 'line' \? 'line' : p\.video_type === 'report' \? 'report' : 'walkthrough'\}_\$\{id\}\.\$\{ext\}`/.test(queue)
+    && /\/\/ Also the job_videos primary key/.test(queue) && /id: entry\.id, tenant_id: entry\.tenant_id, report_id: entry\.incident_report_id/.test(queue), true)
 check('the heads-up waits for the report\'s videos as for its photos, and names its report',
   [notify.indexOf('pendingIncidentPhotos(n.report_id)') < notify.indexOf('pendingReportVideos(n.report_id)'),
    /if \(await pendingReportVideos\(n\.report_id\) > 0\) \{ keep\.push\(n\); continue \}/.test(notify), /report_id: n\.report_id,/.test(notify)],
@@ -69,7 +75,8 @@ if (mig) {
   const m = readFileSync(join(migDir, mig), 'utf8')
   const cols = ['id', 'tenant_id', 'report_id', 'job_id', 'user_id', 'storage_path', 'video_url', 'mime_type', 'duration_seconds', 'size_bytes', 'recorded_at']
   check('every column the phone writes is on the web table', cols.filter(c => !new RegExp(`\\n  ${c} `).test(m)), [])
-  check('…its file is the phone\'s path under <company>/<clean>/ in job-videos', /starts_with\(storage_path, tenant_id::text \|\| '\/' \|\| job_id::text \|\| '\/'\)/.test(m) && /job-videos\/' \|\| storage_path/.test(m), true)
+  check('…its file is the phone\'s name for it: <company>/<clean>/report_<row id>.mp4|.mov in job-videos', /'\/report_' \|\| id::text \|\| '\.mp4'/.test(m) && /'\/report_' \|\| id::text \|\| '\.mov'/.test(m) && /job-videos\/' \|\| storage_path/.test(m), true)
+  check('…and the uploader\'s overwrite stops at report_* files (so the phone must not ask for one)', /storage\.filename\(name\) not like 'report\\_%'/.test(m), true)
   check('…a report not there yet is 23503 (the clip waits), as the queue expects', /using errcode = '23503'/.test(m) && /references public\.job_damage_reports \(id, tenant_id\)/.test(m), true)
 } else {
   console.log(`–  web half skipped (no *_incident_report_videos.sql under ${migDir}; set RINSEBASE_WEB_REPO)`)

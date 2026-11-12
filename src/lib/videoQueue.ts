@@ -325,9 +325,14 @@ async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
       const ac = new AbortController()
       const timer = setTimeout(() => ac.abort(), timeoutFor(entry.size_bytes))
       try {
+        // A report's file is never overwritten, not even by its uploader
+        // (rinse-base-app 20261112180000 keeps report_* out of the overwrite
+        // rule): its retry asks for no overwrite, and "already there" below
+        // means an earlier try landed. A walkthrough or line clip retries over
+        // its own file as before.
         res = await fetch(
           `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${entry.storagePath}`,
-          { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'x-upsert': 'true' }, body: form, signal: ac.signal },
+          { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'x-upsert': entry.video_type === 'report' ? 'false' : 'true' }, body: form, signal: ac.signal },
         )
       } finally {
         clearTimeout(timer)
@@ -337,7 +342,11 @@ async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
     }
     if (!res.ok) {
       const message = await describeHttpError(res)
-      return { ok: false, kind: res.status < 500 ? 'server' : 'network', message }
+      // Storage answers a name that exists with 409, or with 400 naming it
+      // ("Duplicate", "The resource already exists"): this report clip's file
+      // landed on a try whose answer was lost.
+      const alreadyThere = entry.video_type === 'report' && (res.status === 409 || /Duplicate|already exists/i.test(message))
+      if (!alreadyThere) return { ok: false, kind: res.status < 500 ? 'server' : 'network', message }
     }
   }
 

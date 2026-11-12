@@ -27,16 +27,26 @@ const records = () => net.applied.filter(a => a.table === 'job_videos_on_the_way
   .flatMap(a => (Array.isArray(a.values) ? a.values : [a.values]))
 
 ;(globalThis as any).FormData = class { parts: any = {}; append(k: string, v: any) { this.parts[k] = v } }
-;(globalThis as any).fetch = async (url: string) => {
+// Storage: which names it holds, and the x-upsert each upload asked for.
+const stored = new Set<string>()
+const upserts: string[] = []
+/** The next upload lands but its answer never comes back (the signal drops). */
+let loseUploadAnswer = false
+;(globalThis as any).fetch = async (url: string, init?: any) => {
   if (url.includes('/auth/v1/health')) {
     if (!net.online) throw new TypeError('Network request failed')
     return { ok: true, status: 200, text: async () => '' }
   }
   if (!net.online) throw new TypeError('Network request failed')
   video.uploads.push(url)
+  upserts.push(`${url.includes('/report_') ? 'report' : 'other'}:${init?.headers?.['x-upsert']}`)
+  if (stored.has(url) && init?.headers?.['x-upsert'] !== 'true') {
+    return { ok: false, status: 400, text: async () => JSON.stringify({ statusCode: '409', error: 'Duplicate', message: 'The resource already exists' }) }
+  }
+  stored.add(url)
+  if (loseUploadAnswer) { loseUploadAnswer = false; throw new TypeError('Network request failed') }
   return { ok: true, status: 200, text: async () => '' }
 }
-
 ;(async () => {
   // ── Saved with no signal ────────────────────────────────────────────────
   net.online = false
@@ -83,10 +93,24 @@ const records = () => net.applied.filter(a => a.table === 'job_videos_on_the_way
   const refused = await flushVideoQueue({ force: true })
   ok('a refused row: the clip is kept (evidence), but no longer holds the report\'s heads-up', refused.remaining === 1 && await pendingReportVideos('R3') === 0)
 
+  // ── A file that landed on a try whose answer was lost ───────────────────
+  reports.landed.add('R4')
+  await saveReportClip('J1', 'R4')
+  loseUploadAnswer = true
+  await flushVideoQueue({ force: true })
+  ok('the file landed but its answer was lost: the clip stays', await pendingReportVideos('R4') === 1)
+  await flushVideoQueue({ force: true })
+  ok('…the retry finds it already there ("Duplicate", no overwrite asked): taken as landed, the row goes in', await pendingReportVideos('R4') === 0
+    && reports.inserts.some((r: any) => r.report_id === 'R4'))
+  ok('a report clip\'s upload never asks to overwrite its file; a walkthrough still does', upserts.filter(u => u.startsWith('report:')).every(u => u === 'report:false')
+    && upserts.some(u => u.startsWith('report:')))
+
   // ── A walkthrough clip is unchanged ─────────────────────────────────────
   await enqueueVideo({ uri: 'file:///cache/J2-walk.mp4', tenant_id: 'T', job_id: 'J2', user_id: 'U', video_type: 'after', duration_seconds: 40, recorded_at: AT })
   await settle()
   ok('a walkthrough clip is still announced and listed as before', records().some((r: any) => r.job_id === 'J2' && r.video_type === 'after') && (await queuedJobVideos('J2')).length === 1)
+  await flushVideoQueue({ force: true })
+  ok('…and its upload still retries over its own file (x-upsert true)', upserts.includes('other:true'))
 
   console.log(failures ? `\n${failures} FAILED` : '\nall passed')
   if (failures) process.exit(1)
