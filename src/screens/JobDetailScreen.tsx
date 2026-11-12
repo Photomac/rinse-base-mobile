@@ -76,7 +76,7 @@ import {
   firstClockIn, startedAt, localBlockers, tickRow, seenRow, TICK_CONFLICT, SEEN_CONFLICT,
   type CheckFirstLine, type CheckFirstTick,
 } from '../lib/checkFirst'
-import { isMyJob, notAssignedHere, type Roster } from '../lib/jobScope'
+import { isMyJob, notAssignedHere, isOfficeRole, type Roster } from '../lib/jobScope'
 import { isRepairVisit, returnVisitValues, notesWithoutPhotoLinks, isLookAndQuoteNotes } from '../lib/repairVisit'
 import { RepairVisitPhotos } from '../components/RepairVisitPhotos'
 import { RepairQuoteCard } from '../components/RepairQuoteCard'
@@ -2586,6 +2586,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           )}
           {isRepairVisit(job) && <RepairVisitPhotos reportId={job.source_report_id} notes={job.internal_notes} />}
           {isRepairVisit(job) && <RepairQuoteCard visitId={job.id} addressId={job.client_addresses?.id || job.address_id} status={job.status}
+            canMove={isOfficeRole(user.role)}
             onMoved={start => {
               const length = new Date(job.scheduled_end).getTime() - new Date(job.scheduled_start).getTime()
               const patch: EditedPatch = { scheduled_start: start, scheduled_end: new Date(new Date(start).getTime() + length).toISOString() }

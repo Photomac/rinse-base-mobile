@@ -83,9 +83,23 @@ check('not a price', ['', 'abc', '-5', '1.234'].map(parseQuoteAmount), [null, nu
 check('the screen shows the quote card on a repair visit only', /\{isRepairVisit\(job\) && <RepairQuoteCard visitId=\{job\.id\}/.test(screen), true)
 check('the card shows nothing unless the visit has a review', card.includes("if (!review) return null"), true)
 check('the quote and the move go through their functions, never a table write', [/submit_repair_quote/.test(card), /move_repair_review_visit/.test(card), /repair_review_days/.test(card), /\.(update|insert|upsert|delete)\(/.test(card)], [true, true, true, false])
-check('moving is offered only before the visit starts', card.includes("status === 'scheduled' && !!addressId"), true)
+check('moving is offered only to the office, before the visit starts', card.includes("status === 'scheduled' && canMove && !!addressId"), true)
 check('a moved visit updates the screen', /onMoved=\{start =>[\s\S]{0,300}onJobEdited\?\.\(patch\)/.test(screen), true)
 check('English, Spanish and Portuguese have the card', (i18n.match(/\bquote_title: '/g) || []).length, 3)
+
+// Only the office moves a look-and-quote visit (CKS 2026-11-12: no crew member
+// moves or cancels a clean or a visit; rinse-base-app migration
+// review_visit_move_office_only refuses them). Crew are told to ask the office.
+const { isOfficeRole } = await import(join(repo, 'src/lib/jobScope.ts'))
+check('the office roles are the ones the database lets move it',
+  ['owner', 'admin', 'manager', 'dispatcher', 'lead_cleaner', 'cleaner', 'trainee', 'maintenance', 'inspector', 'laundry_runner', 'laundry_attendant', '', null, undefined].map(isOfficeRole),
+  [true, true, true, true, false, false, false, false, false, false, false, false, false, false])
+check('the card needs canMove (no default)', /\bcanMove: boolean\b/.test(card), true)
+check('the screen passes the signed-in role through isOfficeRole', /<RepairQuoteCard [^>]*?canMove=\{isOfficeRole\(user\.role\)\}/.test(screen), true)
+check('crew see "ask the office" instead of the days', /status === 'scheduled' && !canMove && \([\s\S]{0,160}quote_ask_office/.test(card), true)
+check('English, Spanish and Portuguese say it', (i18n.match(/\bquote_ask_office: '/g) || []).length, 3)
+check('the move call is only behind the office branch (one call site)', (card.match(/rpc\('move_repair_review_visit'/g) || []).length, 1)
+check('a refused move still shows the database\'s words (an older app gets them too)', /rpc\('move_repair_review_visit'[\s\S]{0,120}if \(error\) \{ Alert\.alert\('', error\.message\); return \}/.test(card), true)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)

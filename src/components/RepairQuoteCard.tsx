@@ -1,7 +1,11 @@
 // src/components/RepairQuoteCard.tsx
 // A look-and-quote visit's card on the job screen: one price and a note, which
-// land on the incident for the office, and the property's upcoming empty days to
-// move the visit to (rinse-base-app migration 20261031140206_repair_review_quote).
+// land on the incident for the office, and, for the office only, the property's
+// upcoming empty days to move the visit to (rinse-base-app migration
+// 20261031140206_repair_review_quote). Crew can't move it: no crew member moves
+// or cancels a clean or a visit (CKS 2026-11-12; rinse-base-app migration
+// review_visit_move_office_only refuses them), so they see "ask the office".
+// An older app that still offers the days shows the database's refusal.
 // Shows nothing on any other visit, on a database without repair_reviews, or
 // offline, where the notes still say it's a look and quote. The web crew view has
 // its own copy (src/components/RepairQuoteCard.tsx).
@@ -17,10 +21,12 @@ import { parseQuoteAmount } from '../lib/repairVisit'
 type Review = { id: string; amount: number | null; note: string | null; submitted_at: string | null; decision: string | null }
 type Day = { day: string; kind: 'empty' | 'between' }
 
-export function RepairQuoteCard({ visitId, addressId, status, onMoved }: {
+export function RepairQuoteCard({ visitId, addressId, status, canMove, onMoved }: {
   visitId: string
   addressId?: string | null
   status: string
+  /** The office (isOfficeRole): offered the empty days. Crew are told to ask the office. */
+  canMove: boolean
   /** The visit's new start. */
   onMoved?: (start: string) => void
 }) {
@@ -113,7 +119,12 @@ export function RepairQuoteCard({ visitId, addressId, status, onMoved }: {
           {!!review.submitted_at && <Text style={styles.sent}>{t('quote_sent')}</Text>}
         </>
       )}
-      {status === 'scheduled' && !!addressId && (
+      {status === 'scheduled' && !canMove && (
+        <View style={styles.moveBox}>
+          <Text style={styles.hint}>{t('quote_ask_office')}</Text>
+        </View>
+      )}
+      {status === 'scheduled' && canMove && !!addressId && (
         <View style={styles.moveBox}>
           {days == null ? (
             <TouchableOpacity onPress={openDays} accessibilityRole="button"><Text style={styles.moveLink}>{t('quote_move')}</Text></TouchableOpacity>
