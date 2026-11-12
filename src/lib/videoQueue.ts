@@ -1,7 +1,9 @@
 // src/lib/videoQueue.ts
 // Offline-resilient uploads for walkthrough videos (the proof-of-condition
 // recordings from WalkthroughScreen) and for line clips (a checklist line that
-// asks for a video, lib/lineVideos: video_type 'line' with the line's id). Same
+// asks for a video, lib/lineVideos: video_type 'line' with the line's id), and
+// for incident reports (video_type 'report' with the report's id: the row goes
+// to incident_report_videos, rinse-base-app 20261112180000; CKS 2026-11-12). Same
 // shape as photoQueue — persist the
 // file, queue its metadata, upload now or whenever signal returns — but its
 // OWN queue key, directory and lock, on purpose:
@@ -37,8 +39,15 @@ export const WALKTHROUGH_MAX_BYTES = 45 * 1024 * 1024
 export const WALKTHROUGH_BITRATE = 2_500_000
 
 export type WalkthroughType = 'before' | 'after'
-/** A walkthrough video, or a clip recorded for one checklist line (lib/lineVideos). */
-export type VideoType = WalkthroughType | 'line'
+/** A walkthrough video, a clip recorded for one checklist line (lib/lineVideos),
+ *  or a video on an incident report. */
+export type VideoType = WalkthroughType | 'line' | 'report'
+
+/** An incident report's video runs at most a minute (the recorder stops it). */
+export const REPORT_CLIP_MAX_SECONDS = 60
+/** How many passes a report clip waits for its report to reach the server (it
+ *  may still be in the outbox) before it counts as refused. */
+const REPORT_WAIT_PASSES = 30
 
 export interface PendingVideo {
   // Also the job_videos primary key, so a retry after a lost response hits a
@@ -63,6 +72,10 @@ export interface PendingVideo {
   /** The server refused the line (deleted while the clip waited for signal): the clip
    *  goes on without it, still a line clip with its caption. */
   lineDropped?: boolean
+  /** A report clip: the job_damage_reports row it belongs to. */
+  incident_report_id?: string | null
+  /** A report clip: passes it has waited for its report to land. */
+  reportWaits?: number
   // The file already reached storage; only the row insert is outstanding.
   stored?: boolean
   attempts?: number
@@ -119,6 +132,8 @@ export async function enqueueVideo(p: {
   video_type: VideoType; duration_seconds: number; recorded_at: string
   /** A line clip's line and caption (lib/lineVideos). */
   checklist_item_id?: string | null; caption?: string | null
+  /** A report clip's report (its row goes to incident_report_videos). */
+  incident_report_id?: string | null
 }): Promise<void> {
   await ensureDir()
   const id = uuid4()
@@ -147,7 +162,7 @@ export async function enqueueVideo(p: {
     // The bucket is public, so the name is the only secret: the row's uuid
     // rather than a timestamp plus six random digits. The database requires
     // this <tenant>/<job>/ prefix and the exact public URL of this path.
-    storagePath: `${p.tenant_id}/${p.job_id}/${p.video_type === 'line' ? 'line' : 'walkthrough'}_${id}.${ext}`,
+    storagePath: `${p.tenant_id}/${p.job_id}/${p.video_type === 'line' ? 'line' : p.video_type === 'report' ? 'report' : 'walkthrough'}_${id}.${ext}`,
     mimeType: 'video/mp4',
     tenant_id: p.tenant_id,
     job_id: p.job_id,
@@ -158,6 +173,7 @@ export async function enqueueVideo(p: {
     recorded_at: p.recorded_at,
     created_at: Date.now(),
     ...(p.video_type === 'line' ? { checklist_item_id: p.checklist_item_id ?? null, caption: p.caption ?? null } : {}),
+    ...(p.video_type === 'report' ? { incident_report_id: p.incident_report_id ?? null } : {}),
   }
   const q = await readQueue()
   q.push(entry)
@@ -219,7 +235,9 @@ async function readAnnounced(): Promise<string[]> {
 
 async function announceOnce(): Promise<void> {
   const told = new Set(await readAnnounced())
-  const due = (await readQueue()).filter(v => !told.has(v.id))
+  // A report's video is no walkthrough: it never counts toward the videos a
+  // company requires, so the server isn't told it's on its way.
+  const due = (await readQueue()).filter(v => !told.has(v.id) && v.video_type !== 'report')
   if (!due.length) return
   // A line clip names its line, which is what lets it count for that line. A
   // walkthrough record is sent exactly as before (no checklist_item_id key: a
@@ -271,7 +289,7 @@ function timeoutFor(sizeBytes: number | null): number {
   return Math.min(45 * 60_000, Math.max(240_000, Math.round((bytes / 20_000) * 1000)))
 }
 
-type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; noToken?: boolean; lineDropped?: boolean }
+type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; noToken?: boolean; lineDropped?: boolean; waiting?: boolean }
 
 async function describeHttpError(res: Response): Promise<string> {
   let detail = `HTTP ${res.status}`
@@ -307,9 +325,14 @@ async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
       const ac = new AbortController()
       const timer = setTimeout(() => ac.abort(), timeoutFor(entry.size_bytes))
       try {
+        // A report's file is never overwritten, not even by its uploader
+        // (rinse-base-app 20261112180000 keeps report_* out of the overwrite
+        // rule): its retry asks for no overwrite, and "already there" below
+        // means an earlier try landed. A walkthrough or line clip retries over
+        // its own file as before.
         res = await fetch(
           `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${entry.storagePath}`,
-          { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'x-upsert': 'true' }, body: form, signal: ac.signal },
+          { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'x-upsert': entry.video_type === 'report' ? 'false' : 'true' }, body: form, signal: ac.signal },
         )
       } finally {
         clearTimeout(timer)
@@ -319,11 +342,39 @@ async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
     }
     if (!res.ok) {
       const message = await describeHttpError(res)
-      return { ok: false, kind: res.status < 500 ? 'server' : 'network', message }
+      // Storage answers a name that exists with 409, or with 400 naming it
+      // ("Duplicate", "The resource already exists"): this report clip's file
+      // landed on a try whose answer was lost.
+      const alreadyThere = entry.video_type === 'report' && (res.status === 409 || /Duplicate|already exists/i.test(message))
+      if (!alreadyThere) return { ok: false, kind: res.status < 500 ? 'server' : 'network', message }
     }
   }
 
   const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(entry.storagePath)
+  if (entry.video_type === 'report') {
+    // The report's row (incident_report_videos): its id is this entry's, so a
+    // retry after a lost answer is a duplicate key (23505), taken as landed.
+    // 23503: the report isn't on the server yet (still in the outbox), so the
+    // clip waits for it rather than failing.
+    try {
+      const res: any = await supabase.from('incident_report_videos').insert({
+        id: entry.id, tenant_id: entry.tenant_id, report_id: entry.incident_report_id, job_id: entry.job_id, user_id: entry.user_id,
+        storage_path: entry.storagePath, video_url: urlData.publicUrl, mime_type: entry.mimeType,
+        duration_seconds: entry.duration_seconds, size_bytes: entry.size_bytes, recorded_at: entry.recorded_at,
+      })
+      if (res.error && res.error.code !== '23505') {
+        if (res.status === 0) return { ok: false, kind: 'network', message: res.error.message, stored: true }
+        if (res.error.code === '23503' && (entry.reportWaits ?? 0) < REPORT_WAIT_PASSES) {
+          return { ok: false, kind: 'network', message: res.error.message, stored: true, waiting: true }
+        }
+        return { ok: false, kind: 'server', message: res.error.message, stored: true }
+      }
+    } catch (e: any) {
+      return { ok: false, kind: 'network', message: e?.message || 'Network request failed', stored: true }
+    }
+    try { await FileSystem.deleteAsync(resolveLocal(entry.localUri), { idempotent: true }) } catch { /* ignore */ }
+    return { ok: true }
+  }
   let lineDropped = false
   const rowFor = (withLine: boolean) => ({
     id: entry.id,
@@ -419,6 +470,12 @@ export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ upl
       }
       const result = await uploadOne(entry)
       if (result.ok) { uploaded++; continue }
+      // A report clip whose report hasn't landed yet: not this clip's trouble
+      // and not the signal's; it goes again on the next pass.
+      if (result.waiting) {
+        survivors.push({ ...entry, stored: true, reportWaits: (entry.reportWaits ?? 0) + 1, lastErrorKind: undefined, lastError: result.message, nextAttemptAt: undefined })
+        continue
+      }
       // No signal stops the pass: the rest would fail the same way. The server
       // answering means this clip is the trouble, so the next one gets its turn.
       const clipFailed = result.kind === 'network' && !result.noToken && await serverAnswers()
@@ -472,14 +529,26 @@ export interface QueuedJobVideo {
   lastError: string | null
 }
 
-/** This job's videos still on the device, for listing next to uploaded ones. */
+/** This job's videos still on the device, for listing next to uploaded ones.
+ *  Not a report's video: it is no walkthrough or line clip, and never counts
+ *  as one (pendingReportVideos has those). */
 export async function queuedJobVideos(jobId: string): Promise<QueuedJobVideo[]> {
   return (await readQueue())
-    .filter(v => v.job_id === jobId)
+    .filter(v => v.job_id === jobId && v.video_type !== 'report')
     .map(v => ({
       id: v.id, video_type: v.video_type, checklist_item_id: lineOf(v), duration_seconds: v.duration_seconds, size_bytes: v.size_bytes,
       created_at: v.created_at, failing: v.lastErrorKind === 'server', stuck: (v.failures ?? 0) >= STUCK_AFTER, fileGone: !!v.fileGone, lastError: v.lastError ?? null,
     }))
+}
+
+/** How many of this report's videos are still on their way from this phone
+ *  (its heads-up waits for them, lib/incidentNotify, as it waits for its
+ *  photos). One that can never land (its file gone, or refused by the server)
+ *  doesn't hold the heads-up: the office still hears of the report, and the
+ *  queue has reported the clip. */
+export async function pendingReportVideos(reportId: string): Promise<number> {
+  return (await readQueue()).filter(v => v.video_type === 'report' && v.incident_report_id === reportId
+    && !v.fileGone && v.lastErrorKind !== 'server').length
 }
 
 /** Jobs with a video still in the queue (lib/cachePrune keeps their offline copy). */
