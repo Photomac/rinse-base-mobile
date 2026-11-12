@@ -427,7 +427,9 @@ function AppInner() {
       // An SOS goes first and on its own: it must never wait behind a photo
       // upload that can take minutes on one bar.
       flushSOSQueue().catch(() => {})
-      flushVideoQueue().catch(() => {})
+      // A report's heads-up waits for its videos too (lib/incidentNotify): once
+      // the videos are up, it may go.
+      flushVideoQueue().catch(() => {}).then(() => flushIncidentNotifies()).catch(() => {})
       flushQueue().catch(() => {}).then(() => flushOutbox()).catch(() => {}).then(() => flushIncidentNotifies()).catch(() => {})
         .then(() => { if (pack) return prefetchDays(user) }).catch(() => {})
     }
