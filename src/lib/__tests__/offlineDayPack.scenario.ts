@@ -76,7 +76,7 @@ const ADDR: Record<string, any> = {
 }
 const addressRow = (a: any) => ({
   wifi_name: null, wifi_password: null,
-  ...a, tenant_id: T, city: 'Sedona', lat: 34.87, lng: -111.76,
+  ...a, tenant_id: T, city: 'Sedona', state: 'AZ', zip: '86336', lat: 34.87, lng: -111.76, geocode_precision: 'exact',
   photo_url: `https://cbnbhwclbtowfbjylnph.supabase.co/storage/v1/object/public/job-photos/${a.id}.jpg`,
   bedrooms: 2, bathrooms: 2, sqft: 1400, beds: 3, sleeps: 6, crew_notes: 'Hot tub cover stays on.',
   laundry_bag_color: 'Blue bags', laundry_bag_count: 2, staging_photos: [{ url: 'https://example.com/stage.jpg' }],
