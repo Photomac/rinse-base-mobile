@@ -91,13 +91,15 @@ function jobRow(id: string, start: string, status: string, crew: string[], addr:
     id, job_number: ++jobNo, tenant_id: T, status, address_id: addr, client_id: 'c-1',
     scheduled_start: at(start), scheduled_end: at(new RealDate(RealDate.parse(start) + 3 * 3600_000).toISOString()),
     is_turnover: true, route_order: null, window_minutes: null, job_type: 'clean', internal_notes: '', source_report_id: null,
+    // Calendar-made, like a synced turnover (lib/calendarMade's 📅).
+    reservation_id: `res-${id}`,
     seam_access_code: null, laundry_done_onsite: false, pet_fee_applied: false, checkout_time: null, checkin_time: null, urgency: null,
     crew_note: null, crew_note_at_clock_in: false, started_at: null,
     clients: { full_name: 'Red Rock Rentals', phone: '555-0100', client_type: 'property_manager' },
     client_addresses: { id: a.id, street: a.street, city: 'Sedona', nickname: a.nickname, lockbox_code: a.lockbox_code, timezone: null, lat: 34.87, lng: -111.76, geocode_precision: 'exact', photo_url: addressRow(a).photo_url },
     job_assignments: crew.map(u => ({ user_id: u })),
     crew: crew.map((u, i) => ({ user_id: u, is_lead: i === 0, users: { full_name: NAMES[u] } })),
-    property_reservations: { guest_count: 4, pet_count: 0 },
+    property_reservations: { guest_count: 4, pet_count: 0, platform: 'airbnb', reservation_id: `${id}@airbnb.com` },
     ...extra,
   }
 }

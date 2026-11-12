@@ -86,6 +86,7 @@ import { finishedCleanReadOnly, walkthroughDefault } from '../lib/finishedClean'
 import { showLeadTag } from '../lib/crewNames'
 import { CrewAnswerCard } from '../components/CrewAnswerCard'
 import { OfficeEditSheet, type EditedPatch } from '../components/OfficeEditSheet'
+import { calendarSource, calendarSourceLine, type CalendarSource } from '../lib/calendarMade'
 const TEAL = GOLD
 const NAVY = SLATE_DARK
 
@@ -376,6 +377,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // job row (sync-ical keeps them fresh on drift); bag color lives on the property.
   const [turnover, setTurnover] = useState<{ checkout: string | null; checkin: string | null; window: number | null; urgency: string | null } | null>(null)
   const [guestCount, setGuestCount] = useState<number | null>(null)
+  // Where the booking behind this clean came from (lib/calendarMade); null = the office made it.
+  const [calSource, setCalSource] = useState<CalendarSource | null>(null)
   const [nextArrival, setNextArrival] = useState<NextArrival | null>(null)
   // Pets the PMS says are on the stay (property_reservations.pet_count). null =
   // the source didn't say — iCal never does.
@@ -688,6 +691,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
         window: (jr as any).window_minutes,
         urgency: (jr as any).urgency,
       })
+      setCalSource(calendarSource((jr as any).property_reservations, !!(jr as any).reservation_id))
       const gc = (jr as any).property_reservations?.guest_count
       if (gc) setGuestCount(gc)
       const pc = (jr as any).property_reservations?.pet_count
@@ -2433,6 +2437,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             </View>
           )}
           <Text style={styles.timeRow}>🕐 {fmtTimeRangeAt(job.scheduled_start, job.scheduled_end, job.client_addresses, locale)}</Text>
+          {/* 📅 A booking made this clean: where it came from (lib/calendarMade). */}
+          {calSource && (
+            <Text style={{ fontSize: 12, fontWeight: '600', color: '#374151', marginTop: 2 }}>{calendarSourceLine(calSource, t)}</Text>
+          )}
           {/* The office moves the clean or changes its crew from the road. */}
           {canEditClean(user.role, job) && (
             <TouchableOpacity style={styles.editBtn} onPress={() => setShowEdit(true)}>
