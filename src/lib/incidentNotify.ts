@@ -7,7 +7,10 @@
 // report exists on the server AND its photos are attached — the email carries
 // the first photo, and a heads-up for a report the owner can't open yet is
 // worse than a late one. Pending sends live here, on-device, and are retried by
-// the same drain that flushes the photo queue and the outbox.
+// the same drain that flushes the photo queue and the outbox. A report's videos
+// (lib/videoQueue, 'report' clips) hold it the same way: at a company that
+// sends reports to the client automatically, this heads-up is what sends it,
+// so it must not go before its videos have landed (CKS 2026-11-12).
 //
 // The same goes for an answer to a send-back (the office sent a report back
 // with a note, 2026-10-23): "Send it back" queues the new photos and the
@@ -18,6 +21,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from './supabase'
 import { pendingIncidentPhotos, photosAheadOfAnswer } from './photoQueue'
+import { pendingReportVideos } from './videoQueue'
 
 const KEY = 'incidentNotifyPending.v1'
 const ANSWERS_KEY = 'incidentSendBackAnswers.v1'
@@ -110,13 +114,14 @@ export async function flushIncidentNotifies(): Promise<void> {
     for (const n of list) {
       if (Date.now() - n.created_at > MAX_AGE_MS) continue
       if (await pendingIncidentPhotos(n.report_id) > 0) { keep.push(n); continue }
+      if (await pendingReportVideos(n.report_id) > 0) { keep.push(n); continue }
       const { data: report, error } = await supabase.from('job_damage_reports')
         .select('id, photo_urls').eq('id', n.report_id).maybeSingle()
       if (error || !report) { keep.push(n); continue }   // offline, or still in the outbox
       try {
         const { error: fnError } = await supabase.functions.invoke('notify-damage-report', {
           body: {
-            job_id: n.job_id, tenant_id: n.tenant_id, report_type: n.report_type, severity: n.severity,
+            job_id: n.job_id, tenant_id: n.tenant_id, report_id: n.report_id, report_type: n.report_type, severity: n.severity,
             title: n.title, room: n.room, photo_url: (report as any).photo_urls?.[0] || null, recipients: 'owner',
           },
         })

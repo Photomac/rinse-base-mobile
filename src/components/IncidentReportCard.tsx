@@ -10,6 +10,11 @@
 // guest-belonging wording (lf_* keys) and skips the severity rating.
 // A deep clean needs a photo of each thing tapped before it saves (CKS
 // 2026-10-23: "the photo is the review"); each is queued with what it is of.
+// A report can carry videos too (CKS 2026-11-12): recorded in the app over the
+// form (ReportClipRecorder: muted, up to a minute), queued with the report on
+// Save as video_type 'report' (lib/videoQueue; the row goes to
+// incident_report_videos), and the heads-up waits until they've uploaded, as
+// it waits for the photos (lib/incidentNotify).
 // Icons/colors per type MUST stay in sync with the web DamageReportTab
 // REPORT_TYPES and the notify-damage-report email TYPE_ICON map.
 // (Table/function names keep the legacy "damage report" identifiers on purpose.)
@@ -21,6 +26,9 @@ import { ensureCameraCapture } from '../lib/permissions'
 import { persistCapturedPhoto, discardCapturedPhoto, enqueueIncidentPhoto, flushQueue } from '../lib/photoQueue'
 import { writeThrough, uuid4 } from '../lib/outbox'
 import { queueIncidentNotify, flushIncidentNotifies } from '../lib/incidentNotify'
+import { enqueueVideo, flushVideoQueue } from '../lib/videoQueue'
+import { ReportClipRecorder, reportClipClock, type ReportClip } from './ReportClipRecorder'
+import * as FileSystem from 'expo-file-system/legacy'
 import { supabase } from '../lib/supabase'
 import { roomLabel } from '../lib/rooms'
 import { useLang } from '../contexts/LangContext'
@@ -93,6 +101,9 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
   const [deepOther, setDeepOther] = useState('')
   // Its photos by slot (an item id, or 'other'): local uris, one of each required.
   const [deepPhotos, setDeepPhotos] = useState<Record<string, string[]>>({})
+  // Videos recorded for this report, still on the phone until Save queues them.
+  const [clips, setClips] = useState<ReportClip[]>([])
+  const [recOpen, setRecOpen] = useState(false)
 
   useEffect(() => {
     if (presetKey > 0) { setOpen(true); setRoomId(presetRoom?.id || '') }
@@ -140,12 +151,20 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
     setTitle(''); setDescription(''); setPhotoUrls([]); setOpen(false)
     setLinenItemId(''); setLinenQty(1); setLinenCond('stained'); setRoomId('')
     setDeepItems([]); setDeepOtherOn(false); setDeepOther(''); setDeepPhotos({})
+    setClips([]); setRecOpen(false)
+  }
+
+  // A clip the report won't keep: its file goes.
+  function dropClip(uri: string) {
+    FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {})
+    setClips(c => c.filter(x => x.uri !== uri))
   }
 
   // Discard the form: its photos were never queued, so delete their files.
   function cancel() {
     photoUrls.forEach(u => { discardCapturedPhoto(u) })
     Object.values(deepPhotos).flat().forEach(u => { discardCapturedPhoto(u) })
+    clips.forEach(c => { FileSystem.deleteAsync(c.uri, { idempotent: true }).catch(() => {}) })
     reset()
   }
 
@@ -225,6 +244,14 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
           await enqueueIncidentPhoto({ localUri, tenant_id: user.tenant_id, job_id: job.id, user_id: user.id, incident_report_id: reportId })
         }
       }
+      // Its videos, through the walkthrough videos' queue: they upload in the
+      // background and attach to the report once it's on the server.
+      for (const c of clips) {
+        await enqueueVideo({
+          uri: c.uri, tenant_id: user.tenant_id, job_id: job.id, user_id: user.id, video_type: 'report',
+          duration_seconds: c.duration, recorded_at: c.recordedAt, incident_report_id: reportId,
+        })
+      }
 
       // Mirror a linen report into the linen ledger — the same job_inventory_log
       // row the Supplies screen, the owner's pull sheet "Linen issues" and the
@@ -261,6 +288,7 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
       // survives no signal and still carries the first photo.
       await queueIncidentNotify({ report_id: reportId, job_id: job.id, tenant_id: user.tenant_id, report_type: reportType, severity: sev, title: finalTitle, room: roomName })
       void flushQueue().then(() => flushIncidentNotifies()).catch(() => {})
+      if (clips.length) void flushVideoQueue().then(() => flushIncidentNotifies()).catch(() => {})
 
       const icon = type.icon
       reset()
@@ -486,6 +514,21 @@ export function IncidentReportCard({ job, user, rooms = [], presetRoom = null, p
         </TouchableOpacity>
       )}
 
+      {clips.map(c => (
+        <View key={c.uri} style={styles.clipRow}>
+          <Text style={styles.clipText}>🎥 {ti(t('ir_video_row'), { time: reportClipClock(c.duration) })}</Text>
+          <TouchableOpacity onPress={() => dropClip(c.uri)} disabled={saving} accessibilityLabel={t('walkthrough_discard')}>
+            <Text style={styles.clipRemove}>×</Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+      <TouchableOpacity style={styles.photoBtn} onPress={() => setRecOpen(true)} disabled={saving}>
+        <Text style={styles.photoBtnText}>🎥 {t('ir_add_video')}</Text>
+      </TouchableOpacity>
+      {clips.length === 0 && <Text style={[styles.sub, { marginTop: 0 }]}>{t('ir_video_hint')}</Text>}
+      <ReportClipRecorder visible={recOpen} onClose={() => setRecOpen(false)}
+        onUse={c => { setClips(x => [...x, c]); setRecOpen(false) }} />
+
       <View style={styles.actions}>
         <TouchableOpacity style={styles.cancelBtn} onPress={cancel} disabled={saving}>
           <Text style={styles.cancelBtnText}>{t('lf_cancel')}</Text>
@@ -507,6 +550,9 @@ const styles = StyleSheet.create({
   openBtn: { backgroundColor: CARD, borderRadius: 14, paddingVertical: 13, alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: RED + '55', borderStyle: 'dashed' },
   openBtnText: { fontSize: 14, fontWeight: '700', color: RED },
   card: { backgroundColor: CARD, borderRadius: 14, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: RED + '55' },
+  clipRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: BORDER, borderRadius: 9, paddingVertical: 8, paddingHorizontal: 10, marginBottom: 6 },
+  clipText: { fontSize: 12, color: TEXT, fontWeight: '600' },
+  clipRemove: { fontSize: 18, color: TEXT_MUTED, paddingHorizontal: 6 },
   title: { fontSize: 15, fontWeight: '800', color: TEXT },
   sub: { fontSize: 12, color: TEXT_MUTED, marginTop: 2, marginBottom: 12, lineHeight: 17 },
   label: { fontSize: 12, fontWeight: '600', color: TEXT_MUTED, marginBottom: 5 },
