@@ -2753,9 +2753,12 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           )}
 
           {/* On my way — tell dispatch you're heading out (starts GPS early).
-              Mode-agnostic: shows before the clean is started. */}
+              Mode-agnostic: shows before the clean is started.
+              It sits right above Clock in / Start, so it keeps twice the
+              usual gap below it: a thumb aimed at one shouldn't land on the
+              other (Five Star 11/12). */}
           {job.status === 'scheduled' && (
-            <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#8B5CF6', marginTop: 12 }]} onPress={handleOnMyWay} disabled={saving}>
+            <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#8B5CF6', marginTop: 12, marginBottom: 12 }]} onPress={handleOnMyWay} disabled={saving}>
               {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>🚗 {t('on_my_way')}</Text>}
             </TouchableOpacity>
           )}
@@ -3389,7 +3392,11 @@ const styles = StyleSheet.create({
   timeEntryDuration: { fontSize: 12, color: TEAL, fontWeight: '700', marginTop: 2 },
   timeEntryReason: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
   clockBtn: { flex: 1, borderRadius: 12, padding: 14, alignItems: 'center', justifyContent: 'center' },
-  clockBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  // The label takes the button's whole width. Sized to its own text, Android
+  // can measure "🚗 On my way" a little narrower than it draws (bold + an
+  // emoji), wrap "way" onto a second line and clip it: the button read
+  // "🚗 On my" on a Samsung (11/12).
+  clockBtnText: { color: '#fff', fontSize: 14, fontWeight: '700', alignSelf: 'stretch', textAlign: 'center' },
   progressBg: { height: 6, backgroundColor: '#F3F4F6', borderRadius: 3, marginBottom: 14, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: TEAL, borderRadius: 3 },
   checkItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F9FAFB', gap: 12 },
