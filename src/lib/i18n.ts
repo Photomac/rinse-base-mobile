@@ -1178,13 +1178,25 @@ export const translations = {
     oe_saved_crew: "The crew is updated.",
     oe_needs_signal: "Editing a clean needs signal. Try again when you have a connection.",
     oe_load_failed: "Couldn't load this clean. Check your signal and try again.",
-    oe_started: "This clean has started or is closed, so it can only be changed on the web.",
+    oe_closed: "This clean is cancelled or closed, so it can only be changed on the web.",
     oe_try_again: "Try again",
     oe_err_stale: "Someone changed this clean since you opened it. Nothing was saved. This is how it is now.",
     oe_err_record: "Nothing was saved: the move couldn't be recorded ({why}).",
     oe_err_save: "Nothing was saved: {why}",
     oe_err_crew: "The crew couldn't be changed ({why}). Check who is on this clean.",
-    oe_err_crew_time_saved: "The new time is saved, but the crew couldn't be changed ({why}). Check who is on this clean."
+    oe_err_crew_time_saved: "The new time is saved, but the crew couldn't be changed ({why}). Check who is on this clean.",
+    oe_edit_time_btn: "Edit time",
+    oe_title_time: "Edit time",
+    oe_real_label: "What happened",
+    oe_real_done: "Started {start} · Finished {end}",
+    oe_real_running: "Started {start} · still going",
+    oe_real_none: "No Start time was recorded on this clean.",
+    oe_real_tapped_end: "Start was tapped when the clean was already done.",
+    oe_use_real_done: "Use these: {from} to {to}",
+    oe_use_real_running: "Use the real start: {time}",
+    oe_day_locked_started: "This clean has started, so it stays on this day. Change its booked time to match what happened.",
+    oe_crew_started: "The crew can't be changed here once a clean has started.",
+    oe_sum_tell_started: "The clean has started, so nobody is emailed."
   },
   es: {
     // Tarjeta "Tus entregas de ropa de cama" (DriverStopsCard)
@@ -2338,13 +2350,25 @@ export const translations = {
     oe_saved_crew: "El equipo está actualizado.",
     oe_needs_signal: "Para editar una limpieza necesitas señal. Inténtalo de nuevo cuando tengas conexión.",
     oe_load_failed: "No se pudo cargar esta limpieza. Revisa tu señal e inténtalo de nuevo.",
-    oe_started: "Esta limpieza ya empezó o está cerrada, así que solo se puede cambiar en la web.",
+    oe_closed: "Esta limpieza está cancelada o cerrada, así que solo se puede cambiar en la web.",
     oe_try_again: "Intentar de nuevo",
     oe_err_stale: "Alguien cambió esta limpieza desde que la abriste. No se guardó nada. Así está ahora.",
     oe_err_record: "No se guardó nada: no se pudo registrar el cambio ({why}).",
     oe_err_save: "No se guardó nada: {why}",
     oe_err_crew: "No se pudo cambiar el equipo ({why}). Revisa quién está en esta limpieza.",
-    oe_err_crew_time_saved: "La nueva hora quedó guardada, pero no se pudo cambiar el equipo ({why}). Revisa quién está en esta limpieza."
+    oe_err_crew_time_saved: "La nueva hora quedó guardada, pero no se pudo cambiar el equipo ({why}). Revisa quién está en esta limpieza.",
+    oe_edit_time_btn: "Editar hora",
+    oe_title_time: "Editar hora",
+    oe_real_label: "Lo que pasó",
+    oe_real_done: "Empezó {start} · Terminó {end}",
+    oe_real_running: "Empezó {start} · sigue en curso",
+    oe_real_none: "No se registró la hora de inicio de esta limpieza.",
+    oe_real_tapped_end: "El inicio se marcó cuando la limpieza ya estaba terminada.",
+    oe_use_real_done: "Usar estas: de {from} a {to}",
+    oe_use_real_running: "Usar el inicio real: {time}",
+    oe_day_locked_started: "Esta limpieza ya empezó, así que se queda en este día. Cambia su hora reservada para que coincida con lo que pasó.",
+    oe_crew_started: "El equipo no se puede cambiar aquí una vez que la limpieza empezó.",
+    oe_sum_tell_started: "La limpieza ya empezó, así que no se envía ningún correo."
   },
   pt: {
     // Cartão "Suas entregas de roupa de cama" (DriverStopsCard)
@@ -3499,13 +3523,25 @@ export const translations = {
     oe_saved_crew: "A equipe foi atualizada.",
     oe_needs_signal: "Editar uma limpeza precisa de sinal. Tente de novo quando tiver conexão.",
     oe_load_failed: "Não foi possível carregar esta limpeza. Verifique o sinal e tente de novo.",
-    oe_started: "Esta limpeza já começou ou está fechada, então só pode ser alterada na web.",
+    oe_closed: "Esta limpeza está cancelada ou fechada, então só pode ser alterada na web.",
     oe_try_again: "Tentar de novo",
     oe_err_stale: "Alguém alterou esta limpeza depois que você a abriu. Nada foi salvo. Ela está assim agora.",
     oe_err_record: "Nada foi salvo: não foi possível registrar a mudança ({why}).",
     oe_err_save: "Nada foi salvo: {why}",
     oe_err_crew: "Não foi possível alterar a equipe ({why}). Confira quem está nesta limpeza.",
-    oe_err_crew_time_saved: "O novo horário foi salvo, mas não foi possível alterar a equipe ({why}). Confira quem está nesta limpeza."
+    oe_err_crew_time_saved: "O novo horário foi salvo, mas não foi possível alterar a equipe ({why}). Confira quem está nesta limpeza.",
+    oe_edit_time_btn: "Editar horário",
+    oe_title_time: "Editar horário",
+    oe_real_label: "O que aconteceu",
+    oe_real_done: "Começou {start} · Terminou {end}",
+    oe_real_running: "Começou {start} · ainda em andamento",
+    oe_real_none: "Nenhum horário de início foi registrado nesta limpeza.",
+    oe_real_tapped_end: "O início foi marcado quando a limpeza já estava pronta.",
+    oe_use_real_done: "Usar estes: das {from} às {to}",
+    oe_use_real_running: "Usar o início real: {time}",
+    oe_day_locked_started: "Esta limpeza já começou, então fica neste dia. Mude o horário agendado para bater com o que aconteceu.",
+    oe_crew_started: "A equipe não pode ser trocada aqui depois que a limpeza começou.",
+    oe_sum_tell_started: "A limpeza já começou, então ninguém recebe e-mail."
   }
 }
 

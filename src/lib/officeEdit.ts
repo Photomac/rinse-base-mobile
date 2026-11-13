@@ -42,19 +42,54 @@
 //
 // Online only. A move queued offline and replayed hours later would be worse
 // than no move, so nothing here goes through the outbox.
+//
+// A clean already started or finished gets "Edit time" (Five Star, 2026-11-13,
+// Jennifer: "Rosie ran late today bc guests were still in unit but I couldn't
+// figure out how to adjust her timing from the app and I wasn't at my
+// computer"). She re-times cleans after the crew starts them all the time on
+// the web: 15 of her 202 moves, Bingham that morning 13 minutes after Rosie
+// tapped Start, Skyhouse 1002 stretched an hour while it ran. The phone hid the
+// sheet the moment a clean started, and when she tried both of Rosie's cleans
+// that day had started. On a started clean the sheet changes the booked time
+// only, on the clean's own day:
+//   - the day is locked (dayLimits 'started'), so nobody is emailed: the crew
+//     is already there, and a correction isn't client news;
+//   - the crew stays: taking someone off a clean they're working belongs on the
+//     web, where their clock and pay are in view;
+//   - "That time has already passed" isn't a warning here, it's the point;
+//   - the sheet shows what really happened (jobs.started_at / completed_at) and
+//     offers it as the booked time in one tap (realTimes).
+// The write is held to the start the sheet read and a started status; a clean
+// that started while a not-started sheet was open is refused and re-read.
 import { isOfficeRole } from './jobScope'
 import { dayKey, wallTimeInTz, clockInTz, clockOf } from './timezone'
 
-/** Statuses a clean can be edited in: not started. */
+/** Statuses a clean can be fully edited in (time, day, crew): not started. */
 export const EDITABLE_STATUSES = ['pending_approval', 'scheduled', 'en_route']
+/** Statuses where only the booked time changes: started or finished. */
+export const STARTED_STATUSES = ['in_progress', 'completed']
 
-/** Who sees "Edit time & crew", and on what: the office, on a clean that hasn't started. */
-export function canEditClean(role: string | null | undefined, job: { status?: string | null; job_type?: string | null } | null | undefined): boolean {
-  if (!job || !isOfficeRole(role)) return false
+/** What the office may change on this clean: everything ('full'), its booked
+ *  time on its own day ('time'), or nothing (null). Crew never get one. */
+export function editModeFor(role: string | null | undefined, job: { status?: string | null; job_type?: string | null } | null | undefined): 'full' | 'time' | null {
+  if (!job || !isOfficeRole(role)) return null
   // Cleans only for now: an inspection's or task's crew has rules of its own
   // (the booked inspector), which the web owns.
-  if ((job.job_type ?? 'clean') !== 'clean') return false
-  return EDITABLE_STATUSES.includes(String(job.status ?? ''))
+  if ((job.job_type ?? 'clean') !== 'clean') return null
+  const status = String(job.status ?? '')
+  if (EDITABLE_STATUSES.includes(status)) return 'full'
+  if (STARTED_STATUSES.includes(status)) return 'time'
+  return null
+}
+
+/** Who sees the edit button, and on what: the office, on a clean not cancelled or closed. */
+export function canEditClean(role: string | null | undefined, job: { status?: string | null; job_type?: string | null } | null | undefined): boolean {
+  return editModeFor(role, job) !== null
+}
+
+/** Has this clean started (only its booked time can change)? */
+export function cleanStarted(job: { status?: string | null } | null | undefined): boolean {
+  return STARTED_STATUSES.includes(String(job?.status ?? ''))
 }
 
 // ── Lead (rinsebase-app src/lib/leadSelection.ts) ───────────────────────────
@@ -171,6 +206,9 @@ export interface EditBase {
   /** The departing guest's checkout and the next guest's check-in, when the sync knows them. */
   checkout_time: string | null
   checkin_time: string | null
+  /** When the crew tapped Start (server-stamped) and Complete; null until then. */
+  started_at?: string | null
+  completed_at?: string | null
   client_addresses: { id?: string; nickname?: string | null; street?: string | null; max_cleaners?: number | null; min_cleaners?: number | null; timezone?: string | null } | null
   /** Who is on it now: user ids in lead-first order, and the lead ('' for none). */
   crew: string[]
@@ -203,6 +241,33 @@ export function draftFrom(base: EditBase): EditDraft {
   }
 }
 
+/** Start and Complete less than this far apart: Start was tapped when the clean
+ *  was already done, so there's no real length (rinsebase-app cleanDuration.ts). */
+export const TAPPED_AT_END_MINUTES = 2
+
+/** What really happened on a started clean, as a booked time the sheet can take:
+ *  the start it was tapped at, and, once it's done, its real length (both to the
+ *  nearest 5 minutes). In progress, the length stays the draft's: the clean
+ *  moves to when it really began. null when there's nothing to offer: not
+ *  started, no Start stamp, a Start on another day than the booking (the day
+ *  can't change), or a Start tapped at the end. */
+export function realTimes(base: EditBase, currentMinutes: number): { start: { h: number; mi: number }; minutes: number; done: boolean } | null {
+  if (!cleanStarted(base) || !base.started_at) return null
+  const clock = clockOf(base.client_addresses)
+  const FIVE = 5 * 60_000
+  const startMs = Math.round(Date.parse(base.started_at) / FIVE) * FIVE
+  if (!Number.isFinite(startMs)) return null
+  if (dayKey(new Date(startMs), clock) !== dayKey(base.scheduled_start, clock)) return null
+  const start = clockInTz(new Date(startMs), clock)
+  const doneAt = base.status === 'completed' && base.completed_at ? Date.parse(base.completed_at) : NaN
+  if (!Number.isFinite(doneAt)) return { start, minutes: currentMinutes, done: false }
+  const realMinutes = (doneAt - Date.parse(base.started_at)) / 60_000
+  if (!(realMinutes >= TAPPED_AT_END_MINUTES)) return null
+  const endMs = Math.round(doneAt / FIVE) * FIVE
+  const minutes = Math.min(LENGTH_MAX, Math.max(LENGTH_MIN, Math.round((endMs - startMs) / 60_000)))
+  return { start, minutes, done: true }
+}
+
 /** Lengths the sheet steps through: 15 minutes to 12 hours. */
 export const LENGTH_STEP = 15
 export const LENGTH_MIN = 15
@@ -220,8 +285,9 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every(x
 
 export interface EditPlan {
   /** Why it can't be saved yet; null when it can. 'day': a day the clean's
-   *  guests rule out (dayLimits). */
-  problem: 'no_time' | 'day' | 'nothing' | null
+   *  guests rule out, or any other day once it has started (dayLimits).
+   *  'crew_started': a crew change on a started clean. */
+  problem: 'no_time' | 'day' | 'crew_started' | 'nothing' | null
   newStart: string | null
   newEnd: string | null
   timeChanged: boolean
@@ -243,7 +309,9 @@ export function planEdit(base: EditBase, d: EditDraft, limits?: DayLimits): Edit
   const crewChanged = !sameSet(d.crew, base.crew) || (d.crew.length > 0 && d.lead !== base.lead)
   const dayRuledOut = !!limits && dayChanged && !dayAllowed(limits, d.ymd)
   return {
-    problem: dayRuledOut ? 'day' : timeChanged || crewChanged ? null : 'nothing',
+    problem: dayRuledOut ? 'day'
+      : crewChanged && cleanStarted(base) ? 'crew_started'
+      : timeChanged || crewChanged ? null : 'nothing',
     newStart: new Date(startMs).toISOString(),
     newEnd: new Date(endMs).toISOString(),
     timeChanged, dayChanged, crewChanged,
@@ -268,13 +336,15 @@ export function planEdit(base: EditBase, d: EditDraft, limits?: DayLimits): Edit
 /** The booking a turnover belongs between: checkout day, next guest's arrival day. */
 export interface BookingWindow { lo: string; hi: string | null }
 
-export type DayLock = 'back_to_back' | 'arrival_day'
+export type DayLock = 'back_to_back' | 'arrival_day' | 'started'
 
 /** The days a clean may move to ('YYYY-MM-DD', null = open), and why it can't move at all. */
 export interface DayLimits { lo: string | null; hi: string | null; locked: DayLock | null }
 
 export function dayLimits(base: EditBase, w: BookingWindow | null): DayLimits {
   const day = dayKey(base.scheduled_start)
+  // Started or finished: a correction to its time, never a move to another day.
+  if (cleanStarted(base)) return { lo: day, hi: day, locked: 'started' }
   if (base.window_minutes != null) return { lo: day, hi: day, locked: 'back_to_back' }
   const clock = clockOf(base.client_addresses)
   const arrival = base.checkin_time ? dayKey(base.checkin_time, clock) : null
@@ -327,7 +397,8 @@ export function editWarnings(base: EditBase, d: EditDraft, plan: EditPlan, inp: 
       out.push({ code: 'after_checkin', at: base.checkin_time })
     }
     if (d.start && (d.start.h < 7 || d.start.h >= 19)) out.push({ code: 'off_hours' })
-    if (Date.parse(plan.newStart) < inp.nowMs) out.push({ code: 'past' })
+    // A started clean is set to what already happened: the past is the point.
+    if (Date.parse(plan.newStart) < inp.nowMs && !cleanStarted(base)) out.push({ code: 'past' })
   }
   // Who these apply to: everyone on it after the save when the day or crew
   // changes; nobody when only the hour moves on the same day with the same crew
@@ -353,7 +424,7 @@ export function editWarnings(base: EditBase, d: EditDraft, plan: EditPlan, inp: 
 
 // Every FK hinted: an unhinted embed turns into a 300 the day a second FK
 // appears. One literal, so scripts/test-task-pay.mjs can read the columns.
-const BASE_SELECT = 'id, tenant_id, status, job_type, scheduled_start, scheduled_end, manually_retimed_at, min_crew, max_crew, is_turnover, reservation_id, address_id, window_minutes, checkout_time, checkin_time, client_addresses!jobs_address_id_fkey(id, nickname, street, max_cleaners, min_cleaners, timezone), job_assignments!job_assignments_job_id_fkey(user_id, is_lead)'
+const BASE_SELECT = 'id, tenant_id, status, job_type, scheduled_start, scheduled_end, manually_retimed_at, min_crew, max_crew, is_turnover, reservation_id, address_id, window_minutes, checkout_time, checkin_time, started_at, completed_at, client_addresses!jobs_address_id_fkey(id, nickname, street, max_cleaners, min_cleaners, timezone), job_assignments!job_assignments_job_id_fkey(user_id, is_lead)'
 
 /** The clean, read fresh. null + error when it can't be read. */
 export async function loadEditBase(db: any, jobId: string): Promise<{ base: EditBase | null; error: string | null }> {
@@ -463,7 +534,9 @@ export async function saveEdit(db: any, p: {
     recordId = saved.id
   }
 
-  // 2. The clean: only while it still has the start the sheet read and hasn't started.
+  // 2. The clean: only while it still has the start the sheet read and is still
+  // in the state the sheet was opened for (not started; or started, time only).
+  const started = cleanStarted(base)
   const fields: Record<string, unknown> = {
     ...(plan.crewChanged ? crewSizeFields(base, draft.crew.length) : {}),
     ...(plan.timeChanged ? { scheduled_start: plan.newStart, scheduled_end: plan.newEnd, manually_retimed_at: stamp } : {}),
@@ -472,7 +545,7 @@ export async function saveEdit(db: any, p: {
     .update(fields)
     .eq('id', base.id)
     .eq('scheduled_start', base.scheduled_start)
-    .in('status', EDITABLE_STATUSES)
+    .in('status', started ? STARTED_STATUSES : EDITABLE_STATUSES)
     .select('id')
   if (jobErr || !wrote?.length) {
     // Closed as not made: the move never happened, so the activity leaves it out.

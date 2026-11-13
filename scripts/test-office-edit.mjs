@@ -4,7 +4,9 @@
 //
 // Runs the REAL src/lib/officeEdit.ts (with timezone.ts and jobScope.ts) under
 // Node's type stripping and checks:
-//   • who gets the button: the office, on a clean that hasn't started;
+//   • who gets the button: the office, on a clean not cancelled or closed;
+//     everything on one not started, the booked time only once it has
+//     started or finished (Five Star, 2026-11-13);
 //   • the rules copied from the web (lead by seniority, the weekly schedule,
 //     the property's minimum crew): the same cases here, and, when the web repo
 //     is on this machine, the same answers as the web's own code over a grid;
@@ -54,9 +56,16 @@ const clean = (status, job_type = 'clean') => ({ status, job_type })
 check('owner, manager and dispatcher on a scheduled clean',
   ['owner', 'manager', 'dispatcher'].map(r => E.canEditClean(r, clean('scheduled'))), [true, true, true])
 check('crew never', ['lead_cleaner', 'cleaner', 'trainee', 'inspector', null].map(r => E.canEditClean(r, clean('scheduled'))), [false, false, false, false, false])
-check('waiting approval and on the way: yes; started, done, cancelled: no',
+check('waiting approval, on the way, started, done: yes; cancelled, no-show, unknown: no',
   ['pending_approval', 'en_route', 'in_progress', 'paused', 'completed', 'cancelled', 'no_show'].map(s => E.canEditClean('owner', clean(s))),
-  [true, true, false, false, false, false, false])
+  [true, true, true, false, true, false, false])
+check('what can change: everything before it starts, the time once started or done',
+  ['pending_approval', 'scheduled', 'en_route', 'in_progress', 'completed', 'cancelled', 'no_show', 'draft'].map(s => E.editModeFor('admin', clean(s))),
+  ['full', 'full', 'full', 'time', 'time', null, null, null])
+check('crew never, started or not', ['lead_cleaner', 'cleaner', 'trainee', null].map(r => E.editModeFor(r, clean('in_progress'))), [null, null, null, null])
+check('a started inspection or task: still the web\'s', ['inspection', 'task'].map(t => E.editModeFor('owner', clean('in_progress', t))), [null, null])
+check('started = in progress or completed', ['scheduled', 'en_route', 'in_progress', 'completed', 'cancelled', null].map(s => E.cleanStarted({ status: s })),
+  [false, false, true, true, false, false])
 check('cleans only: not an inspection, task or laundry run',
   ['inspection', 'task', 'laundry_run'].map(t => E.canEditClean('owner', clean('scheduled', t))), [false, false, false])
 check('a row with no job_type is a clean', E.canEditClean('manager', { status: 'scheduled' }), true)
@@ -341,6 +350,77 @@ const save = (db, draft, b = base) => E.saveEdit(db, { base: b, draft, me: 'me-1
   check('a lead who isn\'t picked never lands: the first picked leads', db.calls[2].values.map(r => r.is_lead), [true, false])
 }
 
+// ── a clean already started or finished: its booked time only (Five Star, 2026-11-13) ──
+// Rosie's Bingham, moved to New York's clock: booked 10:00–12:30, Start tapped
+// 10:25:34, Complete 12:30:54. Fry: Start tapped 10:27:40, still going.
+const done = { ...base, status: 'completed', started_at: '2026-10-30T14:25:34.488+00:00', completed_at: '2026-10-30T16:30:54.562+00:00' }
+const run = { ...base, status: 'in_progress', started_at: '2026-10-30T14:27:40+00:00', completed_at: null }
+check('started or done: the day is locked, ahead of a back-to-back lock', [
+  E.dayLimits(run, win).locked, E.dayLimits(done, null).locked, E.dayLimits({ ...b2b, status: 'in_progress' }, win).locked, allowed(E.dayLimits(run, win)),
+], ['started', 'started', 'started', []])
+check('… another day can\'t be saved', E.planEdit(run, { ...E.draftFrom(run), ymd: '2026-10-31' }, E.dayLimits(run, null)).problem, 'day')
+check('… nor a crew change, even without the day rule', [
+  E.planEdit(run, { ...E.draftFrom(run), crew: ['gina'], lead: 'gina' }).problem,
+  E.planEdit(done, { ...E.draftFrom(done), lead: 'gina' }).problem,
+], ['crew_started', 'crew_started'])
+const stretched = E.planEdit(run, { ...E.draftFrom(run), minutes: 180 }, E.dayLimits(run, null))
+check('… a longer booking on its day: a time change, nothing else',
+  [stretched.problem, stretched.newEnd, stretched.timeChanged, stretched.dayChanged, stretched.crewChanged], [null, '2026-10-30T17:00:00.000Z', true, false, false])
+check('… untouched: nothing to save', E.planEdit(done, E.draftFrom(done), E.dayLimits(done, null)).problem, 'nothing')
+const AFTER = Date.parse('2026-10-30T20:00:00Z')
+check('"That time has already passed" is the point once started, still a warning before', [
+  warn({ ...E.draftFrom(done), start: { h: 10, mi: 25 } }, { nowMs: AFTER }, done),
+  warn({ ...d0, start: { h: 10, mi: 25 } }, { nowMs: AFTER }),
+], [[], ['past']])
+check('… the guest warnings still apply to a started clean', warn({ ...db2b, start: { h: 9, mi: 30 } }, { nowMs: AFTER }, { ...b2b, status: 'in_progress' }), ['before_checkout'])
+
+check('what happened, done: Start and Complete to the nearest 5 minutes', E.realTimes(done, 150), { start: { h: 10, mi: 25 }, minutes: 125, done: true })
+check('… in progress: the real start, the booked length kept', E.realTimes(run, 150), { start: { h: 10, mi: 30 }, minutes: 150, done: false })
+const real = E.realTimes(done, 150)
+const matched = E.planEdit(done, { ...E.draftFrom(done), start: real.start, minutes: real.minutes }, E.dayLimits(done, null))
+check('… taken: the clean is booked 10:25 to 12:30', [matched.problem, matched.newStart, matched.newEnd], [null, '2026-10-30T14:25:00.000Z', '2026-10-30T16:30:00.000Z'])
+check('… rounding: 10:27:29 is 10:25, 10:27:31 is 10:30', [
+  E.realTimes({ ...run, started_at: '2026-10-30T14:27:29Z' }, 60).start, E.realTimes({ ...run, started_at: '2026-10-30T14:27:31Z' }, 60).start,
+], [{ h: 10, mi: 25 }, { h: 10, mi: 30 }])
+check('… nothing offered: not started, no Start stamp, Start tapped at the end, Start on another day', [
+  E.realTimes({ ...base, started_at: '2026-10-30T14:25:00Z' }, 150),
+  E.realTimes({ ...done, started_at: null }, 150),
+  E.realTimes({ ...done, started_at: '2026-10-30T16:29:30Z', completed_at: '2026-10-30T16:30:54Z' }, 150),
+  E.realTimes({ ...run, started_at: '2026-10-29T21:00:00Z' }, 150),
+], [null, null, null, null])
+check('… a short real clean books 15 minutes; a runaway books 12 hours', [
+  E.realTimes({ ...done, completed_at: '2026-10-30T14:31:00Z' }, 150).minutes,
+  E.realTimes({ ...done, completed_at: '2026-10-31T03:59:00Z' }, 150).minutes,
+], [15, 720])
+check('… a completed status with no Complete stamp keeps the booked length', E.realTimes({ ...done, completed_at: null }, 90), { start: { h: 10, mi: 25 }, minutes: 90, done: false })
+
+{
+  const db = fakeDb()
+  const out = await save(db, { ...E.draftFrom(done), start: { h: 10, mi: 25 }, minutes: 125 }, done)
+  check('saving a finished clean\'s time: recorded, then the clean, nobody emailed', shape(db.calls), ['job_reschedules.insert', 'jobs.update'])
+  check('… the record is the web Edit tab\'s', [db.calls[0].values.source, db.calls[0].values.new_start, db.calls[0].values.new_end],
+    ['job_edit', '2026-10-30T14:25:00.000Z', '2026-10-30T16:30:00.000Z'])
+  check('… only the time is written', Object.keys(db.calls[1].values), ['scheduled_start', 'scheduled_end', 'manually_retimed_at'])
+  check('… only while it still starts when the sheet read it and is still started or done', db.calls[1].filters, [
+    ['eq', 'id', 'job-1'], ['eq', 'scheduled_start', '2026-10-30T14:00:00+00:00'], ['in', 'status', ['in_progress', 'completed']],
+  ])
+  check('… and it says so', out, { ok: true, timeChanged: true, dayChanged: false, crewChanged: false, retimedAt: STAMP })
+}
+{
+  const db = fakeDb()
+  const out = await save(db, { ...E.draftFrom(run), ymd: '2026-10-31' }, run)
+  check('the save itself refuses another day for a started clean: nothing written', [db.calls.length, out.ok, out.error], [0, false, 'day'])
+  const db2 = fakeDb()
+  const out2 = await save(db2, { ...E.draftFrom(run), crew: ['gina', 'tia'], lead: 'gina' }, run)
+  check('… and a crew change: nothing written', [db2.calls.length, out2.ok, out2.error], [0, false, 'crew_started'])
+}
+{
+  const db = fakeDb({ 'jobs.update': () => ({ data: [], error: null }) })
+  const out = await save(db, { ...d0, start: { h: 11, mi: 0 } })
+  check('a not-started sheet on a clean that started meanwhile: still held to not started, closed as not made, stale',
+    [db.calls[1].filters[2], shape(db.calls), out.stale], [['in', 'status', ['pending_approval', 'scheduled', 'en_route']], ['job_reschedules.insert', 'jobs.update', 'job_reschedules.update'], true])
+}
+
 // ── loadEditBase: lead first, assignments folded into crew ──────────────────
 {
   // A read leaves op null: it answers as 'jobs.null'.
@@ -365,6 +445,15 @@ check('the sheet holds the day: limits from dayLimits, every day change through 
   [/const limits = base \? dayLimits\(base, win\)/.test(sheet), /function setDay\(ymd: string\) \{ if \(canMoveTo\(ymd\)\)/.test(sheet),
     /\{limits\?\.locked \? \(/.test(sheet), (sheet.match(/setDay\(/g) || []).length], [true, true, true, 3])
 check('the save gets the window, so the day rule is checked again there', /saveEdit\(supabase, \{[^}]*window: win/.test(sheet), true)
+check('the fresh read carries Start and Complete', /checkin_time, started_at, completed_at, client_addresses!jobs_address_id_fkey/.test(lib), true)
+check('a started clean\'s button reads "Edit time"', /cleanStarted\(job\) \? t\('oe_edit_time_btn'\) : t\('oe_edit_btn'\)/.test(detail), true)
+check('the sheet, started: title, crew read only (no picker), no guest window, the no-email line, what happened + one tap', [
+  /\{started \? t\('oe_title_time'\) : t\('oe_title'\)\}/.test(sheet),
+  /\{started \? \(\s*<>[\s\S]*?<Text style=\{styles\.crewRead\}>\{showLeadTag\(draft\.crew\.length\) \? crewLine\(draft\) : [\s\S]*?\) : people\.map\(p => \{/.test(sheet),
+  /\{win && !started && \(/.test(sheet),
+  /started \? t\('oe_sum_tell_started'\) : plan\.dayChanged/.test(sheet),
+  /realTimes\(base, draft\.minutes\)/.test(sheet) && /onPress=\{useReal\}/.test(sheet),
+], [true, true, true, true, true])
 const work = mkdtempSync(join(tmpdir(), 'office-edit-'))
 try {
   writeFileSync(join(work, 'i18n.ts'), readFileSync(join(repo, 'src/lib/i18n.ts'), 'utf8').replace(
@@ -375,7 +464,14 @@ try {
   check(`every string the sheet uses is in en, es and pt (${used.length})`,
     used.filter(k => !(k in T.en && k in T.es && k in T.pt)), [])
   check('the crew-error keys picked by condition exist too',
-    ['oe_err_crew', 'oe_err_crew_time_saved', 'oe_needs_signal', 'oe_load_failed', 'oe_started'].filter(k => !(k in T.en)), [])
+    ['oe_err_crew', 'oe_err_crew_time_saved', 'oe_needs_signal', 'oe_load_failed', 'oe_closed'].filter(k => !(k in T.en)), [])
+  check('the started-clean strings, including those picked by condition, in en, es and pt',
+    ['oe_edit_time_btn', 'oe_title_time', 'oe_real_label', 'oe_real_done', 'oe_real_running', 'oe_real_none', 'oe_real_tapped_end',
+      'oe_use_real_done', 'oe_use_real_running', 'oe_day_locked_started', 'oe_crew_started', 'oe_sum_tell_started', 'oe_closed']
+      .filter(k => !(k in T.en && k in T.es && k in T.pt)), [])
+  check('the old "started or closed" notice is gone (a started clean is editable now)', ['en', 'es', 'pt'].filter(l => 'oe_started' in T[l]), [])
+  check('placeholders match across languages', ['oe_real_done', 'oe_real_running', 'oe_use_real_done', 'oe_use_real_running']
+    .filter(k => ['es', 'pt'].some(l => JSON.stringify((T[l][k].match(/\{\w+\}/g) || []).sort()) !== JSON.stringify((T.en[k].match(/\{\w+\}/g) || []).sort()))), [])
 } finally {
   rmSync(work, { recursive: true, force: true })
 }
@@ -434,6 +530,8 @@ if (['leadSelection.ts', 'weeklySchedule.ts', 'jobQueue.ts'].every(f => existsSy
   check('switch on: untouched is nothing to save', E.planEdit(ATL, d).problem, 'nothing')
   check('switch on: noon picked there lands at noon in Atlanta',
     E.planEdit(ATL, { ...d, start: { h: 12, mi: 0 } }).newStart, '2026-11-03T17:00:00.000Z')
+  check('switch on: what happened reads on the home\'s clock (Start 16:25Z = 11:25 in Atlanta)',
+    E.realTimes({ ...ATL, status: 'completed', started_at: '2026-11-03T16:25:00Z', completed_at: '2026-11-03T18:10:00Z' }, 120), { start: { h: 11, mi: 25 }, minutes: 105, done: true })
   check('switch on: a late-evening clean keeps the home\'s day',
     E.draftFrom({ ...ATL, scheduled_start: '2026-11-04T04:30:00Z', scheduled_end: '2026-11-04T05:30:00Z' }).ymd, '2026-11-03')
   Z.setMultiMarket(false)
