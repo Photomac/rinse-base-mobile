@@ -1090,6 +1090,10 @@ export const translations = {
     err_retry: 'Try again',
     open_settings: 'Open Settings',
     loc_fg_body: 'Tracking location for active job',
+    route_notice_title: 'Your company records your route',
+    route_notice_body: "While you're clocked in or on your way to a clean, the app saves your location about once a minute. Your office can see your route and any stops. Nothing is recorded when you're off the clock, and routes are deleted after 30 days.",
+    route_notice_ok: 'I understand',
+    route_notice_later: 'Not now',
     // Screen-reader labels on the SOS screen
     sos_a11y_label: 'Emergency SOS button',
     sos_a11y_hint: 'Press and hold for 3 seconds to alert your owner and manager',
@@ -2246,6 +2250,10 @@ export const translations = {
     err_retry: 'Reintentar',
     open_settings: 'Abrir Ajustes',
     loc_fg_body: 'Registrando tu ubicación durante el trabajo',
+    route_notice_title: 'Tu empresa registra tu recorrido',
+    route_notice_body: 'Mientras tienes la entrada marcada o vas en camino a una limpieza, la app guarda tu ubicación más o menos cada minuto. Tu oficina puede ver tu recorrido y tus paradas. No se registra nada cuando no estás trabajando, y los recorridos se borran a los 30 días.',
+    route_notice_ok: 'Entendido',
+    route_notice_later: 'Ahora no',
     // Screen-reader labels on the SOS screen
     sos_a11y_label: 'Botón de SOS de emergencia',
     sos_a11y_hint: 'Mantén presionado 3 segundos para alertar a tu dueño y gerente',
@@ -3403,6 +3411,10 @@ export const translations = {
     err_retry: 'Tentar de novo',
     open_settings: 'Abrir Ajustes',
     loc_fg_body: 'Registrando sua localização durante o serviço',
+    route_notice_title: 'Sua empresa registra seu trajeto',
+    route_notice_body: 'Enquanto você está com o ponto batido ou a caminho de uma limpeza, o app salva sua localização mais ou menos a cada minuto. O escritório pode ver seu trajeto e suas paradas. Nada é registrado quando você não está trabalhando, e os trajetos são apagados após 30 dias.',
+    route_notice_ok: 'Entendi',
+    route_notice_later: 'Agora não',
     // Screen-reader labels on the SOS screen
     sos_a11y_label: 'Botão de SOS de emergência',
     sos_a11y_hint: 'Toque e segure por 3 segundos para alertar o dono e o gerente',
@@ -3525,6 +3537,11 @@ export function localeFor(lang: Language): string {
 let cachedLang: Language = 'en'
 export function tStatic(key: TranslationKey): string {
   return t(cachedLang, key)
+}
+
+// The language tStatic answers in (e.g. which notice a person acknowledged).
+export function langStatic(): Language {
+  return cachedLang
 }
 
 // localeFor() for the same lib code: times in a push or an Alert raised
