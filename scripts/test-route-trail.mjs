@@ -71,8 +71,8 @@ try {
     R.toRows([[T0, 41.9, -87.65, 30, 'job-1', 'clocked_in']], 'u1', 't1'),
     [{ user_id: 'u1', at: '2026-11-13T14:00:00.000Z', tenant_id: 't1', lat: 41.9, lng: -87.65, accuracy_m: 30, job_id: 'job-1', basis: 'clocked_in' }])
   check('a rule, grant, CHECK, bad value or missing table drops the batch; no signal or a 5xx keeps it',
-    [{ code: '42501' }, { code: '23514' }, { code: '42P01' }, { code: 'PGRST205' }, { code: '' , status: 0 }, { code: '57014' }, null].map(R.refusedForGood),
-    [true, true, true, true, false, false, false])
+    [{ code: '42501' }, { code: '23514' }, { code: '42P01' }, { code: '42P10' }, { code: 'PGRST205' }, { code: '' , status: 0 }, { code: '57014' }, null].map(R.refusedForGood),
+    [true, true, true, true, true, false, false, false])
 
   // ── lib/routeTrail, imports stubbed ──
   const store = new Map()
@@ -101,7 +101,7 @@ function from(table: string) {
 }
 function run(b: any) {
   if (b._table === 'tenants') return { data: { route_trail: S.switchOn }, error: null }
-  if (b._table === 'route_trail_acks') return { data: S.acksOnServer.filter((a: any) => a.user_id === b._f.user_id), error: null }
+  if (b._table === 'route_trail_acks') return { data: S.acksOnServer.filter((a: any) => a.user_id === b._f.user_id && a.tenant_id === b._f.tenant_id), error: null }
   return { data: null, error: null }
 }
 function write(table: string, rows: any, opts: any) {
@@ -150,6 +150,9 @@ export const supabase = { from }`)
     [S.acksOnServer.length, S.acksOnServer[0]], [1, { user_id: 'user-cl', notice_version: 1, tenant_id: 'tenant-a', lang: 'es' }])
   await RT.maybeShowRouteNotice(ME)
   check('once acknowledged, never asked again', S.alerts.length, 2)
+  check('the acknowledgment replays on (user_id, tenant_id, notice_version)', /onConflict: 'user_id,tenant_id,notice_version', ignoreDuplicates: true/.test(read('src/lib/routeTrail.ts')), true)
+  await RT.maybeShowRouteNotice({ id: 'user-cl', tenant_id: 'tenant-b' })
+  check('the same person in another company is asked there', S.alerts.length, 3)
 
   // Kept and sent: the first batch goes at once, then every 4 minutes or 60 points.
   await RT.noteRoute(ME, [nowFix(0, 41.9), nowFix(40, 41.901), nowFix(80, 41.902)], 'en_route', null)
@@ -177,7 +180,7 @@ export const supabase = { from }`)
   check('another person on the same phone: their point goes under their own name', [S.inserts.length, S.inserts[2]?.rows.map(r => r.user_id)], [3, ['user-ld']])
   await RT.flushRoute(ME, true)
   check('… and this person\'s send carries none of theirs', S.inserts.length, 3)
-  check('… found acknowledged on the server (another phone) and remembered', store.get(`route_trail:ack:user-ld:v1`), '1')
+  check('… found acknowledged on the server (another phone) and remembered, for that company', store.get(`route_trail:ack:user-ld:tenant-a:v1`), '1')
 
   // A null basis (can't tell if working) keeps nothing.
   await RT.noteRoute(ME, [nowFix(1200, 41.95)], null, null)

@@ -97,6 +97,6 @@ export function toRows(batch: QueuedFix[], userId: string, tenantId: string) {
  *  keeps the batch for the next try. */
 export function refusedForGood(error: { code?: string | null; status?: number } | null | undefined): boolean {
   const code = error?.code ?? ''
-  return code === '42501' || code === '23514' || code === '22P02' || code === '22023' || code === '42703' || code === '42P01'
+  return code === '42501' || code === '23514' || code === '22P02' || code === '22023' || code === '42703' || code === '42P01' || code === '42P10'
     || code === 'PGRST204' || code === 'PGRST205'
 }

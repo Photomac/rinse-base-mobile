@@ -35,7 +35,9 @@ export const NOTICE_VERSION = 1
 const queueKey = (userId: string) => `route_trail:queue:${userId}`
 const lastKey = (userId: string) => `route_trail:last:${userId}`
 const flushKey = (userId: string) => `route_trail:flushed:${userId}`
-const ackKey = (userId: string) => `route_trail:ack:${userId}:v${NOTICE_VERSION}`
+// The company is in the key: someone whose users row moves company sees the
+// notice again there (the server's key is (user_id, tenant_id, notice_version)).
+const ackKey = (userId: string, tenantId: string) => `route_trail:ack:${userId}:${tenantId}:v${NOTICE_VERSION}`
 const declinedKey = (userId: string) => `route_trail:declined:${userId}`
 
 /** The company's switch. The saved copy answers offline (a headless wake in a
@@ -53,12 +55,12 @@ export async function routeTrailOn(tenantId: string | null | undefined): Promise
  *  the server (another phone, a reinstall), remembered once found. */
 export async function routeNoticeAcked(user: { id: string; tenant_id: string }): Promise<boolean> {
   try {
-    if ((await AsyncStorage.getItem(ackKey(user.id))) === '1') return true
+    if ((await AsyncStorage.getItem(ackKey(user.id, user.tenant_id))) === '1') return true
     const { data } = await cachedQuery(`route:ack:${user.id}:${NOTICE_VERSION}`,
       supabase.from('route_trail_acks').select('notice_version')
         .eq('user_id', user.id).eq('tenant_id', user.tenant_id).gte('notice_version', NOTICE_VERSION).limit(1))
     const acked = Array.isArray(data) && data.length > 0
-    if (acked) AsyncStorage.setItem(ackKey(user.id), '1').catch(() => {})
+    if (acked) AsyncStorage.setItem(ackKey(user.id, user.tenant_id), '1').catch(() => {})
     return acked
   } catch { return false }
 }
@@ -67,9 +69,9 @@ async function recordAck(user: { id: string; tenant_id: string }): Promise<boole
   const lang = langStatic()
   const { error } = await supabase.from('route_trail_acks').upsert(
     { user_id: user.id, notice_version: NOTICE_VERSION, tenant_id: user.tenant_id, lang },
-    { onConflict: 'user_id,notice_version', ignoreDuplicates: true })
+    { onConflict: 'user_id,tenant_id,notice_version', ignoreDuplicates: true })
   if (error) return false
-  await AsyncStorage.setItem(ackKey(user.id), '1').catch(() => {})
+  await AsyncStorage.setItem(ackKey(user.id, user.tenant_id), '1').catch(() => {})
   return true
 }
 
