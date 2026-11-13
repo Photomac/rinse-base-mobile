@@ -447,7 +447,7 @@ type PushResult =
   | { kind: 'cancelled' }
   | { kind: 'error'; message: string }
 
-type TokenResult = { kind: 'tokens'; tokens: string[] } | Exclude<PushResult, { kind: 'sent' }>
+type TokenResult = { kind: 'tokens'; tokens: string[] } | { kind: 'done' } | Exclude<PushResult, { kind: 'sent' }>
 
 // The office's phones for this alert. The server hands them out
 // (sos_request_office_alert, web migration 20261113160000_crew_private_reads)
@@ -465,11 +465,14 @@ async function officeTokens(e: QueuedSOS): Promise<TokenResult> {
       const list: unknown[] = Array.isArray(rpc.data?.tokens) ? rpc.data.tokens : []
       return { kind: 'tokens', tokens: [...new Set(list.map(String))] }
     }
-    // The server's fan-out reported meanwhile (the next pass reads its counts),
-    // or the session isn't the alert's person yet.
-    if (status === 'already_notified' || status === 'not_signed_in') return { kind: 'retry' }
-    // not_active (taken back or resolved elsewhere), not_found, too_old: give
-    // up after MAX_PUSH_ERRORS like any refusal.
+    // The server's fan-out reported meanwhile: the next pass reads its counts.
+    if (status === 'already_notified') return { kind: 'retry' }
+    // Taken back on another screen or resolved by the office: nobody needs a
+    // push, and it isn't a failure to report. The screen's line for this is
+    // the same as for "no office phone has the app".
+    if (status === 'not_active') return { kind: 'done' }
+    // not_signed_in (switched-off company or removed login), not_found,
+    // too_old: give up after MAX_PUSH_ERRORS like any refusal.
     return { kind: 'error', message: `sos_request_office_alert: ${status}` }
   }
   if (rpc.status === 0) return { kind: 'retry' }
@@ -500,6 +503,7 @@ async function pushToOffice(e: QueuedSOS): Promise<PushResult> {
   if (sess === TIMED_OUT || !sess.data?.session) return { kind: 'retry' }
 
   const got = await officeTokens(e)
+  if (got.kind === 'done') return { kind: 'sent', recipients: 0 }
   if (got.kind !== 'tokens') return got
   const tokens = got.tokens
   if (!tokens.length) return { kind: 'sent', recipients: 0 }

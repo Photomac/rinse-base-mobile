@@ -426,6 +426,7 @@ const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
   server.fanout = 'off'
 
   // Taken back on another screen or resolved by the office before the phone asks.
+  const rpcCallsBeforeRr = net.calls.filter(c => c.path.endsWith('/rpc/sos_request_office_alert') && c.method === 'POST').length
   const rr = await raiseSOS(base)
   server.fanout = 'silent'
   await flushSOSQueue()
@@ -433,8 +434,10 @@ const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
   await sleep(250)
   for (let i = 0; i < 6; i++) await flushSOSQueue()
   const rr1 = await getSOS(rr.id)
-  ok('an alert resolved elsewhere: no push, and the phone stops asking after its error limit',
-    pushesFor(rr.id).length === 0 && rr1?.push === 'failed')
+  ok('an alert resolved elsewhere: no push, no error report, and the phone stops asking',
+    pushesFor(rr.id).length === 0 && rr1?.push === 'sent' && rr1.push_recipients === 0
+      && !reported.some(r => r.includes(rr.id))
+      && net.calls.filter(c => c.path.endsWith('/rpc/sos_request_office_alert') && c.method === 'POST').length === rpcCallsBeforeRr + 1)
   server.fanout = 'off'
 
   // An old app (no function call) after push_tokens is narrowed: the reason the
