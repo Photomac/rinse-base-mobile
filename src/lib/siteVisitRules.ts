@@ -45,12 +45,35 @@ export const SITE_QUEUE_CAP = 300
  * What one OS fence report means, given what this phone last recorded at this
  * home. The OS can report the same thing twice (registering the day's fences
  * again re-reports every fence the phone is already inside), so only a change
- * is a crossing. A leave with nothing recorded before still counts: the phone
- * may have been inside when the fences went up.
+ * is a crossing. A leave with nothing recorded before still counts, except
+ * right after the fences go up: that one is the setup echo (isSetupEcho),
+ * checked first.
  */
 export function decideSiteEvent(last: FenceState | null | undefined, report: 'enter' | 'exit'): SiteKind | null {
   if (report === 'enter') return last === 'in' ? null : 'arrive'
   return last === 'out' ? null : 'depart'
+}
+
+/** How long after the day's fences are registered an Exit for a fence the
+ *  phone has nothing recorded for is the OS's first answer, not a leave.
+ *  expo-location starts every region as "unknown" and reports the OS's
+ *  initial state (iOS requestStateForRegion): with leave fences on, every
+ *  home the phone is OUTSIDE fires an Exit the moment they're registered.
+ *  Before this, each one was recorded as a leave: Sheddys, 14 days to
+ *  2026-11-13, 51 of 62 visits began with one, often several homes in the
+ *  same minute. (A phone already INSIDE gets an Enter instead, so a real
+ *  "inside when the fences went up" leave still has its arrival.) */
+export const SETUP_ECHO_MS = 2 * 60 * 1000
+
+/** Is this report the fence-setup echo? An Exit, for a fence with nothing
+ *  recorded on this phone, within SETUP_ECHO_MS of registering (a minute of
+ *  clock slack before it). The caller marks the fence 'out', so the next
+ *  Enter is an arrival, and records nothing. No registration time known
+ *  (registered before this version) = not an echo: the old behaviour. */
+export function isSetupEcho(last: FenceState | null | undefined, report: 'enter' | 'exit', msSinceRegistered: number | null | undefined): boolean {
+  if (report !== 'exit' || last != null) return false
+  if (msSinceRegistered == null || !Number.isFinite(msSinceRegistered)) return false
+  return msSinceRegistered >= -60_000 && msSinceRegistered <= SETUP_ECHO_MS
 }
 
 /** What the phone keeps per fence: in or out, and since when (ms). Phones on

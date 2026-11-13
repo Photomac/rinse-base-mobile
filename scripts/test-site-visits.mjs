@@ -49,6 +49,16 @@ check('leave again while outside: nothing', R.decideSiteEvent('out', 'exit'), nu
 check('come back after leaving (supply run): arrive', R.decideSiteEvent('out', 'enter'), 'arrive')
 check('a leave with nothing before it (inside when the fences went up): depart', R.decideSiteEvent(null, 'exit'), 'depart')
 
+// ── The fence-setup echo (Sheddys 11/13: 51 of 62 visits began with a "leave") ──
+check('setup echo: an Exit for a fence with nothing recorded, 20 s after registering', R.isSetupEcho(null, 'exit', 20_000), true)
+check('…up to 2 minutes after', R.isSetupEcho(undefined, 'exit', R.SETUP_ECHO_MS), true)
+check('…a minute of clock slack before registering', R.isSetupEcho(null, 'exit', -30_000), true)
+check('not an echo: 5 minutes after registering (a real leave, arrival missed)', R.isSetupEcho(null, 'exit', 5 * 60_000), false)
+check('not an echo: the phone recorded them inside first', R.isSetupEcho('in', 'exit', 20_000), false)
+check('not an echo: already marked outside (decideSiteEvent ignores it anyway)', R.isSetupEcho('out', 'exit', 20_000), false)
+check('not an echo: an Enter (inside when the fences went up is an arrival)', R.isSetupEcho(null, 'enter', 20_000), false)
+check('not an echo: no registration time known (fences registered before this version)', R.isSetupEcho(null, 'exit', null), false)
+
 // ── The queue ────────────────────────────────────────────────────────────────
 {
   const now = Date.parse('2026-10-23T18:00:00Z')
@@ -246,6 +256,23 @@ if (!mig) {
   check("…which is exactly the database's insert grant", granted, rowKeys)
   check('the server refuses a crossing more than 48 h old (the phone gives up at 47)', /now\(\) - interval '48 hours'/.test(mig) && R.SITE_EVENT_MAX_AGE_MS === 47 * 3600_000, true)
   check('the switch is the column the phone reads', /add column if not exists site_visits boolean not null default false/.test(mig), true)
+}
+
+
+// ── The setup echo, in the sources ───────────────────────────────────────────
+{
+  const siteSrc = read('src/lib/siteVisits.ts')
+  const fenceSrc = read('src/lib/arrivalGeofence.ts')
+  const handle = siteSrc.slice(siteSrc.indexOf('async function handleCrossing'), siteSrc.indexOf('async function readTrail'))
+  check('the echo is checked before anything is decided or recorded',
+    handle.indexOf('isSetupEcho(') > -1 && handle.indexOf('isSetupEcho(') < handle.indexOf('decideSiteEvent(') && handle.indexOf('isSetupEcho(') < handle.indexOf('recordSiteEvent('), true)
+  const echoBlock = handle.slice(handle.indexOf('isSetupEcho('), handle.indexOf('decideSiteEvent('))
+  check('…an echo marks the fence outside and records nothing', /s: 'out'/.test(echoBlock) && /return/.test(echoBlock) && !/recordSiteEvent/.test(echoBlock), true)
+  const reg = fenceSrc.slice(fenceSrc.indexOf('export async function refreshArrivalGeofences'), fenceSrc.indexOf('const regionKey'))
+  check('the registration time is noted right before the fences go to the OS, leave fences only',
+    /if \(site\) await noteFencesRegistered\(\)\n    await Location\.startGeofencingAsync\(ARRIVAL_TASK, regions\)/.test(reg), true)
+  check('…and only when they really are registered (after the same-set check)',
+    reg.indexOf('sameRegionsRegistered(regions)') > -1 && reg.indexOf('sameRegionsRegistered(regions)') < reg.indexOf('noteFencesRegistered()'), true)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
