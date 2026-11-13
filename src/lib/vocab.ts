@@ -66,6 +66,8 @@ const V: Record<string, [string, string]> = {
   'Final Guest-Ready Check': ['Revisión final para el huésped', 'Verificação final para o hóspede'],
   'Final': ['Revisión final', 'Verificação final'],
   'Other': ['Otro', 'Outro'],
+  // A clean's one-off lines from the office (rinse-base-app src/lib/extraTasks.ts).
+  'Extra tasks': ['Tareas extra', 'Tarefas extras'],
   'All rooms': ['Todas las habitaciones', 'Todos os cômodos'],
   'All Rooms': ['Todas las habitaciones', 'Todos os cômodos'],
   'General': ['General', 'Geral'],

@@ -109,6 +109,9 @@ const SHOT_MARK: Record<ShotState, { key: 'shot_state_saved' | 'shot_state_uploa
 // "you left the property" push every few minutes for two hours. Filtered, a
 // late replay matches no row and changes nothing.
 const STARTABLE = ['pending_approval', 'scheduled', 'en_route', 'in_progress']
+// The room text of a line the office added to this one clean (rinse-base-app
+// src/lib/extraTasks.ts EXTRA_TASKS_ROOM). Keep the two in step.
+const EXTRA_TASKS_ROOM = 'Extra tasks'
 const EN_ROUTE_FROM = ['pending_approval', 'scheduled', 'en_route']
 
 // Laundry on a regular clean: where did the bags go? Four destinations, each
@@ -2900,10 +2903,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                 byId.set(rm.id, g); groups.push(g)
               }
               const other = { key: '__other__', name: 'Other', mode: 'detailed', items: [] as any[] }
+              // Extra tasks the office added to this clean only (rinse-base-app
+              // src/lib/extraTasks.ts: no room, room text EXTRA_TASKS_ROOM). Their
+              // own section, first, so one-off work isn't lost at the bottom
+              // under "Other" (Five Star 11/12).
+              const extra = { key: '__extra__', name: EXTRA_TASKS_ROOM, mode: 'detailed', items: [] as any[] }
               for (const item of roomChecklist) {
                 const g = item.room_uid ? byId.get(item.room_uid) : null
+                if (!g && item.room === EXTRA_TASKS_ROOM) { extra.items.push(item); continue }
                 ;(g || other).items.push(item)
               }
+              if (extra.items.length > 0) groups.unshift(extra)
               if (other.items.length > 0) groups.push(other)
               const shown = groups.filter(g => g.items.length > 0 || evidence.some((e: any) => (e.room_id || '__other__') === g.key))
 
