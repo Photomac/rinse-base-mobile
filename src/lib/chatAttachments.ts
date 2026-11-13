@@ -5,6 +5,7 @@ import { Alert } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from './supabase'
 import { ensureCameraCapture, ensureMediaLibrary } from './permissions'
+import { randomFileId } from './randomFileId'
 
 const SUPABASE_URL = 'https://cbnbhwclbtowfbjylnph.supabase.co'
 
@@ -42,7 +43,10 @@ export async function pickAndUploadImage(source: AttachmentSource, tenantId: str
   const asset = result.assets[0]
   const extRaw = (asset.uri.split('.').pop() || 'jpg').toLowerCase()
   const ext = extRaw.length > 4 ? 'jpg' : extRaw
-  return uploadImageToJobPhotos(asset, `${tenantId}/${folder}/${Date.now()}.${ext}`)
+  // Chat photos (`chat/<channel>`) list only for the channel's members
+  // (web 20261113170000_chat_photos_members_only); the name must not be
+  // guessable either.
+  return uploadImageToJobPhotos(asset, `${tenantId}/${folder}/${randomFileId()}.${ext}`)
 }
 
 // Upload a local image file to the public job-photos bucket at `path` and return
