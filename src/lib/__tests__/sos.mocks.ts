@@ -69,6 +69,15 @@ export const server = {
   sos_alerts: new Map<string, Record<string, any>>(),
   sos_pings: [] as Record<string, any>[],
   push_tokens: [] as { tenant_id: string; user_id: string; token: string; role: string }[],
+  // sos_request_office_alert (web 20261113160000_crew_private_reads):
+  //   absent     not installed: PostgREST answers PGRST202, as before the migration
+  //   installed  hands the office's tokens to the alert's own person while it is
+  //              active and unanswered, and records a fan-out retry
+  rpc: 'absent' as 'absent' | 'installed',
+  refires: [] as string[],
+  // push_tokens narrowed to the office and one's own row (Q3 step 2): a crew
+  // login's direct read finds no office token.
+  push_tokens_narrowed: false,
   pushes: [] as any[][],       // one entry per Expo request: its message array
 }
 
@@ -128,9 +137,24 @@ function postgrest(url: URL, method: string, headers: Headers, body: any): Respo
     server.sos_pings.push(row)
     return new Response(null, { status: 201 })
   }
+  if (table === 'rpc/sos_request_office_alert' && method === 'POST') {
+    if (server.rpc === 'absent') {
+      return json(404, { code: 'PGRST202', message: 'Could not find the function public.sos_request_office_alert(p_alert_id) in the schema cache' })
+    }
+    const a = server.sos_alerts.get(body?.p_alert_id)
+    const answer = (status: string, tokens: string[] = []) => json(200, { status, server_requested: status === 'ok', tokens })
+    if (!a) return answer('not_found')
+    if (a.status !== 'active') return answer('not_active')
+    if (a.office_notified_at) return answer('already_notified')
+    server.refires.push(a.id)
+    const office = ['owner', 'admin', 'manager', 'dispatcher']
+    return answer('ok', [...new Set(server.push_tokens
+      .filter(t => t.tenant_id === a.tenant_id && t.user_id !== a.user_id && office.includes(t.role))
+      .map(t => t.token))].sort())
+  }
   if (table === 'push_tokens' && method === 'GET') {
     const filters = eqFilters(url)
-    const rows = server.push_tokens.filter(r => filters.every(([k, v]) => String((r as any)[k]) === v))
+    const rows = server.push_tokens_narrowed ? [] : server.push_tokens.filter(r => filters.every(([k, v]) => String((r as any)[k]) === v))
     return json(200, rows.map(r => ({ token: r.token, user_id: r.user_id, users: { role: r.role } })))
   }
   return json(404, { message: `fake PostgREST has no route for ${method} ${table}` })
