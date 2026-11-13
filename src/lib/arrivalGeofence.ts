@@ -21,7 +21,7 @@ import { savePunch } from './timeTracker'
 import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti, localeStatic } from './i18n'
-import { siteVisitsOn, officeLocation, markSiteFences, siteFenceKind, onSiteCrossing, flushSiteEvents } from './siteVisits'
+import { siteVisitsOn, officeLocation, markSiteFences, siteFenceKind, onSiteCrossing, flushSiteEvents, noteFencesRegistered } from './siteVisits'
 import { SITE_FENCE_STATUSES, OFFICE_FENCE } from './siteVisitRules'
 import { effectiveTimeMode } from './dayClock'
 
@@ -134,6 +134,9 @@ export async function refreshArrivalGeofences(user: any) {
     if (await sameRegionsRegistered(regions)) return
     // startGeofencingAsync REPLACES the monitored set, so stale regions from
     // yesterday's jobs drop off automatically.
+    // With leave fences, the OS answers "outside" for every home the phone
+    // isn't at, straight away: note when, so those aren't recorded as leaves.
+    if (site) await noteFencesRegistered()
     await Location.startGeofencingAsync(ARRIVAL_TASK, regions)
   } catch { /* enhancement only — never break the dashboard */ }
 }
