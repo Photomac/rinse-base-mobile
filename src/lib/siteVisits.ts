@@ -33,7 +33,7 @@ import { loadCachedProfile } from './profileCache'
 import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { uuid4 } from './outbox'
 import {
-  decideSiteEvent, pruneSiteQueue, siteSendOutcome, readFenceMark, pruneTrail, departureFromTrail, arrivalToOffer,
+  decideSiteEvent, isSetupEcho, pruneSiteQueue, siteSendOutcome, readFenceMark, pruneTrail, departureFromTrail, arrivalToOffer,
   OFFICE_FENCE, type SiteEventRow, type TrailFix,
 } from './siteVisitRules'
 
@@ -44,6 +44,10 @@ const STATE_PREFIX = 'site_events:state:'
 const ARMED_KEY = 'site_events:armed'
 // The phone's own map positions, the last hour, while those fences are up (siteVisitRules).
 const TRAIL_KEY = 'site_events:trail'
+// When the day's arrive/leave fences were last registered with the OS (ms), so
+// the Exits the OS fires straight after for homes the phone is outside of are
+// known for the setup echo they are (siteVisitRules isSetupEcho).
+const REGISTERED_KEY = 'site_events:registered_at'
 
 /** The company's switch. The saved copy answers offline (a headless wake in a
  *  dead zone); any error, including the column not existing yet, is "off". */
@@ -89,6 +93,19 @@ export async function markSiteFences(jobIds: string[] | null): Promise<void> {
   } catch { /* best-effort */ }
 }
 
+/** Called right before the day's arrive/leave fences are handed to the OS. */
+export async function noteFencesRegistered(): Promise<void> {
+  try { await AsyncStorage.setItem(REGISTERED_KEY, String(Date.now())) } catch { /* best-effort */ }
+}
+
+async function msSinceRegistered(atIso: string): Promise<number | null> {
+  try {
+    const raw = await AsyncStorage.getItem(REGISTERED_KEY)
+    const t = raw == null ? NaN : Number(raw)
+    return Number.isFinite(t) ? Date.parse(atIso) - t : null
+  } catch { return null }
+}
+
 /** Is this fence one of today's arrive/leave fences? 'stale' = it was, on an
  *  earlier day (the fences are re-registered when Home next loads; until then
  *  a crossing at yesterday's home is not recorded). */
@@ -120,6 +137,11 @@ export function onSiteCrossing(jobId: string, report: 'enter' | 'exit', centre: 
 
 async function handleCrossing(jobId: string, report: 'enter' | 'exit', reportedAt: string, centre: FenceCentre | null) {
   const last = readFenceMark(await AsyncStorage.getItem(STATE_PREFIX + jobId))
+  // The OS's first answer for a home they're not at: outside, nothing to record.
+  if (isSetupEcho(last?.s, report, await msSinceRegistered(reportedAt))) {
+    await AsyncStorage.setItem(STATE_PREFIX + jobId, JSON.stringify({ s: 'out', t: null }))
+    return
+  }
   const kind = decideSiteEvent(last?.s, report)
   if (!kind) return
   // A leave is timed from the trail when it can say; an arrive at the report.
