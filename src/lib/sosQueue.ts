@@ -447,6 +447,51 @@ type PushResult =
   | { kind: 'cancelled' }
   | { kind: 'error'; message: string }
 
+type TokenResult = { kind: 'tokens'; tokens: string[] } | { kind: 'done' } | Exclude<PushResult, { kind: 'sent' }>
+
+// The office's phones for this alert. The server hands them out
+// (sos_request_office_alert, web migration 20261113160000_crew_private_reads)
+// only to the person whose own alert is still active and unanswered, and asks
+// its own fan-out (notify-sos) to try again on the way. A crew login can no
+// longer read the company's push tokens once the web narrows push_tokens,
+// which waits for phones to run this. Until the function exists (PGRST202),
+// read push_tokens directly, as before.
+async function officeTokens(e: QueuedSOS): Promise<TokenResult> {
+  const rpc = await rest(signal =>
+    supabase.rpc('sos_request_office_alert', { p_alert_id: e.id }).abortSignal(signal))
+  if (!rpc.error) {
+    const status = rpc.data?.status
+    if (status === 'ok') {
+      const list: unknown[] = Array.isArray(rpc.data?.tokens) ? rpc.data.tokens : []
+      return { kind: 'tokens', tokens: [...new Set(list.map(String))] }
+    }
+    // The server's fan-out reported meanwhile: the next pass reads its counts.
+    if (status === 'already_notified') return { kind: 'retry' }
+    // Taken back on another screen or resolved by the office: nobody needs a
+    // push, and it isn't a failure to report. The screen's line for this is
+    // the same as for "no office phone has the app".
+    if (status === 'not_active') return { kind: 'done' }
+    // not_signed_in (switched-off company or removed login), not_found,
+    // too_old: give up after MAX_PUSH_ERRORS like any refusal.
+    return { kind: 'error', message: `sos_request_office_alert: ${status}` }
+  }
+  if (rpc.status === 0) return { kind: 'retry' }
+  if (rpc.error?.code !== 'PGRST202') return { kind: 'error', message: String(rpc.error?.message) }
+
+  const read = await rest(signal =>
+    supabase.from('push_tokens')
+      .select('token, user_id, users!push_tokens_user_id_fkey(role)')
+      .eq('tenant_id', e.tenant_id)
+      .abortSignal(signal))
+  if (read.error) return read.status === 0 ? { kind: 'retry' } : { kind: 'error', message: String(read.error?.message) }
+  return {
+    kind: 'tokens',
+    tokens: [...new Set(((read.data ?? []) as any[])
+      .filter(t => t.user_id !== e.user_id && DISPATCH_ROLES.includes(t.users?.role))
+      .map(t => String(t.token)))],
+  }
+}
+
 // The office push, sent from this phone once the row exists. Recipients are
 // the tenant's owners, managers and dispatchers who have the app on a phone —
 // NOT the crew member who raised it, whose own phone would otherwise be counted
@@ -457,16 +502,10 @@ async function pushToOffice(e: QueuedSOS): Promise<PushResult> {
   const sess = await withTimeout(() => supabase.auth.getSession())
   if (sess === TIMED_OUT || !sess.data?.session) return { kind: 'retry' }
 
-  const read = await rest(signal =>
-    supabase.from('push_tokens')
-      .select('token, user_id, users!push_tokens_user_id_fkey(role)')
-      .eq('tenant_id', e.tenant_id)
-      .abortSignal(signal))
-  if (read.error) return read.status === 0 ? { kind: 'retry' } : { kind: 'error', message: String(read.error?.message) }
-
-  const tokens = [...new Set(((read.data ?? []) as any[])
-    .filter(t => t.user_id !== e.user_id && DISPATCH_ROLES.includes(t.users?.role))
-    .map(t => String(t.token)))]
+  const got = await officeTokens(e)
+  if (got.kind === 'done') return { kind: 'sent', recipients: 0 }
+  if (got.kind !== 'tokens') return got
+  const tokens = got.tokens
   if (!tokens.length) return { kind: 'sent', recipients: 0 }
 
   // "I'm OK" may have come in while the tokens were being read.
