@@ -4,6 +4,11 @@
 // apply, then one confirm that says what will change and who is told. What a
 // save does, and why it is an edit form and never a drag, is lib/officeEdit.ts.
 //
+// On a clean already started or finished it is "Edit time" (Five Star,
+// 2026-11-13): the booked start and length on the clean's own day, with what
+// really happened above them ("Started 10:25 AM · Finished 12:30 PM") and one
+// tap to book it that way. The crew shows, read only.
+//
 // No native date or time picker: one would be a native dependency, and this
 // ships as an over-the-air update (the same reason as TeamTimeForm).
 import React, { useEffect, useMemo, useRef, useState } from 'react'
@@ -12,14 +17,14 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor, type TranslationKey } from '../lib/i18n'
 import { GOLD, SLATE, ROLE_COLORS } from '../lib/theme'
-import { fmtDate, fmtTimeAt, clockOf, todayKey, tomorrowKey, dayKey } from '../lib/timezone'
+import { fmtDate, fmtTimeAt, clockOf, todayKey, tomorrowKey, dayKey, wallTimeInTz } from '../lib/timezone'
 import { parseClock, clockText, addDays, type Meridiem } from '../lib/teamDay'
 import { linkAnswering } from '../lib/netFetch'
 import { uuid4 } from '../lib/outbox'
 import { showLeadTag } from '../lib/crewNames'
 import {
-  canEditClean, draftFrom, planEdit, editWarnings, resolveLead, stepLength, saveEdit, dayLimits, dayAllowed,
-  loadEditBase, loadCrew, loadBookingWindow, loadDayOff, LENGTH_MIN, LENGTH_MAX,
+  editModeFor, cleanStarted, realTimes, draftFrom, planEdit, editWarnings, resolveLead, stepLength, saveEdit, dayLimits, dayAllowed,
+  loadEditBase, loadCrew, loadBookingWindow, loadDayOff, LENGTH_MIN, LENGTH_MAX, TAPPED_AT_END_MINUTES,
   type EditBase, type EditDraft, type CrewMember, type BookingWindow, type ScheduleOff, type EditWarning,
 } from '../lib/officeEdit'
 
@@ -32,7 +37,7 @@ export type EditedPatch = {
   crew?: { user_id: string; is_lead: boolean; users: { full_name: string } | null }[]
 }
 
-type Phase = 'loading' | 'offline' | 'failed' | 'started' | 'ready'
+type Phase = 'loading' | 'offline' | 'failed' | 'closed' | 'ready'
 
 export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
   visible: boolean
@@ -62,7 +67,8 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
     const { base: b } = await loadEditBase(supabase, job.id)
     if (n !== loads.current) return
     if (!b) { setPhase('failed'); return }
-    if (!canEditClean(user.role, b)) { setPhase('started'); return }
+    // Cancelled, no-show, not a clean: the web's.
+    if (!editModeFor(user.role, b)) { setPhase('closed'); return }
     const [list, w] = await Promise.all([loadCrew(supabase, b.tenant_id, b.crew), loadBookingWindow(supabase, b)])
     if (n !== loads.current) return
     const d = draftFrom(b)
@@ -93,7 +99,9 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
     return () => { live = false }
   }, [phase, base?.id, draft?.ymd, people.length])
 
-  // The days this clean may move to: none on a back-to-back or a guest's arrival day.
+  // Started or finished: only its booked time changes (lib/officeEdit).
+  const started = cleanStarted(base)
+  // The days this clean may move to: none on a back-to-back, a guest's arrival day, or once started.
   const limits = base ? dayLimits(base, win) : null
   const plan = base && current ? planEdit(base, current, limits ?? undefined) : null
   const offNow = dayOff && draft && dayOff.ymd === draft.ymd ? dayOff : null
@@ -107,6 +115,36 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
   const lengthLabel = (min: number) => {
     const h = Math.floor(min / 60), m = min % 60
     return h && m ? ti(t('oe_len_hm'), { h: String(h), m: String(m) }) : h ? ti(t('oe_len_h'), { h: String(h) }) : ti(t('oe_len_m'), { m: String(m) })
+  }
+
+  // What really happened, and the booked time that matches it (started only).
+  const real = base && draft && started ? realTimes(base, draft.minutes) : null
+  const realOn = !!real && !!start && start.h === real.start.h && start.mi === real.start.mi && draft?.minutes === real.minutes
+  function useReal() {
+    if (!real) return
+    const c = clockText(real.start.h, real.start.mi)
+    setTimeText(c.text); setMeridiem(c.meridiem)
+    setDraft(d => (d ? { ...d, minutes: real.minutes } : d))
+  }
+  /** "Started 10:25 AM · Finished 12:30 PM", or why there's no real time. */
+  function realLine(b: EditBase): string {
+    if (!b.started_at) return t('oe_real_none')
+    const at = (iso: string) => (dayKey(iso, clockOf(b.client_addresses)) === dayKey(b.scheduled_start, clockOf(b.client_addresses))
+      ? fmtTimeAt(iso, b.client_addresses, locale) : whenLabel(iso))
+    if (b.status === 'completed' && b.completed_at) {
+      const mins = (Date.parse(b.completed_at) - Date.parse(b.started_at)) / 60_000
+      if (!(mins >= TAPPED_AT_END_MINUTES)) return t('oe_real_tapped_end')
+      return ti(t('oe_real_done'), { start: at(b.started_at), end: at(b.completed_at) })
+    }
+    return ti(t('oe_real_running'), { start: at(b.started_at) })
+  }
+  /** The booked time a real-times tap would set, as the chip reads it. */
+  function realChip(b: EditBase): string {
+    if (!real) return ''
+    const from = wallTimeInTz(draft?.ymd ?? dayKey(b.scheduled_start, clockOf(b.client_addresses)), real.start.h, real.start.mi, clockOf(b.client_addresses))
+    if (!real.done) return ti(t('oe_use_real_running'), { time: fmtTimeAt(from, b.client_addresses, locale) })
+    const to = new Date(from.getTime() + real.minutes * 60_000)
+    return ti(t('oe_use_real_done'), { from: fmtTimeAt(from, b.client_addresses, locale), to: fmtTimeAt(to, b.client_addresses, locale) })
   }
 
   // Its own day, or one the guests allow.
@@ -157,7 +195,7 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
     const lines: string[] = []
     if (plan.timeChanged && plan.newStart) lines.push(ti(t('oe_sum_time'), { from: whenLabel(base.scheduled_start), to: whenLabel(plan.newStart) }))
     if (plan.crewChanged) lines.push(ti(t('oe_sum_crew'), { crew: crewLine(current) }))
-    if (plan.timeChanged) lines.push(plan.dayChanged ? t('oe_sum_tell_day') : t('oe_sum_tell_same_day'))
+    if (plan.timeChanged) lines.push(started ? t('oe_sum_tell_started') : plan.dayChanged ? t('oe_sum_tell_day') : t('oe_sum_tell_same_day'))
     if (plan.crewChanged && current.crew.some(id => !base.crew.includes(id))) lines.push(t('oe_sum_push_added'))
     if (warnings.length) lines.push('', t('oe_heads_up'), ...warnings.map(w => `• ${warningText(w)}`))
     const go = await new Promise<boolean>(resolve => Alert.alert(t('oe_confirm_title'), lines.join('\n'), [
@@ -196,7 +234,7 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
 
   const close = () => { if (!saving) onClose() }
   const placeLabel = job?.client_addresses?.nickname || job?.client_addresses?.street || ''
-  const message: Partial<Record<Phase, TranslationKey>> = { offline: 'oe_needs_signal', failed: 'oe_load_failed', started: 'oe_started' }
+  const message: Partial<Record<Phase, TranslationKey>> = { offline: 'oe_needs_signal', failed: 'oe_load_failed', closed: 'oe_closed' }
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close}>
@@ -206,7 +244,7 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, paddingBottom: 36 }}>
             <View style={styles.head}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.title}>{t('oe_title')}</Text>
+                <Text style={styles.title}>{started ? t('oe_title_time') : t('oe_title')}</Text>
                 {!!placeLabel && <Text style={styles.sub} numberOfLines={1}>{placeLabel}</Text>}
               </View>
               <TouchableOpacity onPress={close} accessibilityLabel={t('cancel')}><Text style={styles.close}>×</Text></TouchableOpacity>
@@ -216,7 +254,7 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
             {!!message[phase] && (
               <>
                 <Text style={styles.notice}>{t(message[phase]!)}</Text>
-                {phase !== 'started' && (
+                {phase !== 'closed' && (
                   <TouchableOpacity style={[styles.btn, styles.btnGhost, { marginTop: 14 }]} onPress={() => load()}>
                     <Text style={styles.btnGhostText}>{t('oe_try_again')}</Text>
                   </TouchableOpacity>
@@ -228,11 +266,25 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
               <>
                 {!!error && <Text style={[styles.problem, { marginBottom: 6 }]}>{error}</Text>}
 
+                {started && (
+                  <>
+                    <Text style={styles.label}>{t('oe_real_label')}</Text>
+                    <View style={styles.realBox}>
+                      <Text style={styles.realText}>{realLine(base)}</Text>
+                      {!!real && (
+                        <TouchableOpacity style={[styles.chip, styles.realChip, realOn && styles.chipOn]} onPress={useReal} disabled={realOn}>
+                          <Text style={[styles.chipText, realOn && styles.chipTextOn]}>{realOn ? '✓ ' : ''}{realChip(base)}</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </>
+                )}
+
                 <Text style={styles.label}>{t('oe_day')}</Text>
                 {limits?.locked ? (
                   <>
                     <Text style={[styles.dayText, styles.dayLocked]}>🔒  {fmtDate(draft.ymd, locale, { weekday: 'long' })}</Text>
-                    <Text style={styles.lockNote}>{t(limits.locked === 'back_to_back' ? 'oe_day_locked_b2b' : 'oe_day_locked_arrival')}</Text>
+                    <Text style={styles.lockNote}>{t(limits.locked === 'started' ? 'oe_day_locked_started' : limits.locked === 'back_to_back' ? 'oe_day_locked_b2b' : 'oe_day_locked_arrival')}</Text>
                   </>
                 ) : (
                   <>
@@ -250,7 +302,7 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
                     </View>
                   </>
                 )}
-                {win && (
+                {win && !started && (
                   <Text style={styles.windowText}>
                     {win.hi ? ti(t('oe_window'), { out: dayLabel(win.lo), in: dayLabel(win.hi) }) : ti(t('oe_window_open'), { out: dayLabel(win.lo) })}
                   </Text>
@@ -290,7 +342,13 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
                 )}
 
                 <Text style={styles.label}>{t('oe_crew')}</Text>
-                {people.map(p => {
+                {started ? (
+                  <>
+                    {/* The Lead tag on a team clean only, as on the picker (lib/crewNames showLeadTag). */}
+                    <Text style={styles.crewRead}>{showLeadTag(draft.crew.length) ? crewLine(draft) : draft.crew.map(nameOf).join(', ') || t('oe_sum_nobody')}</Text>
+                    <Text style={styles.windowText}>{t('oe_crew_started')}</Text>
+                  </>
+                ) : people.map(p => {
                   const on = draft.crew.includes(p.id)
                   // The Lead tag on a team clean only (lib/crewNames showLeadTag).
                   const isLead = on && draft.lead === p.id && showLeadTag(draft.crew.length)
@@ -324,6 +382,7 @@ export function OfficeEditSheet({ visible, job, user, onClose, onSaved }: {
                 )}
                 {plan?.problem === 'no_time' && <Text style={[styles.problem, { marginTop: 12 }]}>{t('oe_p_time')}</Text>}
                 {plan?.problem === 'day' && <Text style={[styles.problem, { marginTop: 12 }]}>{t('oe_p_day')}</Text>}
+                {plan?.problem === 'crew_started' && <Text style={[styles.problem, { marginTop: 12 }]}>{t('oe_crew_started')}</Text>}
 
                 <View style={styles.actions}>
                   <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={close} disabled={saving}>
@@ -377,6 +436,10 @@ const styles = StyleSheet.create({
   segText: { fontSize: 13, fontWeight: '700', color: '#64748B' },
   segTextOn: { color: '#0F172A' },
   ends: { fontSize: 13, color: '#334155', marginTop: 8, textAlign: 'center' },
+  realBox: { backgroundColor: '#F8FAFC', borderColor: '#E2E8F0', borderWidth: 1, borderRadius: 12, padding: 12, gap: 10 },
+  realText: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
+  realChip: { alignSelf: 'flex-start' },
+  crewRead: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
   person: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12, marginBottom: 8 },
   personOn: { borderColor: GOLD, backgroundColor: '#FFFBEB' },
   tick: { width: 24, height: 24, borderRadius: 7, borderWidth: 2, borderColor: '#CBD5E1', alignItems: 'center', justifyContent: 'center' },

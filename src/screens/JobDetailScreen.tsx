@@ -82,7 +82,7 @@ import { isRepairVisit, returnVisitValues, notesWithoutPhotoLinks, isLookAndQuot
 import { RepairVisitPhotos } from '../components/RepairVisitPhotos'
 import { RepairQuoteCard } from '../components/RepairQuoteCard'
 import { CLIENT_NOTE_MAX, clientNoteValues, takesClientNote } from '../lib/clientNote'
-import { canEditClean } from '../lib/officeEdit'
+import { canEditClean, cleanStarted } from '../lib/officeEdit'
 import { finishedCleanReadOnly, walkthroughDefault } from '../lib/finishedClean'
 import { showLeadTag } from '../lib/crewNames'
 import { CrewAnswerCard } from '../components/CrewAnswerCard'
@@ -2445,10 +2445,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           {calSource && (
             <Text style={{ fontSize: 12, fontWeight: '600', color: '#374151', marginTop: 2 }}>{calendarSourceLine(calSource, t)}</Text>
           )}
-          {/* The office moves the clean or changes its crew from the road. */}
+          {/* The office moves the clean or changes its crew from the road; once
+              it has started, corrects its booked time (lib/officeEdit). */}
           {canEditClean(user.role, job) && (
             <TouchableOpacity style={styles.editBtn} onPress={() => setShowEdit(true)}>
-              <Text style={styles.editBtnText}>✏️  {t('oe_edit_btn')}</Text>
+              <Text style={styles.editBtnText}>✏️  {cleanStarted(job) ? t('oe_edit_time_btn') : t('oe_edit_btn')}</Text>
             </TouchableOpacity>
           )}
           {turnover?.checkout && (
