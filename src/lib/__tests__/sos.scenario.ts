@@ -383,6 +383,72 @@ const sleep = (ms: number) => new Promise(res => setTimeout(res, ms))
   await flushSOSQueue()
   ok('... and both alerts go out once reads work again', rowsFor(w1.id).length === 1 && rowsFor(w2.id).length === 1)
 
+  // ── The backup asks the server for the office's phones ────────────────────
+  // (sos_request_office_alert, web 20261113160000): once installed, the phone no
+  // longer reads the company's push tokens, so narrowing them can't silence it.
+  server.rpc = 'installed'
+  server.push_tokens_narrowed = true
+  const rpMark = net.calls.length
+  const rp = await raiseSOS(base)
+  await flushSOSQueue()
+  const rp1 = await getSOS(rp.id)
+  ok('function installed, tokens narrowed: the phone still pushes the owner and the manager, once',
+    JSON.stringify(pushesFor(rp.id)[0]?.map((m: any) => m.to).sort()) === JSON.stringify(['ExponentPushToken[manager]', 'ExponentPushToken[owner]'])
+      && pushesFor(rp.id).length === 1 && rp1?.push === 'sent' && rp1.push_by === 'phone' && rp1.push_recipients === 2)
+  ok('... and asked the server fan-out to try again', server.refires.includes(rp.id))
+  ok('... without reading push_tokens itself',
+    !net.calls.slice(rpMark).some(c => c.method === 'GET' && c.path.endsWith('/push_tokens')))
+
+  const rpMgr = await raiseSOS({ ...base, user_id: 'u-manager', crew_name: 'The manager' })
+  await flushSOSQueue()
+  ok("function installed: a manager's SOS still goes to the owner only",
+    JSON.stringify(pushesFor(rpMgr.id)[0]?.map((m: any) => m.to)) === JSON.stringify(['ExponentPushToken[owner]']))
+
+  // The server's fan-out reports between the phone's look and its ask: the
+  // phone doesn't push on top, it reads the server's counts next pass.
+  server.fanout = 'silent'
+  const rq = await raiseSOS(base)
+  await flushSOSQueue()                              // lands; inside the grace
+  await sleep(250)
+  const row = server.sos_alerts.get(rq.id)!
+  net.override = (method, url) => {
+    if (method === 'POST' && url.pathname.endsWith('/rpc/sos_request_office_alert')) {
+      Object.assign(row, { office_notified_at: new Date().toISOString(), office_push_count: 2, office_sms_count: 1, office_email_count: 3 })
+    }
+    return null
+  }
+  await flushSOSQueue()
+  net.override = null
+  await flushSOSQueue()
+  const rq1 = await getSOS(rq.id)
+  ok('the server reported while the phone asked: no phone push, the server\'s counts are kept',
+    pushesFor(rq.id).length === 0 && rq1?.push === 'sent' && rq1.push_by === 'server')
+  server.fanout = 'off'
+
+  // Taken back on another screen or resolved by the office before the phone asks.
+  const rpcCallsBeforeRr = net.calls.filter(c => c.path.endsWith('/rpc/sos_request_office_alert') && c.method === 'POST').length
+  const rr = await raiseSOS(base)
+  server.fanout = 'silent'
+  await flushSOSQueue()
+  server.sos_alerts.get(rr.id)!.status = 'resolved'
+  await sleep(250)
+  for (let i = 0; i < 6; i++) await flushSOSQueue()
+  const rr1 = await getSOS(rr.id)
+  ok('an alert resolved elsewhere: no push, no error report, and the phone stops asking',
+    pushesFor(rr.id).length === 0 && rr1?.push === 'sent' && rr1.push_recipients === 0
+      && !reported.some(r => r.includes(rr.id))
+      && net.calls.filter(c => c.path.endsWith('/rpc/sos_request_office_alert') && c.method === 'POST').length === rpcCallsBeforeRr + 1)
+  server.fanout = 'off'
+
+  // An old app (no function call) after push_tokens is narrowed: the reason the
+  // narrowing waits for phones to take this update.
+  server.rpc = 'absent'
+  const ro = await raiseSOS(base)
+  await flushSOSQueue()
+  ok('old path after push_tokens is narrowed: recorded as 0 office phones (why step 2 waits for the OTA)',
+    (await getSOS(ro.id))?.push_recipients === 0 && pushesFor(ro.id).length === 0)
+  server.push_tokens_narrowed = false
+
   // ── The screen hears about it ─────────────────────────────────────────────
   let heard = 0
   let sawFlushing = false
