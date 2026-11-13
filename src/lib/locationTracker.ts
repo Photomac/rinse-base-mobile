@@ -17,6 +17,8 @@ import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocati
 import { tStatic, ti } from './i18n'
 import { noteTrail } from './siteVisits'
 import { effectiveTimeMode } from './dayClock'
+import { noteRoute, flushRoute, maybeShowRouteNotice } from './routeTrail'
+import type { TrailBasis } from './routeTrailRules'
 
 const LOCATION_TASK = 'crew-location-task'
 const PING_INTERVAL = 5 * 60 * 1000 // 5 minutes
@@ -177,8 +179,12 @@ const JOB_FIELDS = 'id, status, scheduled_start, route_order, job_number, client
 //   into: "you're still clocked in" is true of those and no others, including
 //   one they forgot to clock out of before starting the next. Daily fences the
 //   active clean ("not marked complete").
+// - basis: why they count as working, for the route trail (lib/routeTrail):
+//   'clocked_in' (an open punch or day shift, or a day-shift clean in
+//   progress) or 'en_route' (a clean they tapped On my way to). Null when not
+//   working or no way to tell.
 // Exported for scripts/test-offline-auth.mjs.
-export async function checkWork(userId: string, daily = false): Promise<{ working: boolean | null; activeJob: any | null; fenceJobs: any[] }> {
+export async function checkWork(userId: string, daily = false): Promise<{ working: boolean | null; activeJob: any | null; fenceJobs: any[]; basis: TrailBasis | null }> {
   const now = new Date()
   const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
   const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
@@ -212,18 +218,20 @@ export async function checkWork(userId: string, daily = false): Promise<{ workin
     if (open.length > 0) {
       if (!daily) {
         const clockedIn = jobsClockedInto(open, todays ?? [])
-        return { working: true, activeJob: clockedIn[0] ?? null, fenceJobs: clockedIn }
+        return { working: true, activeJob: clockedIn[0] ?? null, fenceJobs: clockedIn, basis: 'clocked_in' }
       }
       const activeJob = todays ? pickActiveJob(todays) : null
-      return { working: true, activeJob, fenceJobs: activeJob ? [activeJob] : [] }
+      return { working: true, activeJob, fenceJobs: activeJob ? [activeJob] : [], basis: 'clocked_in' }
     }
   }
-  if (!todays) return { working: null, activeJob: null, fenceJobs: [] }
+  if (!todays) return { working: null, activeJob: null, fenceJobs: [], basis: null }
   const working = todays.some((j: any) => j.status === 'en_route' || (daily && j.status === 'in_progress'))
-  if (!working && !entriesRes.data) return { working: null, activeJob: null, fenceJobs: [] }
+  if (!working && !entriesRes.data) return { working: null, activeJob: null, fenceJobs: [], basis: null }
   // Per-job with no open punch means en route: nothing to name or fence yet.
   const activeJob = working && daily ? pickActiveJob(todays) : null
-  return { working, activeJob, fenceJobs: activeJob ? [activeJob] : [] }
+  const basis: TrailBasis | null = !working ? null
+    : daily && todays.some((j: any) => j.status === 'in_progress') ? 'clocked_in' : 'en_route'
+  return { working, activeJob, fenceJobs: activeJob ? [activeJob] : [], basis }
 }
 
 function inDay(iso: string, start: Date, end: Date): boolean {
@@ -313,6 +321,10 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
     } catch { /* education is best-effort */ }
   }
 
+  // The route notice, at the same work moments (lib/routeTrail): only when the
+  // company records routes and this person hasn't acknowledged it yet.
+  if (opts?.requestBackground) maybeShowRouteNotice(user).catch(() => {})
+
   // Register the OS background task ONLY now that we've confirmed they're
   // working. Previously this ran BEFORE the work check, so an Always-granted
   // phone kept pinging location with no job and the app closed.
@@ -348,6 +360,10 @@ export async function stopLocationTracking() {
     clearInterval(pingTimer)
     pingTimer = null
   }
+  // Send the route points kept while they were working (best-effort and not
+  // awaited, so a clock-out or sign-out never waits on the network; whatever
+  // doesn't go now goes at the next work moment).
+  flushRoute(currentUser, true).catch(() => {})
   // Stop background tracking
   const isRegistered = await TaskManager.isTaskRegisteredAsync(LOCATION_TASK)
   if (isRegistered) {
@@ -466,7 +482,7 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
     // reporting location after the crew member is done for the day. Only on a
     // definite no: a dead zone mid-clean is not "off the clock".
     const daily = await isDailyMode(user)
-    const { working, activeJob, fenceJobs } = await checkWork(user.id, daily)
+    const { working, activeJob, fenceJobs, basis } = await checkWork(user.id, daily)
     if (working === false) {
       await stopLocationTracking()
       return
@@ -476,6 +492,10 @@ TaskManager.defineTask(LOCATION_TASK, async ({ data, error }: any) => {
     // timing a leave from a home (lib/siteVisits; only while the day-shift
     // arrive/leave fences are up). Never in the way of the map.
     noteTrail(locations).catch(() => {})
+    // The same batch for the route, when the company records routes and this
+    // person acknowledged the notice (lib/routeTrail). Working only: a null
+    // basis (offline, can't tell) keeps nothing.
+    noteRoute(user, locations, basis, activeJob?.id || null).catch(() => {})
 
     // Update crew location
     await supabase.from('crew_locations').upsert({
@@ -510,7 +530,7 @@ async function pingLocation(user: any) {
     // maybeStopLocationTracking so a stray timer can't keep broadcasting.
     // Only on a definite no (see checkWork).
     const daily = await isDailyMode(user)
-    const { working, activeJob, fenceJobs } = await checkWork(user.id, daily)
+    const { working, activeJob, fenceJobs, basis } = await checkWork(user.id, daily)
     if (working === false) {
       await stopLocationTracking()
       return
@@ -520,6 +540,7 @@ async function pingLocation(user: any) {
       accuracy: Location.Accuracy.Balanced,
     })
     noteTrail([loc]).catch(() => {})
+    noteRoute(user, [loc], basis, activeJob?.id || null).catch(() => {})
 
     const jobId = activeJob?.id || null
     const status = activeJob ? 'active' : 'idle'
