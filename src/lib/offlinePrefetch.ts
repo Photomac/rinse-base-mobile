@@ -135,6 +135,11 @@ async function runPack(user: any, given: any[] | null): Promise<DayPackResult> {
     if (!r.ok) return { status: r.status === 0 ? 'offline' : 'failed', reads }
     rows = (r.data as any[]) ?? []
   }
+  // Signed out while the day read was out: nothing after it may save (the
+  // stops' index below writes under the epoch of its own call). A crew day
+  // read is two round trips since crew read scope stage 1 (the jobs, then
+  // crew_job_context), which is how a sign-out came to land inside it.
+  if (epoch !== cacheEpoch()) return { status: 'skipped' }
 
   const queue: PackRead[] = []
   const seen = new Set<string>()

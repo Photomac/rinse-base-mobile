@@ -141,7 +141,11 @@ check('no inline job_assignments ownership check left on either screen',
 const query = (src, from, to) => { const i = src.indexOf(from); return i < 0 ? '' : src.slice(i, src.indexOf(to, i)) }
 const ownerMonth = query(dash, 'cachedQuery(`dash:month:', ': supabase.from')
 check('every query Mine reads carries the plain job_assignments(user_id) embed',
-  [query(reads, 'export function dashTodayRead(', 'export function homeDayRows('), ownerMonth, query(dash, 'cachedQuery(`dash:stranded:', 'job_time_entries'), query(sched, 'cachedQuery(`sched:', 'setOffline')]
+  // Since crew read scope stage 1 Home's day, "Needs closing" and Schedule read the
+  // office's selects HOME_DAY_SELECT, HOME_STRANDED_SELECT and SCHEDULE_JOB_SELECT
+  // (crew send them through lib/crewScope, made !inner and filtered to themselves).
+  [query(reads, 'export const HOME_DAY_SELECT', '\n'), ownerMonth, query(reads, 'export const HOME_STRANDED_SELECT', '\n'),
+   query(readFileSync(join(repo, 'src/lib/pushTap.ts'), 'utf8'), 'export const SCHEDULE_JOB_SELECT', '\n')]
     .map(q => /job_assignments(!job_assignments_job_id_fkey)?\(user_id\)/.test(q)), [true, true, true, true])
 check('Home\'s counts and stop badge come from the scoped day',
   [/\{day\.done\}/.test(dash), /\{day\.remaining\}/.test(dash), /listItems\(day\.jobs, day\.stops, groups\)/.test(dash), /<PrepCard user=\{user\} jobs=\{todayJobs\}/.test(dash)], [true, true, true, true])

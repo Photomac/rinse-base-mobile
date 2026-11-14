@@ -41,7 +41,8 @@ import { setCurrentTz, setMultiMarket, fmtTimeAt } from './src/lib/timezone'
 import { setCurrentCurrency } from './src/lib/money'
 import { flushOutbox, onOutboxDrained, onCompletePastRefusedPhotos, overlayPending } from './src/lib/outbox'
 import { prefetchDays, isDayChangePush } from './src/lib/offlinePrefetch'
-import { tappedJobId, onScreen, tapRouter, loadTappedJob, tapLedger, SCHEDULE_JOB_SELECT, type TapIO } from './src/lib/pushTap'
+import { tappedJobId, onScreen, tapRouter, loadTappedJob, tapLedger, type TapIO } from './src/lib/pushTap'
+import { scheduleJobById } from './src/lib/jobReads'
 import { flushIncidentNotifies } from './src/lib/incidentNotify'
 import { flushSOSQueue, resumableSOS } from './src/lib/sosQueue'
 import * as Notifications from 'expo-notifications'
@@ -61,8 +62,7 @@ const taps = tapLedger(AsyncStorage)
 // Where a tapped job push looks for its job (lib/pushTap): live, then the
 // saved copies, with queued writes laid over.
 const tapIO = (user: any): TapIO => ({
-  live: (jobId) => supabase.from('jobs').select(SCHEDULE_JOB_SELECT)
-    .eq('id', jobId).eq('tenant_id', user.tenant_id).maybeSingle(),
+  live: (jobId) => scheduleJobById(user, jobId),
   saved: (key) => readCacheEntry(key),
   overlay: (rows) => overlayPending('jobs', rows),
 })

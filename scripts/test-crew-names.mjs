@@ -59,11 +59,18 @@ const dash = readFileSync(join(repo, 'src/screens/DashboardScreen.tsx'), 'utf8')
 const sched = readFileSync(join(repo, 'src/screens/ScheduleScreen.tsx'), 'utf8')
 // Home's day read lives in src/lib/jobReads.ts (shared with the offline day pack).
 const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
-const todayQuery = /cachedRead\(dashTodayRead\(/.test(dash)
-  ? reads.slice(reads.indexOf('export function dashTodayRead('), reads.indexOf('export function homeDayRows('))
+// Since crew read scope stage 1 Home's select is HOME_DAY_SELECT (jobReads.ts) and
+// Schedule's is SCHEDULE_JOB_SELECT (pushTap.ts, read through jobReads scheduleRead);
+// crew send each through lib/crewScope, which keeps the crew: embed whole
+// (scripts/test-crew-read-scope.mjs).
+const todayQuery = /cachedRead\(dashTodayRead\(/.test(dash) && /\.select\(jobSelectFor\(office, HOME_DAY_SELECT\)\)/.test(reads)
+  ? (/export const HOME_DAY_SELECT = '([^']+)'/.exec(reads)?.[1] ?? '')
+  : ''
+const schedSelect = sched.includes('cachedRead(scheduleRead(') && reads.includes('.select(jobSelectFor(office, SCHEDULE_JOB_SELECT))')
+  ? (/export const SCHEDULE_JOB_SELECT = '([^']+)'/.exec(readFileSync(join(repo, 'src/lib/pushTap.ts'), 'utf8'))?.[1] ?? '')
   : ''
 check('Today fetches the crew through the aliased, FK-named embed', todayQuery.includes(CREW), true)
-check('Schedule fetches the crew through the aliased, FK-named embed', sched.includes(CREW), true)
+check('Schedule fetches the crew through the aliased, FK-named embed', schedSelect.includes(CREW), true)
 check('no unhinted users embed anywhere on these screens (PGRST201)', /job_assignments[^)]*users\(/.test(dash + sched + reads), false)
 check('Today and Schedule cards render the crew line, unassigned shown to the office only',
   [/<CrewLine crew=\{job\.crew\} viewerId=\{user\.id\} showUnassigned=\{canSeeClientNames\} \/>/.test(dash),
