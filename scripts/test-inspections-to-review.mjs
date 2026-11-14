@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // "Inspections to review" on Home (components/InspectionsToReviewCard.tsx,
-// web migration 20261113234500_inspection_review_reminders; CKS 2026-11-13).
+// web migration 20261114113340_inspection_review_reminders; CKS 2026-11-13).
 //
 // Runs the REAL src/lib/inspectionsToReview.ts under Node's type stripping (it
 // is pure) and checks:
@@ -82,7 +82,7 @@ const sweep = join(web, 'supabase/functions/inspection-review-reminders/index.ts
 if (existsSync(sweep)) {
   const s = readFileSync(sweep, 'utf8')
   check('the web sweep pushes the type this app opens', s.includes("const PUSH_TYPE = 'inspection_result'"), true)
-  const mig = join(web, 'supabase/migrations/20261113234500_inspection_review_reminders.sql')
+  const mig = join(web, 'supabase/migrations/20261114113340_inspection_review_reminders.sql')
   if (existsSync(mig)) check('the server function is the one the card calls', readFileSync(mig, 'utf8').includes('create or replace function public.my_inspections_to_review()'), true)
 } else {
   console.log('(web repo not found: its push type is not checked; set RINSEBASE_WEB_REPO)')
