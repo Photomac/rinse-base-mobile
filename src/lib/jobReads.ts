@@ -664,10 +664,17 @@ export function prepReads(user: any, cleans: any[], ymd: string) {
         .gte('checkout_date', shiftYmd(ymd, -1)).lte('checkin_date', shiftYmd(ymd, 1)).eq('status', 'confirmed'),
     } as CacheRead,
     // restock_level: "Opened the last one" / "Out" on the line (web migration 20261110183341_restock_level).
+    // Every open flag at the day's properties, logged on any clean by anyone,
+    // through prep_restock_flags (rinse-base-app 20261113171611): once a
+    // company's crew read scope is on, crew can't read other crews' cleans,
+    // and a join on them would drop those flags. Kept in the shape the card
+    // and older saved copies have ({ item_name, restock_level, jobs: { address_id } }).
     restock: {
       key: `prep:restock:${user.id}:${ymd}`,
-      q: () => supabase.from('job_inventory_log')
-        .select('item_name, restock_level, jobs!inner(address_id)').eq('needs_restock', true).in('jobs.address_id', addrIds),
+      q: async () => {
+        const res: any = await supabase.rpc('prep_restock_flags', { p_address_ids: addrIds }, { get: true })
+        return res.error ? res : { ...res, data: ((res.data ?? []) as any[]).map(r => ({ item_name: r.item_name, restock_level: r.restock_level, jobs: { address_id: r.address_id } })) }
+      },
     } as CacheRead,
     linen: {
       key: `prep:linen:${user.id}:${ymd}`,
