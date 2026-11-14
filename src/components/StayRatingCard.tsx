@@ -3,7 +3,8 @@
 // (1-5 + condition flags + optional note). Writes to jobs.stay_* (the same
 // columns the web app reads/writes). Shown on JobDetailScreen right after the
 // time card, before the checklist, next to Report an issue; Complete asks for
-// it once when it's still empty (StayAskModal, rules in lib/stayAsk.ts).
+// it when it's still empty, and so does saving a Finished walkthrough video
+// (StayAskModal, rules in lib/stayAsk.ts).
 // Bilingual via useLang. Mirrors web StayConditionCard.
 // readOnly (a finished clean, for the crew): the saved rating, its flags and
 // note as text; nothing at all when none was saved.
@@ -14,16 +15,18 @@
 // already picked in the ask, and a rating saved by the ask shows on the card.
 //
 // Under 5 stars needs photos when the company asks for them (CKS 2026-11-10,
-// lib/stayPhotos): the card's Save and the ask's "Save and complete" wait for
-// them, and the ask hides Skip meanwhile ("so they can't save it, or back out
-// of it, without taking the pictures"); the stars can still change. The app is
-// the gate: nothing on the server refuses the rating (see lib/stayPhotos).
+// lib/stayPhotos): the card's Save and the ask's Save wait for them, and the
+// ask has no Skip and no back button meanwhile ("so they can't save it, or
+// back out of it, without taking the pictures"); the stars can still change.
+// The app is the gate: nothing on the server refuses the rating (see
+// lib/stayPhotos). The ask also comes right after a Finished walkthrough
+// video is saved (CKS 2026-11-13, lib/stayAsk asksAfterVideo).
 
 import React, { useEffect, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Modal, ActivityIndicator } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
-import { STAY_FLAGS, type StayValue } from '../lib/stayAsk'
+import { STAY_FLAGS, askExits, type StayValue } from '../lib/stayAsk'
 import { saveStayRating } from '../lib/stayRating'
 import { requiredFromRead, stayPhotoCount, photosShort, needsPhotos } from '../lib/stayPhotos'
 import { cachedRead } from '../lib/dataCache'
@@ -249,42 +252,56 @@ export function StayRatingCard({ stay, readOnly = false, onError, onTakePhotos }
 }
 
 /**
- * The ask at Complete: "How did the guests leave it?", the card's stars and
- * flags, then "Save and complete" or Skip. What the crew picked on the card
- * and didn't save is already picked here. Closing it any other way (Android's
- * back button) neither saves nor completes.
+ * The ask: "How did the guests leave it?", the card's stars and flags, then
+ * Save or Skip. Two moments (lib/stayAsk): at Complete ("Save and complete"),
+ * and right after the crew saves a Finished walkthrough video ('video': Save,
+ * with a line saying the video is saved). What the crew picked on the card
+ * and didn't save is already picked here.
+ *
+ * The ways out (lib/stayAsk askExits; CKS 2026-11-13, "no saving it and no
+ * backing out of it without the pictures"): under 5 stars, short of the
+ * company's photos, there is no Save, no Skip, and Android's back button does
+ * nothing; the stars can still change and Take photos opens the photo screen
+ * (the sheet is back when it closes). Skip only before a star or at 5 stars.
+ * Closing (back) otherwise neither saves nor skips: at Complete it stops the
+ * Complete, and the ask comes again on the next one.
  */
-export function StayAskModal({ visible, stay, onSaveAndComplete, onSkip, onClose, onTakePhotos }: {
+export function StayAskModal({ visible, stay, mode = 'complete', onSave, onSkip, onClose, onTakePhotos }: {
   visible: boolean
   stay: StayRating
-  onSaveAndComplete: () => void
+  /** 'complete': at Complete. 'video': right after a Finished video was saved. */
+  mode?: 'complete' | 'video'
+  onSave: () => void
   onSkip: () => void
   onClose: () => void
   /** Opens the photo screen on Before; the sheet comes back when it closes. */
   onTakePhotos?: () => void
 }) {
   const { t } = useLang()
-  const picked = stay.value.rating > 0
-  // Under 5 stars and short of the company's photos (lib/stayPhotos): neither
-  // saved nor skipped. Picking 5 stars, or taking the photos, opens both again.
-  const short = stay.photosShort
+  const rating = stay.value.rating
+  const picked = rating > 0
+  // Under 5 stars and short of the company's photos (lib/stayPhotos): no way
+  // out but 5 stars or the photos.
+  const exits = askExits(rating, stay.photosShort)
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}>
       <View style={styles.askOverlay}>
         <View style={styles.askCard}>
+          {mode === 'video' && <Text style={styles.askVideoSaved}>✓ {t('stay_ask_after_video')}</Text>}
           <Text style={styles.askTitle}>{t('stay_rating_title')}</Text>
           <Text style={styles.sub}>{t('stay_rating_sub')}</Text>
           <StayPicker stay={stay} />
           <StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />
-          <TouchableOpacity style={[styles.askSaveBtn, (!picked || stay.saving || short > 0) && styles.saveBtnDisabled]}
-            onPress={onSaveAndComplete} disabled={!picked || stay.saving || short > 0}>
-            {stay.saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.saveBtnText}>✓ {t('stay_ask_save_complete')}</Text>}
+          <TouchableOpacity style={[styles.askSaveBtn, (!exits.save || stay.saving) && styles.saveBtnDisabled]}
+            onPress={onSave} disabled={!exits.save || stay.saving}>
+            {stay.saving ? <ActivityIndicator color="#fff" size="small" />
+              : <Text style={styles.saveBtnText}>✓ {t(mode === 'video' ? 'stay_save' : 'stay_ask_save_complete')}</Text>}
           </TouchableOpacity>
           {/* Kept in place once a star is picked: the sheet sits on the bottom
               edge, so a line going away would move the stars and flags up
               under the next tap. */}
           <Text style={[styles.hint, picked && { opacity: 0 }]}>{t('stay_tap_star')}</Text>
-          {short === 0 && (
+          {exits.skip && (
             <TouchableOpacity style={styles.askSkipBtn} onPress={onSkip} disabled={stay.saving}>
               <Text style={styles.askSkipText}>{t('stay_ask_skip')}</Text>
             </TouchableOpacity>
@@ -315,6 +332,7 @@ const styles = StyleSheet.create({
   askOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   askCard: { backgroundColor: CARD, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
   askTitle: { fontSize: 18, fontWeight: '800', color: TEXT },
+  askVideoSaved: { fontSize: 13, fontWeight: '800', color: '#065F46', marginBottom: 6 },
   askSaveBtn: { backgroundColor: '#10B981', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 10 },
   askSkipBtn: { borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 8, backgroundColor: '#F3F4F6' },
   askSkipText: { color: TEXT_MUTED, fontSize: 14, fontWeight: '700' },

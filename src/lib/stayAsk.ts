@@ -11,9 +11,26 @@
 // asks once, on a clean that shows the card and has no rating: the same stars
 // and flags, plus Skip.
 //
-// Never twice for the same clean on this phone: the clean is remembered once
-// the ask is shown, and once the card saves a rating. A Complete the gate then
-// holds back (a missing photo, say) goes straight through on the next tap.
+// Never twice for the same clean on this phone once it's ANSWERED: the clean
+// is remembered when the crew Skip, and when a rating saves (the card or the
+// ask). Until 2026-11-13 it was remembered as soon as the ask showed, so
+// closing it (Android's back button) or a Complete the gate then held back
+// meant it was never asked again; now a closed ask asks again on the next
+// Complete. And a pick of 1-4 stars that isn't saved (picked, then closed)
+// is always asked again at Complete, whatever was answered before: a low
+// rating is the one that must not get lost (CKS, Catherine 2026-11-13).
+//
+// After the Finished walkthrough video (CKS, Catherine 2026-11-13: "when the
+// walk-through video is saved, the star rating should pop up automatically
+// right then"): saving a Finished video on a clean that shows the card and has
+// no rating closes the recorder and asks right then (asksAfterVideo), with
+// Save instead of "Save and complete".
+//
+// Leaving the ask (CKS 2026-11-13: "no saving it and no backing out of it
+// without the pictures"): under 5 stars, short of the company's photos
+// (lib/stayPhotos), it neither saves nor skips nor closes; 5 stars or the
+// photos open the way again. Skip shows only before a star is picked or at 5
+// stars: a 1-4 pick is an answer, so it's saved, not skipped (askExits).
 
 export const STAY_FLAGS = [
   { key: 'heavy_mess',  i18n: 'stay_flag_heavy_mess',  icon: '🧹' },
@@ -38,10 +55,39 @@ export function stayWrite(v: StayValue, userId: string | null | undefined, now: 
   }
 }
 
+/** A pick of 1-4 stars that isn't saved: picked and never saved, or changed
+ *  from the saved rating and not saved again. */
+export function lowPickUnsaved(s: { rating: number; saved: boolean; dirty: boolean }): boolean {
+  return Number.isInteger(s.rating) && s.rating >= 1 && s.rating <= 4 && (!s.saved || s.dirty)
+}
+
 /** Complete asks only on a clean that shows the rating card (the card's own
- *  gate, not read-only), has no rating, and wasn't asked here before. */
-export function asksAtComplete(s: { shows: boolean; rated: boolean; askedBefore: boolean }): boolean {
-  return s.shows && !s.rated && !s.askedBefore
+ *  gate, not read-only): one with no rating that wasn't answered here before,
+ *  or one with a 1-4 star pick that isn't saved (always, see lowPickUnsaved). */
+export function asksAtComplete(s: { shows: boolean; rated: boolean; askedBefore: boolean; lowUnsaved?: boolean }): boolean {
+  return s.shows && (!!s.lowUnsaved || (!s.rated && !s.askedBefore))
+}
+
+/** Saving a walkthrough video asks right then only for a Finished one, on a
+ *  clean that shows the rating card and has no rating. (A Skip earlier
+ *  doesn't stop it: the video is the moment the company asked for.) */
+export function asksAfterVideo(s: { type: string; shows: boolean; rated: boolean }): boolean {
+  return s.type === 'after' && s.shows && !s.rated
+}
+
+/** The ways out of the ask, for the stars picked and the photos still short
+ *  (lib/stayPhotos photosShort). Under 5 stars and short: none (the stars
+ *  can still change, and Take photos opens the photo screen, the sheet still
+ *  waiting). Skip only before a star or at 5 stars. Save once a star is
+ *  picked and nothing is short. Closing (Android's back) whenever nothing is
+ *  short. */
+export function askExits(rating: number, short: number): { save: boolean; skip: boolean; close: boolean } {
+  const locked = short > 0
+  return {
+    save: rating > 0 && !locked,
+    skip: !locked && (rating === 0 || rating === 5),
+    close: !locked,
+  }
 }
 
 /** How many cleans the phone remembers as asked. A busy cleaner works ~130

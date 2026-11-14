@@ -705,6 +705,8 @@ export const translations = {
     stay_tap_star: 'Tap a star to rate',
     stay_ask_save_complete: 'Save and complete',
     stay_ask_skip: 'Skip',
+    // Right after a Finished walkthrough video is saved, the rating asks (lib/stayAsk).
+    stay_ask_after_video: 'Finished video saved',
     // Under 5 stars needs photos when the company asks for them
     // (tenants.stay_rating_photos_required; lib/stayPhotos.ts, CKS 2026-11-10).
     stay_photos_count: '📷 Photos {{n}} of {{need}}',
@@ -1887,6 +1889,7 @@ export const translations = {
     stay_tap_star: 'Toca una estrella para calificar',
     stay_ask_save_complete: 'Guardar y completar',
     stay_ask_skip: 'Omitir',
+    stay_ask_after_video: 'Video terminado guardado',
     stay_photos_count: '📷 Fotos {{n}} de {{need}}',
     stay_photos_need_one: 'Una calificación de menos de 5 estrellas necesita una foto de cómo dejaron la propiedad los huéspedes (Antes o Daño).',
     stay_photos_need_many: 'Una calificación de menos de 5 estrellas necesita {{need}} fotos de cómo dejaron la propiedad los huéspedes (Antes o Daño).',
@@ -3059,6 +3062,7 @@ export const translations = {
     stay_tap_star: 'Toque em uma estrela para avaliar',
     stay_ask_save_complete: 'Salvar e concluir',
     stay_ask_skip: 'Pular',
+    stay_ask_after_video: 'Vídeo final salvo',
     stay_photos_count: '📷 Fotos {{n}} de {{need}}',
     stay_photos_need_one: 'Uma avaliação abaixo de 5 estrelas precisa de uma foto de como os hóspedes deixaram o imóvel (Antes ou Dano).',
     stay_photos_need_many: 'Uma avaliação abaixo de 5 estrelas precisa de {{need}} fotos de como os hóspedes deixaram o imóvel (Antes ou Dano).',
