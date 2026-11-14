@@ -19,8 +19,9 @@
 // the screens read it where they always have.
 //
 // Once a company's crew read scope is switched on (stage 3), a clean outside
-// yesterday → +30 days comes back with no property. placeLabel() then says
-// "Address shows from the day before" for crew (D6).
+// yesterday → +30 days comes back with no property. placeLabel() then says so
+// for crew (D6): "Past clean · address no longer shown" for one that has
+// started, "Address not shown yet" for one further ahead (the web's wording).
 //
 // No imports, so scripts/test-crew-read-scope.mjs runs it as is.
 
@@ -93,16 +94,34 @@ export async function withJobContext<R extends Res>(res: R, rpc: ContextRpc, one
   return res
 }
 
+/** The two lines for a crew clean the server sends with no property. */
+export interface HiddenAddressText { past: string; later: string }
+
+/** Those lines in the phone's language: pass i18n's t(). */
+export function hiddenAddressText(t: (key: any) => string): HiddenAddressText {
+  return { past: t('address_past_hidden'), later: t('address_not_yet') }
+}
+
+/**
+ * Which line a clean with no property shows: `past` once it has started
+ * (before yesterday: outside the window behind), `later` before (more than 30
+ * days ahead). A clean between yesterday and now always has its property.
+ */
+export function hiddenAddressLabel(job: any, text: HiddenAddressText, now: number = Date.now()): string {
+  const start = job?.scheduled_start ? new Date(job.scheduled_start).getTime() : NaN
+  return start < now ? text.past : text.later
+}
+
 /**
  * The name a card shows for a clean's place: the property's nickname, then
  * the client's name for the office or the street for crew. A crew clean the
- * server hands over with no property (crew read scope on, the clean more than
- * 30 days out) shows `dayBefore` ("Address shows from the day before"); the
- * office's never does.
+ * server hands over with no property (crew read scope on, the clean outside
+ * yesterday → +30 days) shows hiddenAddressLabel()'s line; the office's never
+ * does.
  */
-export function placeLabel(job: any, office: boolean, dayBefore: string): string {
+export function placeLabel(job: any, office: boolean, hidden: HiddenAddressText): string {
   const a = job?.client_addresses
   const name = a?.nickname || (office ? job?.clients?.full_name : a?.street)
   if (name) return name
-  return office || a ? '' : dayBefore
+  return office || a ? '' : hiddenAddressLabel(job, hidden)
 }

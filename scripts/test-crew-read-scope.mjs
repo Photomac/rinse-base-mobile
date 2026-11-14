@@ -40,7 +40,7 @@ const ok = (name, cond, detail = '') => {
 }
 
 // ── 1. lib/crewScope.ts ─────────────────────────────────────────────────────
-const { crewJobSelect, jobSelectFor, onlyMine, withJobContext, placeLabel, CONTEXT_CHUNK } =
+const { crewJobSelect, jobSelectFor, onlyMine, withJobContext, placeLabel, hiddenAddressText, hiddenAddressLabel, CONTEXT_CHUNK } =
   await import(join(repo, 'src/lib/crewScope.ts'))
 
 const HOME = /export const HOME_DAY_SELECT = '([^']+)'/.exec(read('src/lib/jobReads.ts'))?.[1] ?? ''
@@ -97,13 +97,26 @@ const ctxRow = (id, extra = {}) => ({ job_id: id, client_type: 'str', display_na
   ok('context: a failed jobs read is passed through, unasked', failed.error && !asked)
 }
 
-const DAY = 'Address shows from the day before'
-const job = (addr, client) => ({ client_addresses: addr, clients: client })
-ok('place: the nickname first', placeLabel(job({ nickname: 'Casa', street: '1 Main' }, { full_name: 'Ann' }), false, DAY) === 'Casa')
-ok('place: crew get the street, never the client', placeLabel(job({ street: '1 Main' }, { full_name: 'Ann' }), false, DAY) === '1 Main')
-ok('place: the office gets the client', placeLabel(job({ street: '1 Main' }, { full_name: 'Ann' }), true, DAY) === 'Ann')
-ok('place: a crew clean with no property says when it will show', placeLabel(job(null, null), false, DAY) === DAY)
-ok('place: the office never sees that line', placeLabel(job(null, null), true, DAY) === '')
+const HIDDEN = { past: 'PAST', later: 'LATER' }
+const DAY_MS = 86400000
+const job = (addr, client, start = new Date(Date.now() + 40 * DAY_MS).toISOString()) => ({ client_addresses: addr, clients: client, scheduled_start: start })
+ok('place: the nickname first', placeLabel(job({ nickname: 'Casa', street: '1 Main' }, { full_name: 'Ann' }), false, HIDDEN) === 'Casa')
+ok('place: crew get the street, never the client', placeLabel(job({ street: '1 Main' }, { full_name: 'Ann' }), false, HIDDEN) === '1 Main')
+ok('place: the office gets the client', placeLabel(job({ street: '1 Main' }, { full_name: 'Ann' }), true, HIDDEN) === 'Ann')
+ok('place: a crew clean 40 days out with no property says it is not shown yet', placeLabel(job(null, null), false, HIDDEN) === 'LATER')
+ok('place: a past crew clean with no property says it is no longer shown',
+  placeLabel(job(null, null, new Date(Date.now() - 10 * DAY_MS).toISOString()), false, HIDDEN) === 'PAST')
+ok('place: the office never sees either line', placeLabel(job(null, null), true, HIDDEN) === '' && placeLabel(job(null, null, new Date(Date.now() - 10 * DAY_MS).toISOString()), true, HIDDEN) === '')
+ok('hidden line: just started counts as past, a minute ahead as not yet',
+  hiddenAddressLabel({ scheduled_start: new Date(1000).toISOString() }, HIDDEN, 2000) === 'PAST' && hiddenAddressLabel({ scheduled_start: new Date(62000).toISOString() }, HIDDEN, 2000) === 'LATER')
+ok('hidden line: t() keys', JSON.stringify(hiddenAddressText((k) => k)) === JSON.stringify({ past: 'address_past_hidden', later: 'address_not_yet' }))
+{
+  // Every language has both lines, and the old "from the day before" key is gone
+  // (it was wrong for past cleans and for cleans more than 30 days out).
+  const i18n = read('src/lib/i18n.ts')
+  ok('i18n: both lines in all three languages', (i18n.match(/^\s+address_past_hidden: '/gm) || []).length === 3 && (i18n.match(/^\s+address_not_yet: '/gm) || []).length === 3)
+  ok('i18n: the old address_day_before key is gone', !/address_day_before/.test(i18n))
+}
 
 // ── 2–4. Source ─────────────────────────────────────────────────────────────
 function files(dir) {

@@ -23,7 +23,7 @@ import { arrivalForStart } from '../lib/siteVisits'
 import { cachedQuery, cachedRead, readSoon, writeCacheEntry, cacheEpoch } from '../lib/dataCache'
 import { lastTripFailed } from '../lib/netFetch'
 import { dashTodayRead, dashShiftRead, dashStrandedRead, homeDayRows, sameDayInspections } from '../lib/jobReads'
-import { placeLabel } from '../lib/crewScope'
+import { placeLabel, hiddenAddressText } from '../lib/crewScope'
 import { markSameDay } from '../lib/sameDayCheckin'
 import { prefetchDays, loadDayPack, onDayPackChange, stopsAhead, type DayPack } from '../lib/offlinePrefetch'
 import { writeThrough, overlayPending, flushOutbox, onOutboxDrained, uuid4, isQueued } from '../lib/outbox'
@@ -655,7 +655,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                 <View style={styles.activeInfo}>
                   <Text style={styles.activeLabel}>🔶 {t('active_job')}</Text>
                   <Text style={styles.activeClient}>
-                    {placeLabel(activeJob, canSeeClientNames, t('address_day_before'))}
+                    {placeLabel(activeJob, canSeeClientNames, hiddenAddressText(t))}
                   </Text>
                   <Text style={styles.activeTime}>{fmtTimeRangeAt(activeJob.scheduled_start, activeJob.scheduled_end, activeJob.client_addresses, localeFor(lang))}</Text>
                 </View>
@@ -682,7 +682,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   <Text style={styles.nextJobTime}>{fmtTimeAt(nextJob.scheduled_start, nextJob.client_addresses, localeFor(lang))}</Text>
                 </View>
                 <Text style={styles.nextJobClient}>
-                  {placeLabel(nextJob, canSeeClientNames, t('address_day_before'))}
+                  {placeLabel(nextJob, canSeeClientNames, hiddenAddressText(t))}
                 </Text>
                 <Text style={styles.nextJobAddress}>
                   📍 {(nextJob.client_addresses as any)?.street}, {(nextJob.client_addresses as any)?.city}
@@ -729,7 +729,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                       <View style={[styles.jobDot, { backgroundColor: '#F59E0B' }]} />
                       <View style={styles.jobInfo}>
                         <Text style={styles.jobClient}>
-                          {job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : placeLabel(job, canSeeClientNames, t('address_day_before'))}
+                          {job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : placeLabel(job, canSeeClientNames, hiddenAddressText(t))}
                           {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
                         </Text>
                         <Text style={styles.jobTime}>
@@ -773,7 +773,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   <TouchableOpacity key={job.id} style={[styles.jobRow, isDone && { opacity: 0.5 }]} onPress={() => onJobPress(job)}>
                     <View style={[styles.jobDot, { backgroundColor: isDone ? '#10B981' : isActive ? '#F59E0B' : '#3B82F6' }]} />
                     <View style={styles.jobInfo}>
-                      <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : placeLabel(job, canSeeClientNames, t('address_day_before'))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}</Text>
+                      <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : placeLabel(job, canSeeClientNames, hiddenAddressText(t))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}</Text>
                       <Text style={styles.jobTime}>{[fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang)), ...kindParts(job, kindLabels)].join(' · ')}</Text>
                       <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                     </View>
@@ -801,7 +801,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     <View style={[styles.jobDot, { backgroundColor: '#EF4444' }]} />
                     <View style={styles.jobInfo}>
                       <Text style={[styles.jobClient, { textDecorationLine: 'line-through' as const }]}>
-                        {placeLabel(job, canSeeClientNames, t('address_day_before'))}
+                        {placeLabel(job, canSeeClientNames, hiddenAddressText(t))}
                       </Text>
                       <Text style={[styles.jobTime, { color: '#EF4444', fontWeight: '700' as const }]}>
                         ❌ {t('job_cancelled_label')}{reason ? ` — ${reason}` : ''}
