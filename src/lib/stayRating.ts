@@ -19,13 +19,15 @@ async function readAsked(): Promise<unknown> {
   } catch { return [] }
 }
 
-/** Complete already asked about this clean on this phone, or the card saved a
- *  rating for it here. Storage that can't be read answers no. */
+/** The ask about this clean was answered on this phone (Skip), or a rating
+ *  for it saved here. Storage that can't be read answers no. */
 export async function stayAskedBefore(jobId: string): Promise<boolean> {
   return wasAsked(await readAsked(), jobId)
 }
 
-/** Remember the clean: Complete won't ask about it again on this phone. */
+/** Remember the clean as answered: Complete won't ask about it again on this
+ *  phone (unless a 1-4 star pick is left unsaved, lib/stayAsk). Called on an
+ *  answer only, never just because the ask showed. */
 export function rememberStayAsked(jobId: string): Promise<void> {
   const next = turn.then(async () => {
     try { await AsyncStorage.setItem(ASKED_KEY, JSON.stringify(withAsked(await readAsked(), jobId))) } catch { /* asked again, at worst */ }

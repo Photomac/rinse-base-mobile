@@ -2,6 +2,10 @@
 // left (finished), as proof for the owner and their client. Recorded inside
 // the app — never picked from the camera roll — so it can't be an old video.
 //
+// Saving a Finished video on a clean with no stay rating hands back to the
+// clean's screen (onSaved), which asks "How did the guests leave it?" right
+// then (CKS 2026-11-13, lib/stayAsk asksAfterVideo).
+//
 // Line mode (`line`): a clip for one checklist line that asks for a video
 // (lib/lineVideos). Same camera, sound off, same queue; no Arrival/Finished,
 // at most a minute, at least 3 seconds to count, and saving it ticks the line
@@ -58,6 +62,10 @@ interface Props {
   line?: { id: string; room: string | null; title: string; label: string } | null
   /** Line mode: a clip long enough to count was saved (the clean's screen ticks the line). */
   onLineSaved?: (seconds: number) => void
+  /** An Arrival or Finished video was saved (on the phone, its upload queued).
+   *  true = the clean's screen takes over from here (it closes this one to ask
+   *  for the stay rating after a Finished video, lib/stayAsk asksAfterVideo). */
+  onSaved?: (type: WalkthroughType) => boolean
   onBack: () => void
 }
 
@@ -72,7 +80,7 @@ interface Row {
 
 const rowTrouble = (r: Row) => r.state === 'failing' || r.state === 'stuck' || r.state === 'gone'
 
-export function WalkthroughScreen({ job, user, defaultType, asked = false, started = false, startedAt: cleanStartedAt = null, owed = [], line = null, onLineSaved, onBack }: Props) {
+export function WalkthroughScreen({ job, user, defaultType, asked = false, started = false, startedAt: cleanStartedAt = null, owed = [], line = null, onLineSaved, onSaved, onBack }: Props) {
   const { t } = useLang()
   const cameraRef = useRef<CameraView>(null)
   const [perm, setPerm] = useState<'checking' | 'granted' | 'denied'>('checking')
@@ -233,6 +241,13 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
       }
       setRecorded(null)
       setJustSaved(true)
+      // The clean's screen can take over (a Finished video asks for the stay
+      // rating right then): this screen closes, and the upload carries on
+      // from the queue, as it does for a line clip.
+      if (onSaved?.(videoType)) {
+        flushVideoQueue().catch(() => {})
+        return
+      }
       await loadList()
       flushVideoQueue().catch(() => {}).finally(() => { loadList().catch(() => {}) })
     } catch (e: any) {
