@@ -12,13 +12,15 @@
 // read the open_board_jobs() RPC, not jobs. The board used to read the open
 // cleans straight from jobs, with the client's name and phone, the
 // property's lockbox code and its default crew, for cleans nobody had
-// claimed; once a company's crew read scope is on, crew can't read a clean
-// they are not on at all. The RPC hands each person what a card shows and
+// claimed; once a company's crew read scope is on, crew can't read the
+// property, client or teammates of a clean they are not on (whether the
+// clean's own row stays readable for board cleans is open for stage 2). The
+// RPC hands each person what a card shows and
 // nothing else: no client, no codes, no notes (a task's card shows its
 // service name: notes can hold codes). For crew it lists the cleans they
 // could claim now (open to everyone, or first pick for them) plus the board
 // cleans they already claimed; for the office every board clean. It has no
-// date horizon, like claim_open_job (rinse-base-app 20261114193745): a clean
+// date horizon, like claim_open_job (rinse-base-app 20261114195620): a clean
 // months out is listed and counted, soonest first, 200 at most.
 //
 // No imports, so scripts/test-open-jobs.mjs can run it as is.
