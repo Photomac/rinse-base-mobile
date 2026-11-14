@@ -72,38 +72,31 @@ export function InspectionResultCard({ job }: { job: any }) {
   useEffect(() => {
     let active = true
     ;(async () => {
-      const { data } = await supabase.from('job_inspections')
-        .select('id, job_id, result, corrections_made, correction_minutes, notes, inspector_user_id, completed_at')
-        // Newest first, one row: two filed inspections of one clean would
-        // otherwise error maybeSingle() and the card would silently vanish.
-        .eq('parent_job_id', job.id).not('result', 'is', null)
-        .order('completed_at', { ascending: false }).limit(1).maybeSingle()
-      if (!active || !data) return
-      setInsp(data)
-      const [insRes, phRes, lnRes, dfRes, seenRes] = await Promise.all([
-        data.inspector_user_id
-          ? supabase.from('users').select('full_name').eq('id', data.inspector_user_id).maybeSingle()
-          : Promise.resolve({ data: null } as any),
-        // The inspector's photos and walkthrough live on the inspection VISIT
-        // job, not the clean.
-        supabase.from('job_photos').select('id, photo_url, caption, checklist_item_id').eq('job_id', data.job_id)
-          .order('created_at', { ascending: true }).limit(40),
-        supabase.from('job_checklist_items').select('id, room, task, issue_note, result, photo_url, sort_order')
-          .eq('job_id', data.job_id).or('result.eq.issue,issue_note.not.is.null')
-          .order('sort_order', { ascending: true }).limit(60),
+      // The newest filed inspection of this clean with the inspector's name and
+      // the visit's flagged lines and photos, in one read
+      // (inspection_result_for_clean, rinse-base-app 20261113171611): for the
+      // office, the clean's crew and the visit's crew or inspector. The lines
+      // and photos live on the inspection VISIT, not the clean, and the
+      // inspector is often not on the clean: once a company's crew read scope
+      // is on, crew can't read either directly. null = none filed, or not theirs.
+      const { data } = await supabase.rpc('inspection_result_for_clean', { p_job_id: job.id }, { get: true })
+      const found = data as any
+      if (!active || !found?.id) return
+      setInsp(found)
+      const [dfRes, seenRes] = await Promise.all([
         // Allowlisted columns only — see the header comment.
         supabase.from('job_defects').select('id, room, description, severity, status, created_at')
           .eq('job_id', job.id).order('created_at', { ascending: true }).limit(20),
         // Stamps "opened" for this person when they're one of the cleaners;
         // anyone else gets the state back. An older server has no function:
         // no review box, the card works as before.
-        supabase.rpc('mark_inspection_seen', { p_inspection_id: data.id }),
+        supabase.rpc('mark_inspection_seen', { p_inspection_id: found.id }),
       ])
       if (!active) return
-      setInspector((insRes.data as any)?.full_name ?? '')
-      const ph = ((phRes.data ?? []) as Photo[]).filter(p => !!p.photo_url)
+      setInspector(found.inspector_name ?? '')
+      const ph = ((found.photos ?? []) as Photo[]).filter(p => !!p.photo_url)
       setPhotos(ph)
-      setLines(((lnRes.data ?? []) as any[])
+      setLines(((found.lines ?? []) as any[])
         // A line with only a note of spaces is not a finding.
         .filter(l => l.result === 'issue' || String(l.issue_note ?? '').trim())
         .map(l => ({

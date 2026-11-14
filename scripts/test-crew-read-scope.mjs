@@ -122,9 +122,6 @@ const lineOf = (text, i) => text.slice(0, i).split('\n').length
 const OFFICE_ONLY = {
   'src/lib/teamReads.ts': 'Team today: office phones only (App.tsx shows the Team tab to the office)',
   'src/lib/officeEdit.ts': 'Edit time: the office fixing a clean, by id',
-  // Removed by the RPC-adoption PR (open_board_jobs()): until then the board
-  // still reads open cleans with their lockbox code.
-  'src/screens/OpenJobsScreen.tsx': 'Open jobs board: moves to open_board_jobs() in the RPC-adoption PR',
 }
 const OWN = /job_assignments\.user_id|driver_user_id|\.eq\('id',|\.in\('id',|onlyMine\(/
 const bad = []

@@ -532,6 +532,7 @@ export const translations = {
     job_cancelled_label: 'Cancelled',
     // A crew clean more than 30 days out, once the company's crew read scope is on (lib/crewScope placeLabel).
     address_day_before: 'Address shows from the day before',
+    open_jobs_open_failed: 'Couldn\'t open this clean. Check your signal and try again.',
     login_invalid_credentials: 'Email or password is incorrect. Check both and try again.',
     login_network_error: "Couldn't reach the server — check your internet connection and try again.",
     perm_bg_location_title: 'Background location off',
@@ -1726,6 +1727,7 @@ export const translations = {
     laundry_save_run: 'Guardar viaje',
     job_cancelled_label: 'Cancelado',
     address_day_before: 'La dirección aparece desde el día anterior',
+    open_jobs_open_failed: 'No se pudo abrir esta limpieza. Revisa tu señal e inténtalo de nuevo.',
     login_invalid_credentials: 'El correo o la contraseña son incorrectos. Revísalos e inténtalo de nuevo.',
     login_network_error: 'No se pudo conectar al servidor — revisa tu conexión a internet e inténtalo de nuevo.',
     perm_bg_location_title: 'Ubicación en segundo plano desactivada',
@@ -2904,6 +2906,7 @@ export const translations = {
     laundry_save_run: 'Salvar ida à lavanderia',
     job_cancelled_label: 'Cancelado',
     address_day_before: 'O endereço aparece a partir do dia anterior',
+    open_jobs_open_failed: 'Não foi possível abrir esta limpeza. Verifique o sinal e tente de novo.',
     login_invalid_credentials: 'E-mail ou senha incorretos. Confira os dois e tente de novo.',
     login_network_error: 'Não foi possível conectar ao servidor — verifique sua internet e tente de novo.',
     perm_bg_location_title: 'Localização em segundo plano desativada',

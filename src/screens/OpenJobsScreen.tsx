@@ -5,11 +5,13 @@
 // with 1099 contractors asked for exactly this: cleaners pick their own work
 // instead of being assigned.
 //
-// READS: crew already download every job in the company for Schedule and
-// Home and filter to their own client-side, so this is the same read with a
-// different filter (open_for_claims_at set, still pending/scheduled, in the
-// future, not yet full). That filter lives in lib/openJobs.ts, shared with
-// the tab's badge, so the badge never counts a clean this list leaves out.
+// READS: the open_board_jobs() RPC (crew read scope stage 1), shared with the
+// tab's badge through lib/openJobs.ts, so the badge never counts a clean this
+// list leaves out. It hands each card what it shows and nothing else: the
+// place's nickname or street, its city and clock, the time, the service and
+// the spots. No client, no door code, no notes, for cleans nobody has
+// claimed. A clean this person opens is read in full by its id once it is
+// theirs (scheduleJobById), the way a push tap opens one.
 //
 // WRITES: only through the claim_open_job RPC. Crew have no INSERT on
 // job_assignments and never will; the RPC row-locks the job so two people
@@ -26,12 +28,13 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, RefreshControl } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { scheduleJobById } from '../lib/jobReads'
 import { useLang } from '../contexts/LangContext'
 import { ti, localeFor } from '../lib/i18n'
 import { SLATE_DARK, GOLD, SLATE } from '../lib/theme'
-import { cachedQuery } from '../lib/dataCache'
+import { cachedQuery, pruneDataCache } from '../lib/dataCache'
 import { fmtTimeAt, fmtDate, fmtDatePart, dayClocksOf } from '../lib/timezone'
-import { boardQuery, boardJobsFor, offeredFirstTo } from '../lib/openJobs'
+import { boardRows, boardJobsFor, claimedByMe, offeredFirstTo, type BoardRow } from '../lib/openJobs'
 import { isCalendarMade } from '../lib/calendarMade'
 
 const RESULT_KEY: Record<string, string> = {
@@ -49,8 +52,8 @@ const RESULT_KEY: Record<string, string> = {
 
 export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (job: any) => void }) {
   const { t, lang } = useLang()
-  const [jobs, setJobs] = useState<any[]>([])
-  const [mine, setMine] = useState<any[]>([])
+  const [jobs, setJobs] = useState<BoardRow[]>([])
+  const [mine, setMine] = useState<BoardRow[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [offline, setOffline] = useState(false)
@@ -59,28 +62,41 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
   // A day on this board that crosses a zone line names every clean's zone.
   const boardDays = useMemo(() => dayClocksOf([...jobs, ...mine]), [jobs, mine])
 
-  // Crew see the property, not the homeowner — client names are for admins.
-  const canSeeClientNames = ['owner', 'admin', 'manager', 'dispatcher'].includes(user.role)
-
   const load = useCallback(async () => {
     const now = new Date()
-    const res = await cachedQuery(`openjobs:${user.tenant_id}`, boardQuery(supabase
-      .from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, reservation_id, max_crew, open_for_claims_at, open_to_all_at, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, default_crew, timezone), service_types(name), job_assignments(user_id, claimed_at)'),
-      user.tenant_id, now))
+    // Saved per person: the RPC's answer is this person's (their first picks,
+    // their claims). GET: the function is STABLE, so it is a read.
+    const res = await cachedQuery(`openjobs2:${user.id}`, supabase.rpc('open_board_jobs', {}, { get: true }))
     setOffline(res.fromCache)
-    const rows = res.data ?? []
-    setJobs(boardJobsFor(rows, user.id, now.getTime()))
+    const rows = boardRows(res.data)
+    setJobs(boardJobsFor(rows, now.getTime()))
     // Board cleans this person claimed. A full one drops out of the open list,
     // so it needs its own row here — that is where "give back" lives.
-    setMine(rows.filter((j: any) => (j.job_assignments ?? []).some((a: any) => a.user_id === user.id && a.claimed_at)))
+    setMine(claimedByMe(rows))
     setLoading(false)
     setRefreshing(false)
-  }, [user.tenant_id, user.id])
+  }, [user.id])
 
   useEffect(() => { load() }, [load])
 
-  function claim(job: any) {
+  // The copy older versions saved (openjobs:<company>) held each open
+  // clean's lockbox code and client phone: dropped once, unread.
+  useEffect(() => { pruneDataCache(k => k.startsWith('openjobs:')).catch(() => {}) }, [])
+
+  // A board card holds what the card shows, not what the job's screen needs:
+  // the screen opens the clean as Schedule would hand it (lib/jobReads), now
+  // that it is this person's.
+  const [opening, setOpening] = useState<string | null>(null)
+  async function openClean(job: BoardRow) {
+    if (opening) return
+    setOpening(job.id)
+    const { data, error } = await scheduleJobById(user, job.id)
+    setOpening(null)
+    if (error || !data) { Alert.alert(t('open_jobs_open_failed')); return }
+    onJobPress(data)
+  }
+
+  function claim(job: BoardRow) {
     if (offline || busy) return
     Alert.alert(t('open_jobs_claim'), t('open_jobs_confirm'), [
       { text: t('cancel'), style: 'cancel' },
@@ -92,7 +108,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
         if (code === 'claimed') {
           await load()
           Alert.alert('✅ ' + t('open_jobs_claimed_title'), t('open_jobs_claimed'), [
-            { text: t('open_jobs_view'), onPress: () => onJobPress(job) },
+            { text: t('open_jobs_view'), onPress: () => openClean(job) },
             { text: t('done') },
           ])
           return
@@ -106,7 +122,7 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
   // Give a claimed clean back. The server decides whether it is still allowed
   // (tenants.unclaim_notice_hours before the start) and tells the rest of the
   // crew it is open again. Owner-placed assignments cannot be released here.
-  function release(job: any) {
+  function release(job: BoardRow) {
     if (offline || busy) return
     Alert.alert(t('open_jobs_release'), t('open_jobs_release_confirm'), [
       { text: t('cancel'), style: 'cancel' },
@@ -145,13 +161,13 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
         {!loading && mine.length > 0 && (
           <View style={{ marginBottom: 14 }}>
             <Text style={styles.sectionTitle}>✅ {t('open_jobs_yours_title')}</Text>
-            {mine.map((job: any) => {
+            {mine.map((job) => {
               const addr = job.client_addresses
               return (
                 <View key={job.id} style={styles.mineRow}>
-                  <TouchableOpacity style={{ flex: 1 }} onPress={() => onJobPress(job)}>
+                  <TouchableOpacity style={{ flex: 1 }} disabled={opening === job.id} onPress={() => openClean(job)}>
                     <Text style={styles.mineTitle} numberOfLines={1}>
-                      {addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street)}
+                      {addr?.nickname || addr?.street}
                       {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}
                     </Text>
                     <Text style={styles.jobMeta}>{fmtDate(job.scheduled_start, localeFor(lang), { weekday: 'short', month: 'short', day: 'numeric' })} · {fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang), boardDays)}</Text>
@@ -180,15 +196,16 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
             <Text style={styles.emptyTitle}>{t('open_jobs_none_title')}</Text>
             <Text style={styles.emptyText}>{t('open_jobs_none')}</Text>
           </View>
-        ) : jobs.map((job: any) => {
+        ) : jobs.map((job) => {
           const addr = job.client_addresses
-          const taken = job.job_assignments?.length ?? 0
+          const taken = job.spots_taken
           const cap = Math.max(Number(job.max_crew ?? 1), 1)
-          const mine = (job.job_assignments ?? []).some((a: any) => a.user_id === user.id)
-          const hrs = Math.round((new Date(job.scheduled_end).getTime() - new Date(job.scheduled_start).getTime()) / 360000) / 10
+          const mine = !!job.claimed_by_me_at
+          const hrs = Math.round((new Date(job.scheduled_end ?? job.scheduled_start).getTime() - new Date(job.scheduled_start).getTime()) / 360000) / 10
+          // A task's card names its service, never its notes: they can hold a code.
           const label = job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}`
-            : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}`
-            : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))
+            : job.job_type === 'task' ? `📌 ${job.service_types?.name || t('task')}`
+            : (addr?.nickname || addr?.street)
           return (
             <View key={job.id} style={styles.card}>
               <View style={styles.cardTop}>
@@ -208,14 +225,14 @@ export function OpenJobsScreen({ user, onJobPress }: { user: any; onJobPress: (j
                   </Text>
                   <View style={styles.badges}>
                     {job.is_turnover ? <Text style={[styles.badge, styles.badgeTurnover]}>🏠 {t('turnover')}</Text> : null}
-                    {(job.service_types as any)?.name ? <Text style={[styles.badge, styles.badgeService]}>{(job.service_types as any).name}</Text> : null}
+                    {job.service_types?.name ? <Text style={[styles.badge, styles.badgeService]}>{job.service_types.name}</Text> : null}
                     <Text style={[styles.badge, styles.badgeSpots]}>{ti(t('open_jobs_spots'), { taken: String(taken), cap: String(cap) })}</Text>
-                    {offeredFirstTo(job, user.id) === 'me' ? <Text style={[styles.badge, styles.badgeFirst]}>⭐ {t('open_jobs_first_tag')}</Text> : null}
+                    {offeredFirstTo(job) === 'me' ? <Text style={[styles.badge, styles.badgeFirst]}>⭐ {t('open_jobs_first_tag')}</Text> : null}
                   </View>
                 </View>
               </View>
               {mine ? (
-                <TouchableOpacity style={styles.mineBtn} onPress={() => onJobPress(job)}>
+                <TouchableOpacity style={styles.mineBtn} disabled={opening === job.id} onPress={() => openClean(job)}>
                   <Text style={styles.mineBtnText}>✅ {t('open_jobs_yours')}</Text>
                 </TouchableOpacity>
               ) : (

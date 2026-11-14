@@ -90,7 +90,11 @@ const dashSelect = /\.select\(jobSelectFor\(office, HOME_DAY_SELECT\)\)/.test(re
 const schedSelect = sched.includes('cachedRead(scheduleRead(') ? ((src('src/lib/pushTap.ts').match(/export const SCHEDULE_JOB_SELECT = '([^']*)'/) ?? [])[1] ?? '') : ''
 check('Home\'s read (and the offline day pack) selects reservation_id', /(^|, )reservation_id(,|$)/.test(dashSelect), true)
 check('Schedule\'s read selects reservation_id', /^id, job_number[^']*\breservation_id\b/.test(schedSelect), true)
-check('Open jobs\' read selects reservation_id', /\.select\('id, job_number[^']*\breservation_id\b/.test(open), true)
+// The board reads open_board_jobs() since crew read scope stage 1: the RPC says
+// only whether a booking made the clean (calendar_made), and lib/openJobs carries
+// that as the card's reservation_id, so the mark reads it as everywhere else.
+const openJobsLib = src('src/lib/openJobs.ts')
+check('Open jobs\' cards carry the calendar mark from open_board_jobs()', /reservation_id: r\.calendar_made \? 'calendar' : null/.test(openJobsLib) && open.includes("supabase.rpc('open_board_jobs'"), true)
 const metaSelect = (reads.match(/export const jobMetaRead[\s\S]*?\.select\('([^']*)'/) ?? [])[1] ?? ''
 // The client's type comes from crew_job_context since crew read scope stage 1, not a clients embed.
 check('job meta read: reservation_id + the booking\'s platform and id', /\breservation_id, property_reservations\(/.test(metaSelect) && metaSelect.includes('property_reservations(guest_count, pet_count, platform, reservation_id)'), true)
