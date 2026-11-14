@@ -17,8 +17,9 @@
 // nothing else: no client, no codes, no notes (a task's card shows its
 // service name: notes can hold codes). For crew it lists the cleans they
 // could claim now (open to everyone, or first pick for them) plus the board
-// cleans they already claimed; for the office every board clean. It decides
-// the horizon too: cleans starting within the next 30 days.
+// cleans they already claimed; for the office every board clean. It has no
+// date horizon, like claim_open_job (rinse-base-app 20261114193745): a clean
+// months out is listed and counted, soonest first, 200 at most.
 //
 // No imports, so scripts/test-open-jobs.mjs can run it as is.
 
