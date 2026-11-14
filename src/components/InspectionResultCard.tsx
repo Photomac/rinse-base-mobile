@@ -37,6 +37,7 @@ import { fmtDate, fmtTime } from '../lib/timezone'
 import { localeFor } from '../lib/i18n'
 import { useMachineTranslation } from '../lib/machineTranslate'
 import { PhotoViewer, type ViewerPhoto } from './PhotoViewer'
+import { inspectionReviewed } from '../lib/inspectionsToReview'
 import { CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT, GOLD, SLATE } from '../lib/theme'
 
 const VERDICT: Record<string, { i18n: any; bg: string; fg: string }> = {
@@ -162,6 +163,8 @@ export function InspectionResultCard({ job }: { job: any }) {
       return
     }
     setReview(r => r && { ...r, reviewedAt: (data as any).reviewed_at ?? new Date().toISOString(), comment: (data as any).comment ?? null })
+    // Home's "Inspections to review" card drops it now (lib/inspectionsToReview).
+    inspectionReviewed(insp.id)
   }
 
   return (
