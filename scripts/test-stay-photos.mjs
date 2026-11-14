@@ -12,7 +12,9 @@
 //     no pick, or off is never short;
 // and, in the code: the company's number is its own cached read (the day pack
 // warms it); the photos are counted only when it asks; the card's Save and
-// the ask's Save and complete wait for them; the ask hides Skip meanwhile;
+// the ask's Save wait for them; the ask has no Skip and Android's back button
+// does nothing meanwhile (CKS 2026-11-13: "no saving it and no backing out of
+// it without the pictures"), at Complete and after a Finished video alike;
 // Take photos opens the photo screen on Before and the count is read again
 // when it closes; the strings exist in en, es and pt.
 //
@@ -86,9 +88,27 @@ check('the card: Save waits for the photos, and the row shows under the stars',
   cardFn.includes('const canSave = rating > 0 && !(stay.saved && !stay.dirty) && stay.photosShort === 0') &&
   cardFn.includes('if (!rating || stay.photosShort > 0) return') && cardFn.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />'))
 const sheet = card.slice(card.indexOf('export function StayAskModal'))
-check('the ask: Save and complete waits for them, Skip is hidden meanwhile, closing still just closes',
-  sheet.includes('disabled={!picked || stay.saving || short > 0}') && /\{short === 0 && \(\s*\n\s*<TouchableOpacity style=\{styles\.askSkipBtn\} onPress=\{onSkip\}/.test(sheet) &&
-  sheet.includes('onRequestClose={onClose}') && sheet.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />'))
+check('the ask: its ways out come from askExits with the photos still short',
+  sheet.includes("const exits = askExits(rating, stay.photosShort, { ratingRequired: mode === 'video' })") && sheet.includes('disabled={!exits.save || stay.saving}') &&
+  /\{exits\.skip && \(\s*\n\s*<TouchableOpacity style=\{styles\.askSkipBtn\} onPress=\{onSkip\}/.test(sheet) &&
+  sheet.includes('onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}') && sheet.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />'))
+check('…and no other way out: the overlay has no tap, Skip and Save are the only buttons besides the stars, flags and Take photos',
+  !/askOverlay\}[^>]*onPress/.test(sheet) && (sheet.match(/onPress=\{/g) ?? []).length === 2)
+// The real rules (lib/stayAsk askExits) with the real count (photosShort).
+const A = await import(join(repo, 'src/lib/stayAsk.ts'))
+const way = (rating, required, count) => A.askExits(rating, P.photosShort(rating, required, count))
+check('3 stars, 2 photos asked, none taken: no Save, no Skip, no back button', way(3, 2, 0), { save: false, skip: false, close: false })
+check('…one taken: still none', way(3, 2, 1), { save: false, skip: false, close: false })
+check('…both taken: Save and back, still no Skip (a low pick is saved)', way(3, 2, 2), { save: true, skip: false, close: true })
+check('…5 stars instead: every way out, photos or not', way(5, 2, 0), { save: true, skip: true, close: true })
+check('…no star yet: Skip and back', way(0, 2, 0), { save: false, skip: true, close: true })
+check('the company not asking (0): 3 stars saves and closes at once', way(3, 0, 0), { save: true, skip: false, close: true })
+// After a Finished video a rating is required: the same lock, and never Skip or closing.
+const vway = (rating, required, count) => A.askExits(rating, P.photosShort(rating, required, count), { ratingRequired: true })
+check('after a video, 3 stars, none of 2 taken: nothing', vway(3, 2, 0), { save: false, skip: false, close: false })
+check('after a video, 3 stars, both taken: Save only', vway(3, 2, 2), { save: true, skip: false, close: false })
+check('after a video, 5 stars: Save only', vway(5, 2, 0), { save: true, skip: false, close: false })
+check('after a video, no star: nothing until one is picked', vway(0, 2, 0), { save: false, skip: false, close: false })
 const row = between(card, 'function StayPhotosRow(', '\n}\n')
 check('the row: only for a pick that needs photos; count, what\'s needed (one or many), Take photos',
   row.includes('if (!needsPhotos(stay.value.rating, stay.photosRequired)) return null') &&
@@ -100,7 +120,7 @@ const detail = read('src/screens/JobDetailScreen.tsx')
 const take = between(detail, 'function takeStayPhotos() {', '\n  }')
 check('Take photos: the photo screen on Before, no checklist line', take.includes('setActivePhotoItem(null)') && take.includes("setPhotosType('before')") && take.includes('setShowPhotos(true)'))
 check('the card and the ask both offer it',
-  detail.includes("onError={m => Alert.alert(t('error'), m)} onTakePhotos={takeStayPhotos} />") && detail.includes('onClose={() => answerStayAsk(false)}\n        onTakePhotos={takeStayPhotos} />'))
+  detail.includes("onError={m => Alert.alert(t('error'), m)} onTakePhotos={takeStayPhotos} />") && detail.includes('onClose={closeStayAsk}\n        onTakePhotos={takeStayPhotos} />'))
 check('the photo screen opens on that type and, closing, forgets it and counts again',
   detail.includes('initialType={photosType} readOnly={readOnly} onBack={() => { setShowPhotos(false); setPhotosType(undefined); loadChecklist(); loadPhotoRequirements(); stay.refreshPhotos() }}'))
 const photos = read('src/screens/JobPhotosScreen.tsx')

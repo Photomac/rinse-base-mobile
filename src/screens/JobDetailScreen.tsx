@@ -16,7 +16,7 @@ import { JobInspectionScreen } from './JobInspectionScreen'
 import { WalkthroughChecklist } from '../components/WalkthroughChecklist'
 import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard, StayAskModal, useStayRating } from '../components/StayRatingCard'
-import { asksAtComplete } from '../lib/stayAsk'
+import { asksAtComplete, asksAfterVideo, lowPickUnsaved } from '../lib/stayAsk'
 import { stayAskedBefore, rememberStayAsked } from '../lib/stayRating'
 import { PhotoViewer } from '../components/PhotoViewer'
 import { ShotThumb } from '../components/ShotThumb'
@@ -533,15 +533,19 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const completeNotOnClean = notOnThisClean && !isInspection
   const cfStarted = startedAt(firstClockIn([...timeEntries, ...(crewClockRows ?? [])]), checkFirst?.jobStartedAt)
   // "How did the guests leave it?" (StayRatingCard): STR/PM cleans, once
-  // started. The card and the ask at Complete pick and save the same rating
-  // (lib/stayAsk.ts has the rules).
+  // started. The card and the ask (at Complete, and right after a Finished
+  // walkthrough video is saved) pick and save the same rating (lib/stayAsk.ts
+  // has the rules).
   const stayShows = isStarted && !isTask && !isResidential
   const stay = useStayRating(job, user, stayShows)
-  // The ask at Complete is open while completeJob waits on stayAnswer.
+  // The ask is open: at Complete ('complete', completeJob waits on
+  // stayAnswer), or after a Finished video ('video', nothing waits).
   const [stayAskOpen, setStayAskOpen] = useState(false)
+  const [stayAskMode, setStayAskMode] = useState<'complete' | 'video'>('complete')
   const stayAnswer = useRef<((go: boolean) => void) | null>(null)
   // What the crew answered, handed over once the sheet has gone (stayAskGone).
   const stayGo = useRef<boolean | null>(null)
+  // Skipped on this screen (also remembered on the phone, rememberStayAsked).
   const stayAskedHere = useRef(false)
 
   useEffect(() => {
@@ -1711,19 +1715,56 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     return !!mine.is_lead
   }
 
-  // "How did the guests leave it?" at Complete (lib/stayAsk): once, on a clean
-  // that shows the rating card and has no rating. Resolves true to carry on
-  // (rated or skipped), false to stop (the sheet closed, or the save refused).
+  // "How did the guests leave it?" at Complete (lib/stayAsk): on a clean that
+  // shows the rating card and has no rating, until it's answered (Skip, or a
+  // rating saved; just closing it asks again next time), and always while a
+  // 1-4 star pick is left unsaved. Resolves true to carry on (rated or
+  // skipped), false to stop (the sheet closed, or the save refused).
   async function askStayFirst(): Promise<boolean> {
     const askedBefore = stayAskedHere.current || await stayAskedBefore(job.id)
-    if (!asksAtComplete({ shows: stayShows && !readOnly, rated: stay.saved, askedBefore })) return true
-    stayAskedHere.current = true
-    rememberStayAsked(job.id).catch(() => {})
+    const lowUnsaved = lowPickUnsaved({ rating: stay.value.rating, saved: stay.saved, dirty: stay.dirty })
+    if (!asksAtComplete({ shows: stayShows && !readOnly, rated: stay.saved, askedBefore, lowUnsaved })) return true
     return new Promise<boolean>(resolve => {
       stayAnswer.current = resolve
       stayGo.current = null
+      setStayAskMode('complete')
       setStayAskOpen(true)
     })
+  }
+  // Right after a Finished walkthrough video is saved (WalkthroughScreen
+  // onSaved; CKS 2026-11-13, lib/stayAsk asksAfterVideo): on a clean that
+  // shows the rating card and has no rating, the recorder closes and the ask
+  // opens on this screen, with Save and no way out but a rating (no Skip, no
+  // back button; Todd 2026-11-13). true = the recorder is closed.
+  function askStayAfterVideo(type: WalkthroughType): boolean {
+    if (stayAskOpen || !asksAfterVideo({ type, shows: stayShows && !readOnly, rated: stay.saved })) return false
+    setShowWalkthrough(false)
+    if (videoEnabled && !isTask) loadVideosOwed()
+    setStayAskMode('video')
+    setStayAskOpen(true)
+    return true
+  }
+  // The ask's three answers. Save: the rating through the outbox (a saved
+  // rating is remembered); at Complete a refusal stops the Complete. Skip: the
+  // ask is answered, remembered on this phone. Closing (Android's back, only
+  // when the sheet lets it, StayAskModal): nothing is remembered, so the next
+  // Complete asks again. (After a video the sheet offers neither Skip nor
+  // closing: only Save, and a refused save, which closes it to say why.)
+  async function saveStayAsk() {
+    const { error } = await stay.save()
+    if (stayAskMode === 'complete') answerStayAsk(!error)
+    else setStayAskOpen(false)
+    if (error) setTimeout(() => Alert.alert(t('error'), error.message || String(error)), 650)
+  }
+  function skipStayAsk() {
+    stayAskedHere.current = true
+    rememberStayAsked(job.id).catch(() => {})
+    if (stayAskMode === 'complete') answerStayAsk(true)
+    else setStayAskOpen(false)
+  }
+  function closeStayAsk() {
+    if (stayAskMode === 'complete') answerStayAsk(false)
+    else setStayAskOpen(false)
   }
   // The answer waits for the sheet to finish closing: an alert the Complete
   // raises next (a missing photo, "saved offline") doesn't show on iOS while a
@@ -1735,9 +1776,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     setTimeout(stayAskGone, 600)
   }
   // The stay rating's Take photos (lib/stayPhotos): the photo screen on
-  // Before. From the ask at Complete the sheet stays open underneath (the
-  // photo screen takes this screen's place), so it's back, Complete still
-  // waiting on it, when the photo screen closes and the count is re-read.
+  // Before. From the ask the sheet stays open underneath (the photo screen
+  // takes this screen's place), so it's back, a Complete still waiting on it,
+  // when the photo screen closes and the count is re-read.
   function takeStayPhotos() {
     setActivePhotoItem(null)
     setPhotosType('before')
@@ -2337,6 +2378,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     const defaultType = walkthroughDefault({ started: isStarted, startedAt: firstIn, now: Date.now() })
     return <WalkthroughScreen job={job} user={user} defaultType={walkthroughFor ?? defaultType} asked={walkthroughFor != null}
       started={isStarted} startedAt={firstIn} owed={videosOwed}
+      onSaved={askStayAfterVideo}
       onBack={() => { setShowWalkthrough(false); if (videoEnabled && !isTask) loadVideosOwed() }} />
   }
 
@@ -3280,16 +3322,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           onStart={startFromCheckFirst} onNotYet={() => setCfPrompt(null)} />
       )}
 
-      {/* "How did the guests leave it?" at Complete (askStayFirst). A refused
-          save stops the Complete and says why; the next tap doesn't ask. */}
-      <StayAskModal visible={stayAskOpen} stay={stay}
-        onSaveAndComplete={async () => {
-          const { error } = await stay.save()
-          answerStayAsk(!error)
-          if (error) setTimeout(() => Alert.alert(t('error'), error.message || String(error)), 650)
-        }}
-        onSkip={() => answerStayAsk(true)}
-        onClose={() => answerStayAsk(false)}
+      {/* "How did the guests leave it?" at Complete (askStayFirst) and after a
+          Finished video (askStayAfterVideo). A refused save says why (at
+          Complete it stops the Complete); the next Complete asks again. */}
+      <StayAskModal visible={stayAskOpen} stay={stay} mode={stayAskMode}
+        onSave={saveStayAsk}
+        onSkip={skipStayAsk}
+        onClose={closeStayAsk}
         onTakePhotos={takeStayPhotos} />
 
       {/* The office's edit. A save updates this screen's clean in place (time
