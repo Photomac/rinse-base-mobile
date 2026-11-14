@@ -17,6 +17,9 @@ import { dayKey, startOfDayInTz, endOfTomorrowInTz } from './timezone'
 import { shiftYmd } from './nextArrival'
 import { WALKTHROUGH_BAND, isWalkthroughJob } from './walkthrough'
 import { isOfficeRole, isMyJob } from './jobScope'
+import { jobSelectFor, onlyMine, withJobContext, type ContextRpc } from './crewScope'
+import { SCHEDULE_JOB_SELECT } from './pushTap'
+import { fetchAllPages } from './fetchAll'
 import { inspectionDays, sameDayIds } from './sameDayCheckin'
 import { cachedRead } from './dataCache'
 
@@ -32,9 +35,20 @@ export function isTaskJob(job: any): boolean {
 
 // ── Home ────────────────────────────────────────────────────────────────────
 
+/** crew_job_context(uuid[]) (rinse-base-app 20261113171611): each clean's
+ *  client type, and the client's name and phone only where the company lets
+ *  crew contact clients (lib/crewScope). */
+export const jobContext: ContextRpc = (ids) => supabase.rpc('crew_job_context', { p_job_ids: ids }) as any
+
+/** Home's day as the office reads it. Crew send it through lib/crewScope:
+ *  their own cleans only, and no clients embed. */
+export const HOME_DAY_SELECT = 'id, job_number, tenant_id, status, scheduled_start, scheduled_end, started_at, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, reservation_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, geocode_precision, photo_url, timezone), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))'
+
 /**
- * Home's day: the whole company's jobs from the start of today to the end of
- * TOMORROW (tenant zone). Home only ever shows today — DashboardScreen runs
+ * Home's day: jobs from the start of today to the end of TOMORROW (tenant
+ * zone): the whole company's for the office, the viewer's own for crew (the
+ * server filters them, so no other clean's door code reaches the phone; crew
+ * read scope stage 1). Home only ever shows today — DashboardScreen runs
  * every row, live or cached, through homeDayRows() — but the copy saved
  * tonight has to still hold the morning's jobs when the phone has no signal
  * tomorrow. (A strict today window saved at night came back EMPTY offline the
@@ -43,15 +57,80 @@ export function isTaskJob(job: any): boolean {
 export function dashTodayRead(user: any, now: Date): CacheRead {
   const from = startOfDayInTz(now)
   const to = endOfTomorrowInTz(now)
+  const office = isOfficeRole(user.role)
+  const read = () => onlyMine(supabase.from('jobs')
+    .select(jobSelectFor(office, HOME_DAY_SELECT))
+    .eq('tenant_id', user.tenant_id), office, user.id)
+    .gte('scheduled_start', from.toISOString())
+    .lte('scheduled_start', to.toISOString())
+    .order('scheduled_start')
   return {
     key: `dash:today:${user.id}`,
-    q: () => supabase.from('jobs')
-      .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, started_at, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, reservation_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, geocode_precision, photo_url, timezone), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
-      .eq('tenant_id', user.tenant_id)
-      .gte('scheduled_start', from.toISOString())
-      .lte('scheduled_start', to.toISOString())
-      .order('scheduled_start'),
+    q: office ? read : async () => withJobContext(await read(), jobContext),
   }
+}
+
+/** Home's "Needs closing" as the office reads it (crew: lib/crewScope). */
+export const HOME_STRANDED_SELECT = 'id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, source_report_id, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, timezone), job_assignments(user_id)'
+
+/**
+ * Cleans left open on a PREVIOUS day (Home's "Needs closing"). The day read is
+ * a strict today window and Schedule only reaches back a month, so a job that
+ * stayed in_progress overnight quietly left the crew's reach — the exact way
+ * the 8/16–8/29 backlog built up. Cached like the rest of the day so it
+ * survives a dead zone. Deliberately has NO lower date bound: a stranded clean
+ * stays actionable until it is closed. The office's whole company; crew their
+ * own (filtered on the server).
+ */
+export function dashStrandedRead(user: any, todayStart: Date): CacheRead {
+  const office = isOfficeRole(user.role)
+  const read = () => onlyMine(supabase.from('jobs')
+    .select(jobSelectFor(office, HOME_STRANDED_SELECT))
+    .eq('tenant_id', user.tenant_id), office, user.id)
+    .in('status', ['in_progress', 'en_route'])
+    .lt('scheduled_start', todayStart.toISOString())
+    .order('scheduled_start')
+    .limit(50)
+  return {
+    key: `dash:stranded:${user.id}`,
+    q: office ? read : async () => withJobContext(await read(), jobContext),
+  }
+}
+
+/**
+ * Schedule's window (a month back to two months ahead), paged past PostgREST's
+ * 1,000-row cap (lib/fetchAll): the whole company's for the office, the
+ * viewer's own for crew, filtered on the server. Crew rows used to be the
+ * company's too, kept on the phone: every clean past row 1,000 vanished
+ * (CKS 1,188, Lee Concierge 1,616, 2026-11-09), and every property's place
+ * was on every crew phone. Cancelled cleans are left out.
+ */
+export function scheduleRead(user: any, from: Date, to: Date): CacheRead {
+  const office = isOfficeRole(user.role)
+  const read = () => fetchAllPages(() => onlyMine(supabase.from('jobs')
+    .select(jobSelectFor(office, SCHEDULE_JOB_SELECT))
+    .eq('tenant_id', user.tenant_id), office, user.id)
+    .gte('scheduled_start', from.toISOString())
+    .lte('scheduled_start', to.toISOString())
+    .neq('status', 'cancelled')
+    .order('scheduled_start')
+    .order('id'))
+  return {
+    key: `sched:${user.id}`,
+    q: office ? read : async () => withJobContext(await read(), jobContext),
+  }
+}
+
+/** One job with Schedule's columns, as Schedule would list it for this person
+ *  (lib/pushTap): any of the company's for the office, one they are on for
+ *  crew. A push tap and "Inspections to review" open it. */
+export function scheduleJobById(user: any, jobId: string): PromiseLike<{ data: any; error: any; status?: number }> {
+  const office = isOfficeRole(user.role)
+  const read = onlyMine(supabase.from('jobs')
+    .select(jobSelectFor(office, SCHEDULE_JOB_SELECT))
+    .eq('id', jobId).eq('tenant_id', user.tenant_id), office, user.id)
+    .maybeSingle()
+  return office ? read : (async () => withJobContext(await read, jobContext))()
 }
 
 /** Home's day shift (daily time tracking): the person's open shift, a
@@ -171,13 +250,16 @@ export const crewNoteAckRead = (jobId: string, userId: string): CacheRead => ({
     .select('note').eq('job_id', jobId).eq('user_id', userId),
 })
 
-/** Smart-lock code, laundry/pet flags, turnover times, client type, guest count. */
+/** Smart-lock code, laundry/pet flags, turnover times, client type, guest count.
+ *  The client type comes from crew_job_context (as `clients.client_type`), not a
+ *  clients embed: once crew read scope is on, crew can't read the client row
+ *  unless the company lets them contact clients. */
 export const jobMetaRead = (jobId: string): CacheRead => ({
   key: `jobmeta:${jobId}`,
-  q: () => supabase.from('jobs')
-    .select('seam_access_code, laundry_done_onsite, pet_fee_applied, checkout_time, checkin_time, window_minutes, urgency, reservation_id, clients!jobs_client_id_fkey(client_type), property_reservations(guest_count, pet_count, platform, reservation_id)')
+  q: async () => withJobContext(await supabase.from('jobs')
+    .select('seam_access_code, laundry_done_onsite, pet_fee_applied, checkout_time, checkin_time, window_minutes, urgency, reservation_id, property_reservations(guest_count, pet_count, platform, reservation_id)')
     .eq('id', jobId)
-    .maybeSingle(),
+    .maybeSingle(), jobContext, jobId),
 })
 
 /** Everyone on the job, lead first. user_id is who the server counts as on
@@ -560,7 +642,7 @@ export function prepJobs(jobs: any[]): any[] {
  * ones it holds.
  */
 export function prepReads(user: any, cleans: any[], ymd: string) {
-  const addrIds = [...new Set(cleans.map((j: any) => j.client_addresses.id as string))]
+  const addrIds = [...new Set(cleans.map((j: any) => j.client_addresses?.id as string).filter(Boolean))]
   const jobIds = cleans.map((j: any) => j.id as string)
   return {
     tenant: {
@@ -779,7 +861,7 @@ export function jobPackReads(job: any, user: any): PackRead[] {
   ]
   // loadNextArrival
   if (!isTask && job.client_addresses?.id && job.scheduled_start) {
-    const n = nextArrivalReads(job, job.client_addresses.id, user.tenant_id)
+    const n = nextArrivalReads(job, job.client_addresses?.id, user.tenant_id)
     reads.push(n.stays, n.property, n.company)
   }
   // loadRouteStop: a job with no route order is never ranked.

@@ -78,6 +78,7 @@ import {
   type CheckFirstLine, type CheckFirstTick,
 } from '../lib/checkFirst'
 import { isMyJob, notAssignedHere, isOfficeRole, type Roster } from '../lib/jobScope'
+import { placeLabel } from '../lib/crewScope'
 import { isRepairVisit, returnVisitValues, notesWithoutPhotoLinks, isLookAndQuoteNotes } from '../lib/repairVisit'
 import { RepairVisitPhotos } from '../components/RepairVisitPhotos'
 import { RepairQuoteCard } from '../components/RepairQuoteCard'
@@ -417,7 +418,9 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const [details] = useState(() => stopDetails({ job: showJobMeta, crew: showCrew, roster: setRoster, property: showPropMeta, leadNotes: setLeadNotes }))
   // Crew see the property, not the homeowner — client names are for admins.
   const isAdminRole = ['owner', 'admin', 'manager', 'dispatcher'].includes(user.role)
-  const propLabel = addr?.nickname || (isAdminRole ? client?.full_name : addr?.street)
+  // A crew clean the server sends with no property (crew read scope on, more
+  // than 30 days out) says when it will show (lib/crewScope).
+  const propLabel = placeLabel(job, isAdminRole, t('address_day_before'))
   // Desk staff on somebody else's clean. An admin who IS on the roster is just
   // crew here and keeps the normal self-clock-in path.
   const recordsForOthers = isAdminRole && crewOnJob.length > 0 && !crewOnJob.some(c => c.id === user.id)
@@ -945,7 +948,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       if (!quiet) setLoadingChecklist(true)
       addrId = await supabase
         .from('client_addresses').select('id')
-        .eq('street', job.client_addresses.street).eq('tenant_id', user.tenant_id).maybeSingle()
+        .eq('street', job.client_addresses?.street).eq('tenant_id', user.tenant_id).maybeSingle()
         .then(({ data }) => data?.id || null, () => null)
     }
     return checklistLoads.load(job, user, addrId, DEFAULT_CHECKLIST, quiet)
@@ -2551,7 +2554,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             const url = mapsUrl(withPropertyLocation(addr, propMeta))
             if (url) Linking.openURL(url).catch(() => {})
           }}>
-            <Text style={styles.address}>📍 {[addr?.street, addr?.city].filter(Boolean).join(', ')}</Text>
+            <Text style={styles.address}>📍 {[addr?.street, addr?.city].filter(Boolean).join(', ') || (addr || isAdminRole ? '' : t('address_day_before'))}</Text>
           </TouchableOpacity>
           )}
           {(propMeta?.bedrooms != null || propMeta?.bathrooms != null || propMeta?.sqft != null) && (

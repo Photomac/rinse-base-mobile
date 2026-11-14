@@ -146,6 +146,9 @@ const scenarios: Record<string, () => Promise<void>> = {
     const BUILDERS: Record<string, () => any> = {
       dashTodayRead: () => R.dashTodayRead(CREW, new Date()),
       dashShiftRead: () => R.dashShiftRead(CREW),
+      // Home's "Needs closing" and Schedule's window: one key per person, kept (not a job's or a property's).
+      dashStrandedRead: () => R.dashStrandedRead(CREW, new Date()),
+      scheduleRead: () => R.scheduleRead(CREW, new Date(), new Date()),
       tenantVideoRead: () => R.tenantVideoRead(T),
       routeStopRead: () => R.routeStopRead(j, CREW),
       nextArrivalReads: () => R.nextArrivalReads(j, A, T),

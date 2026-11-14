@@ -1,0 +1,33 @@
+# .github/workflows/crew-read-scope.yml
+#
+# Fails a PR (and flags main) when a crew path reads the whole company's
+# cleans with their lockbox codes or clients again, or reads a property or
+# client embed without `?.` (crew read scope, stage 1: rinse-base-app
+# docs/crew-read-scope-plan.md section 5.4). See scripts/test-crew-read-scope.mjs.
+#
+# Here and not as a package.json script: scripts are an OTA fingerprint
+# input, and a new one would move the lane (eslint.hooks.config.mjs explains).
+# Mobile JS ships by `eas update`, which runs nothing from this repo first, so
+# run it by hand before publishing too: node scripts/test-crew-read-scope.mjs
+
+name: Crew read scope
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  crew-read-scope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # No npm ci: the test reads the source and runs src/lib/crewScope.ts,
+      # which imports nothing, under Node's type stripping.
+      - run: node scripts/test-crew-read-scope.mjs

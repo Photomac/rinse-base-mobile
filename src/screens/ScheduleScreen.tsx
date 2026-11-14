@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator , RefreshControl } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { CrewLine } from '../components/CrewLine'
 import { kindParts } from '../lib/cleanKind'
-import { sameDayInspections } from '../lib/jobReads'
+import { sameDayInspections, scheduleRead } from '../lib/jobReads'
+import { placeLabel } from '../lib/crewScope'
 import { markSameDay } from '../lib/sameDayCheckin'
 import { JobScopeToggle } from '../components/JobScopeToggle'
 import { CrewGroupHeader } from '../components/CrewGroupHeader'
@@ -14,8 +14,7 @@ import { isOfficeRole, isMyJob, jobsInScope, type JobScope } from '../lib/jobSco
 import { crewGroups, listItems } from '../lib/crewGroups'
 import { ti, localeFor, capFirst } from '../lib/i18n'
 import { SLATE_DARK, GOLD } from '../lib/theme'
-import { cachedQuery } from '../lib/dataCache'
-import { fetchAllPages } from '../lib/fetchAll'
+import { cachedRead } from '../lib/dataCache'
 import { byCrewDayOrder } from '../lib/jobOrder'
 import { overlayPending } from '../lib/outbox'
 import { useAwaitingAnswers } from '../lib/useCrewAnswers'
@@ -78,24 +77,10 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
     const isOwner = ['owner', 'admin', 'manager', 'dispatcher'].includes(user.role)
     // Cached read: an offline crew member still sees the schedule they loaded
     // online. Cached rows carry scheduled_start, so day placement stays right
-    // even when the cache is a day or two old.
-    //
-    // Paged (lib/fetchAll.ts): PostgREST answers an unranged select with at
-    // most 1,000 rows and no error, cut wherever the ORDER BY puts row 1,000.
-    // This reads the whole company's window (a month back to two months
-    // ahead) and filters to the viewer below, so every clean past row 1,000
-    // silently vanished, for owners and crew alike: on 2026-11-09 CKS had
-    // 1,188 jobs in it and Lee Concierge 1,616. id breaks ties, so a page
-    // boundary can't skip or repeat cleans that share a start time. The select
-    // is pushTap.ts's SCHEDULE_JOB_SELECT (pushTap.scenario.ts checks they match).
-    const { data, fromCache } = await cachedQuery(`sched:${user.id}`, fetchAllPages(() => supabase.from('jobs')
-      .select('id, job_number, status, scheduled_start, scheduled_end, is_turnover, route_order, window_minutes, job_type, internal_notes, source_report_id, reservation_id, service_types!jobs_service_id_fkey(name), clients!jobs_client_id_fkey(full_name, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, photo_url, timezone), job_assignments(user_id), crew:job_assignments!job_assignments_job_id_fkey(user_id, is_lead, users!job_assignments_user_id_fkey(full_name))')
-      .eq('tenant_id', user.tenant_id)
-      .gte('scheduled_start', start.toISOString())
-      .lte('scheduled_start', end.toISOString())
-      .neq('status', 'cancelled')
-      .order('scheduled_start')
-      .order('id')))
+    // even when the cache is a day or two old. Paged, and for crew filtered to
+    // their own cleans on the server (lib/jobReads scheduleRead). The select
+    // is pushTap.ts's SCHEDULE_JOB_SELECT, so a push tap opens the same row.
+    const { data, fromCache } = await cachedRead(scheduleRead(user, start, end))
     setOffline(fromCache)
     const myJobs = isOwner
       ? (data ?? [])
@@ -167,7 +152,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   // sentinel street) is not a place: name it like the cards below do.
   const cellName = (job: any) => job.job_type === 'laundry_run' ? t('laundry_run')
     : job.job_type === 'task' ? (job.internal_notes || t('task')).split('\n')[0]
-    : (job.client_addresses as any)?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : (job.client_addresses as any)?.street)
+    : placeLabel(job, canSeeClientNames, t('address_day_before'))
 
   const monthLabel = capFirst(anchor.toLocaleDateString(locale, { month: 'long', year: 'numeric' }))
   const weekStart = new Date(anchor); weekStart.setDate(anchor.getDate() - anchor.getDay())
@@ -314,7 +299,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       <Text style={[styles.statusText, { color }]}>{t((STATUS_LABEL_KEYS[job.status] || 'status_scheduled') as any)}</Text>
                     </View>
                   </View>
-                  <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}</Text>
+                  <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : placeLabel(job, canSeeClientNames, t('address_day_before'))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}</Text>
                   {(!job.job_type || job.job_type === 'clean' || job.job_type === 'inspection') && <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>}
                   {kind.length > 0 && <Text style={styles.kindTag}>{kind.join('  ·  ')}</Text>}
                   {!!awaiting?.waiting.has(job.id) && <Text style={styles.answerTag}>⏳ {t('answer_needed_tag')}</Text>}

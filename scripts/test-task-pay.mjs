@@ -111,7 +111,9 @@ for (const { file, text } of SRC) {
     const chain = chainAfter(text, m.index + m[0].length)
     const where = `${file}:${text.slice(0, m.index).split('\n').length} (${m[1]})`
     if (/\.select\(\s*\)/.test(chain)) bad.push(`${where}: a bare .select() returns every column, ${HELD} included`)
-    const sel = /\.select\(\s*(?:(['`])([\s\S]*?)\1|([A-Za-z_]\w*))\s*[,)]/.exec(chain)
+    // jobSelectFor(office, NAME) (lib/crewScope, crew read scope stage 1) sends NAME,
+    // or for crew NAME with the clients embed dropped: NAME's columns decide.
+    const sel = /\.select\(\s*(?:(['`])([\s\S]*?)\1|(?:jobSelectFor\(\s*\w+\s*,\s*)?([A-Za-z_]\w*)\)?)\s*[,)]/.exec(chain)
     if (/\.select\(\s*[^)\s]/.test(chain) && !sel) bad.push(`${where}: a select this test can't read`)
     if (sel) {
       const list = sel[3] ? constant(text, sel[3], file) : resolve(text, sel[2], file)

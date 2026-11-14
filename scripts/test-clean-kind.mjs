@@ -115,11 +115,18 @@ const SERVICE = 'service_types!jobs_service_id_fkey(name)'
 const dash = readFileSync(join(repo, 'src/screens/DashboardScreen.tsx'), 'utf8')
 const schedSrc = readFileSync(join(repo, 'src/screens/ScheduleScreen.tsx'), 'utf8')
 const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
-const todayQuery = /cachedRead\(dashTodayRead\(/.test(dash)
-  ? reads.slice(reads.indexOf('export function dashTodayRead('), reads.indexOf('export function homeDayRows('))
+// Since crew read scope stage 1 Home's select is HOME_DAY_SELECT (jobReads.ts) and
+// Schedule's is SCHEDULE_JOB_SELECT (pushTap.ts, read through jobReads scheduleRead);
+// crew send each through lib/crewScope, which only drops the clients embed and
+// filters on job_assignments (scripts/test-crew-read-scope.mjs).
+const todayQuery = /cachedRead\(dashTodayRead\(/.test(dash) && /\.select\(jobSelectFor\(office, HOME_DAY_SELECT\)\)/.test(reads)
+  ? (/export const HOME_DAY_SELECT = '([^']+)'/.exec(reads)?.[1] ?? '')
+  : ''
+const schedSelect = schedSrc.includes('cachedRead(scheduleRead(') && reads.includes('.select(jobSelectFor(office, SCHEDULE_JOB_SELECT))')
+  ? (/export const SCHEDULE_JOB_SELECT = '([^']+)'/.exec(readFileSync(join(repo, 'src/lib/pushTap.ts'), 'utf8'))?.[1] ?? '')
   : ''
 check('Home\'s day read fetches the service through the FK-named embed', todayQuery.includes(SERVICE), true)
-check('Schedule\'s read fetches the service through the FK-named embed', schedSrc.includes(SERVICE), true)
+check('Schedule\'s read fetches the service through the FK-named embed', schedSelect.includes(SERVICE), true)
 // One FK today (jobs_service_id_fkey); a second one would make an unhinted
 // embed answer 300 PGRST201, and a column-name hint stops resolving the day
 // the FK goes composite. The constraint name survives both.

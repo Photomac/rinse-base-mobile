@@ -84,12 +84,16 @@ check('Open jobs: 📅 after the number on both lists', open.split(`#{job.job_nu
 // The job screen spells it out under the time instead: a 📅 in the title wrapped
 // onto a line of its own on a phone and said the same thing twice.
 check('job screen title: no 📅 (the line under the time says it)', detail.includes(MARK), false)
-const dashSelect = (reads.match(/export function dashTodayRead[\s\S]*?\.select\('([^']*)'/) ?? [])[1] ?? ''
+// Home's and Schedule's selects are constants since crew read scope stage 1
+// (crew send them through lib/crewScope, which keeps reservation_id).
+const dashSelect = /\.select\(jobSelectFor\(office, HOME_DAY_SELECT\)\)/.test(reads) ? ((reads.match(/export const HOME_DAY_SELECT = '([^']*)'/) ?? [])[1] ?? '') : ''
+const schedSelect = sched.includes('cachedRead(scheduleRead(') ? ((src('src/lib/pushTap.ts').match(/export const SCHEDULE_JOB_SELECT = '([^']*)'/) ?? [])[1] ?? '') : ''
 check('Home\'s read (and the offline day pack) selects reservation_id', /(^|, )reservation_id(,|$)/.test(dashSelect), true)
-check('Schedule\'s read selects reservation_id', /\.select\('id, job_number[^']*\breservation_id\b/.test(sched), true)
+check('Schedule\'s read selects reservation_id', /^id, job_number[^']*\breservation_id\b/.test(schedSelect), true)
 check('Open jobs\' read selects reservation_id', /\.select\('id, job_number[^']*\breservation_id\b/.test(open), true)
 const metaSelect = (reads.match(/export const jobMetaRead[\s\S]*?\.select\('([^']*)'/) ?? [])[1] ?? ''
-check('job meta read: reservation_id + the booking\'s platform and id', /\breservation_id, clients!/.test(metaSelect) && metaSelect.includes('property_reservations(guest_count, pet_count, platform, reservation_id)'), true)
+// The client's type comes from crew_job_context since crew read scope stage 1, not a clients embed.
+check('job meta read: reservation_id + the booking\'s platform and id', /\breservation_id, property_reservations\(/.test(metaSelect) && metaSelect.includes('property_reservations(guest_count, pet_count, platform, reservation_id)'), true)
 check('job screen: the source comes from the meta read', detail.includes('setCalSource(calendarSource((jr as any).property_reservations, !!(jr as any).reservation_id))'), true)
 check('job screen: the line sits right under the time', /🕐 \{fmtTimeRangeAt\([^)]*\)\}<\/Text>\s*\{\/\* 📅[^*]*\*\/\}\s*\{calSource && \(/.test(detail), true)
 

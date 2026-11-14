@@ -188,6 +188,14 @@ function seedServer() {
     .map(r => ({ video_mode: 'off', answer_type: 'tick', flag_answer: null, answer: null, ...r }))
   server.beforeLineAsks = false
   server.missingColumns = {}
+  // crew_job_context(uuid[]) (rinse-base-app 20261113171611), as the database
+  // answers this company (crew can't contact clients): the client's type, the
+  // place, no name or phone. Crew reads take the client from it since crew
+  // read scope stage 1 (lib/crewScope).
+  server.rpc.crew_job_context = (args: any) => (args?.p_job_ids ?? [])
+    .map((id: string) => (server.tables.jobs ?? []).find((j: any) => j.id === id))
+    .filter(Boolean)
+    .map((j: any) => ({ job_id: j.id, client_type: j.clients?.client_type ?? null, display_name: j.client_addresses?.nickname || j.client_addresses?.street || null, client_name: null, client_phone: null }))
 }
 
 // ── Mock Supabase server ────────────────────────────────────────────────────

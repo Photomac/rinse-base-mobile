@@ -22,7 +22,8 @@ import { dayEndChecked, dayEndFields, dayStartSites, type DayEndDecision } from 
 import { arrivalForStart } from '../lib/siteVisits'
 import { cachedQuery, cachedRead, readSoon, writeCacheEntry, cacheEpoch } from '../lib/dataCache'
 import { lastTripFailed } from '../lib/netFetch'
-import { dashTodayRead, dashShiftRead, homeDayRows, sameDayInspections } from '../lib/jobReads'
+import { dashTodayRead, dashShiftRead, dashStrandedRead, homeDayRows, sameDayInspections } from '../lib/jobReads'
+import { placeLabel } from '../lib/crewScope'
 import { markSameDay } from '../lib/sameDayCheckin'
 import { prefetchDays, loadDayPack, onDayPackChange, stopsAhead, type DayPack } from '../lib/offlinePrefetch'
 import { writeThrough, overlayPending, flushOutbox, onOutboxDrained, uuid4, isQueued } from '../lib/outbox'
@@ -199,22 +200,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             .eq('status', 'completed')
             .gte('scheduled_start', monthStart.toISOString())),
 
-      // Cleans left open on a PREVIOUS day. The dashboard above is a strict
-      // today window and Schedule only reaches back a month, so a job that
-      // stayed in_progress overnight quietly left the crew's reach — the exact
-      // way the 8/16–8/29 backlog built up. Cached like the rest of the day so
-      // it survives a dead zone.
-      //
-      // Deliberately has NO lower date bound: a stranded clean stays actionable
-      // until it is closed. The status filter keeps this empty for a crew with
+      // Cleans left open on a PREVIOUS day, whatever their date (lib/jobReads
+      // dashStrandedRead). The status filter keeps this empty for a crew with
       // nothing outstanding.
-      cachedQuery(`dash:stranded:${user.id}`, supabase.from('jobs')
-        .select('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, source_report_id, clients!jobs_client_id_fkey(full_name, phone, client_type), client_addresses!jobs_address_id_fkey(id, street, city, nickname, lockbox_code, lat, lng, photo_url, timezone), job_assignments(user_id)')
-        .eq('tenant_id', user.tenant_id)
-        .in('status', ['in_progress', 'en_route'])
-        .lt('scheduled_start', todayStart.toISOString())
-        .order('scheduled_start')
-        .limit(50)),
+      cachedRead(dashStrandedRead(user, todayStart)),
     ])
     if (gen !== loadGen.current) return
     setOffline(todayRes.fromCache)
@@ -666,7 +655,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                 <View style={styles.activeInfo}>
                   <Text style={styles.activeLabel}>🔶 {t('active_job')}</Text>
                   <Text style={styles.activeClient}>
-                    {(activeJob.client_addresses as any)?.nickname || (canSeeClientNames ? (activeJob.clients as any)?.full_name : (activeJob.client_addresses as any)?.street)}
+                    {placeLabel(activeJob, canSeeClientNames, t('address_day_before'))}
                   </Text>
                   <Text style={styles.activeTime}>{fmtTimeRangeAt(activeJob.scheduled_start, activeJob.scheduled_end, activeJob.client_addresses, localeFor(lang))}</Text>
                 </View>
@@ -693,7 +682,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   <Text style={styles.nextJobTime}>{fmtTimeAt(nextJob.scheduled_start, nextJob.client_addresses, localeFor(lang))}</Text>
                 </View>
                 <Text style={styles.nextJobClient}>
-                  {(nextJob.client_addresses as any)?.nickname || (canSeeClientNames ? (nextJob.clients as any)?.full_name : (nextJob.client_addresses as any)?.street)}
+                  {placeLabel(nextJob, canSeeClientNames, t('address_day_before'))}
                 </Text>
                 <Text style={styles.nextJobAddress}>
                   📍 {(nextJob.client_addresses as any)?.street}, {(nextJob.client_addresses as any)?.city}
@@ -740,7 +729,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                       <View style={[styles.jobDot, { backgroundColor: '#F59E0B' }]} />
                       <View style={styles.jobInfo}>
                         <Text style={styles.jobClient}>
-                          {job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}
+                          {job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : placeLabel(job, canSeeClientNames, t('address_day_before'))}
                           {job.job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{job.job_number}</Text> : null}
                         </Text>
                         <Text style={styles.jobTime}>
@@ -784,7 +773,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                   <TouchableOpacity key={job.id} style={[styles.jobRow, isDone && { opacity: 0.5 }]} onPress={() => onJobPress(job)}>
                     <View style={[styles.jobDot, { backgroundColor: isDone ? '#10B981' : isActive ? '#F59E0B' : '#3B82F6' }]} />
                     <View style={styles.jobInfo}>
-                      <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : (addr?.nickname || (canSeeClientNames ? (job.clients as any)?.full_name : addr?.street))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}</Text>
+                      <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : placeLabel(job, canSeeClientNames, t('address_day_before'))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}</Text>
                       <Text style={styles.jobTime}>{[fmtTimeAt(job.scheduled_start, job.client_addresses, localeFor(lang)), ...kindParts(job, kindLabels)].join(' · ')}</Text>
                       <CrewLine crew={job.crew} viewerId={user.id} showUnassigned={canSeeClientNames} />
                     </View>
@@ -812,7 +801,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     <View style={[styles.jobDot, { backgroundColor: '#EF4444' }]} />
                     <View style={styles.jobInfo}>
                       <Text style={[styles.jobClient, { textDecorationLine: 'line-through' as const }]}>
-                        {addr?.nickname || (job.clients as any)?.full_name}
+                        {placeLabel(job, canSeeClientNames, t('address_day_before'))}
                       </Text>
                       <Text style={[styles.jobTime, { color: '#EF4444', fontWeight: '700' as const }]}>
                         ❌ {t('job_cancelled_label')}{reason ? ` — ${reason}` : ''}
