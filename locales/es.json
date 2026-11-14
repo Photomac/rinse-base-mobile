@@ -4,9 +4,9 @@
     "NSPhotoLibraryUsageDescription": "Rinsebase accede a tu biblioteca de fotos para subir fotos de los trabajos de limpieza.",
     "NSPhotoLibraryAddUsageDescription": "Rinsebase guarda las fotos de los trabajos de limpieza en tu biblioteca de fotos.",
     "NSMicrophoneUsageDescription": "Rinsebase usa el micrófono para las alertas de audio de emergencia SOS.",
-    "NSLocationWhenInUseUsageDescription": "Rinsebase usa tu ubicación para confirmar que estás en la propiedad correcta.",
-    "NSLocationAlwaysAndWhenInUseUsageDescription": "Rinsebase usa tu ubicación para confirmar que estás en la propiedad correcta y para recordarte registrar tu salida al dejar el sitio de trabajo.",
-    "NSLocationAlwaysUsageDescription": "Rinsebase usa tu ubicación para confirmar que estás en la propiedad correcta y para recordarte registrar tu salida al dejar el sitio de trabajo.",
+    "NSLocationWhenInUseUsageDescription": "Rinsebase usa tu ubicación mientras trabajas para confirmar que estás en la propiedad correcta y, si tu empresa lo activa, registrar tu recorrido para tu oficina.",
+    "NSLocationAlwaysAndWhenInUseUsageDescription": "Rinsebase usa tu ubicación mientras trabajas para confirmar que estás en la propiedad correcta, recordarte registrar tu salida al dejar el sitio de trabajo y, si tu empresa lo activa, registrar tu recorrido para tu oficina.",
+    "NSLocationAlwaysUsageDescription": "Rinsebase usa tu ubicación mientras trabajas para confirmar que estás en la propiedad correcta, recordarte registrar tu salida al dejar el sitio de trabajo y, si tu empresa lo activa, registrar tu recorrido para tu oficina.",
     "NSFaceIDUsageDescription": "Permite que Rinsebase use Face ID."
   }
 }
