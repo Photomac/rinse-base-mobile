@@ -11,7 +11,8 @@
 //   • when a saved video asks: a Finished one, on a clean that shows the card
 //     and has no rating (a Skip before doesn't stop it);
 //   • the ways out of the ask: under 5 stars short of photos none; Skip only
-//     before a star or at 5; Save once picked; closing unless short;
+//     before a star or at 5; Save once picked; closing unless short; after a
+//     Finished video a rating is required: no Skip and no closing at all;
 //   • the stay_* write is the card's old one (trimmed note, null when empty);
 //   • the asked list: no repeats, newest last, capped, junk dropped;
 //   • a save goes through the outbox (queued counts as saved) and only a
@@ -100,6 +101,12 @@ try {
     [1, 2, 3, 4].map(n => exits(n, 0)), Array(4).fill({ save: true, skip: false, close: true }))
   check('1-4 stars, short of photos: no Save, no Skip, no closing',
     [1, 2, 3, 4].map(n => exits(n, 2)), Array(4).fill({ save: false, skip: false, close: false }))
+  const req = (rating, short) => A.askExits(rating, short, { ratingRequired: true })
+  check('rating required (after a video), no star yet: nothing but picking one', req(0, 0), { save: false, skip: false, close: false })
+  check('rating required, 5 stars: Save only (no Skip, no closing)', req(5, 0), { save: true, skip: false, close: false })
+  check('rating required, 1-4 stars with the photos: Save only', [1, 2, 3, 4].map(n => req(n, 0)), Array(4).fill({ save: true, skip: false, close: false }))
+  check('rating required, 1-4 stars short of photos: nothing', [1, 2, 3, 4].map(n => req(n, 1)), Array(4).fill({ save: false, skip: false, close: false }))
+  check('not required unless asked for (the Complete ask is as above)', [A.askExits(0, 0, {}), A.askExits(0, 0, { ratingRequired: false })], [exits(0, 0), exits(0, 0)])
 
   // ── the write ───────────────────────────────────────────────────────────
   const at = new Date('2026-11-07T15:04:05.000Z')
@@ -238,7 +245,7 @@ check('the ask: the card\'s question, stars and flags, Save (and complete), Skip
   ["t('stay_rating_title')", '<StayPicker stay={stay} />', "t(mode === 'video' ? 'stay_save' : 'stay_ask_save_complete')", "t('stay_ask_skip')"].map(s => has(sheet, s)),
   [true, true, true, true])
 check('…its ways out from askExits: Save, Skip, and closing only when it allows',
-  ['const exits = askExits(rating, stay.photosShort)', 'disabled={!exits.save || stay.saving}', '{exits.skip && (', 'onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}'].map(s => has(sheet, s)),
+  ['const exits = askExits(rating, stay.photosShort, { ratingRequired: mode === \'video\' })', 'disabled={!exits.save || stay.saving}', '{exits.skip && (', 'onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}'].map(s => has(sheet, s)),
   [true, true, true, true])
 check('…after a video it says the video is saved', has(sheet, "{mode === 'video' && <Text style={styles.askVideoSaved}>✓ {t('stay_ask_after_video')}</Text>}"), true)
 // (Under 5 stars, short of the company's photos, the ask neither saves nor

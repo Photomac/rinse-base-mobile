@@ -24,13 +24,15 @@
 // walk-through video is saved, the star rating should pop up automatically
 // right then"): saving a Finished video on a clean that shows the card and has
 // no rating closes the recorder and asks right then (asksAfterVideo), with
-// Save instead of "Save and complete".
+// Save instead of "Save and complete". That ask REQUIRES a rating (Todd,
+// 2026-11-13): no Skip and no back button, only a star and Save.
 //
 // Leaving the ask (CKS 2026-11-13: "no saving it and no backing out of it
 // without the pictures"): under 5 stars, short of the company's photos
 // (lib/stayPhotos), it neither saves nor skips nor closes; 5 stars or the
-// photos open the way again. Skip shows only before a star is picked or at 5
-// stars: a 1-4 pick is an answer, so it's saved, not skipped (askExits).
+// photos open the way again. At Complete, Skip shows only before a star is
+// picked or at 5 stars: a 1-4 pick is an answer, so it's saved, not skipped
+// (askExits).
 
 export const STAY_FLAGS = [
   { key: 'heavy_mess',  i18n: 'stay_flag_heavy_mess',  icon: '🧹' },
@@ -80,13 +82,15 @@ export function asksAfterVideo(s: { type: string; shows: boolean; rated: boolean
  *  can still change, and Take photos opens the photo screen, the sheet still
  *  waiting). Skip only before a star or at 5 stars. Save once a star is
  *  picked and nothing is short. Closing (Android's back) whenever nothing is
- *  short. */
-export function askExits(rating: number, short: number): { save: boolean; skip: boolean; close: boolean } {
+ *  short. `ratingRequired` (the ask after a Finished video, Todd 2026-11-13):
+ *  no Skip and no closing at all; a star and Save is the only way out. */
+export function askExits(rating: number, short: number, opts: { ratingRequired?: boolean } = {}): { save: boolean; skip: boolean; close: boolean } {
   const locked = short > 0
+  const required = !!opts.ratingRequired
   return {
     save: rating > 0 && !locked,
-    skip: !locked && (rating === 0 || rating === 5),
-    close: !locked,
+    skip: !required && !locked && (rating === 0 || rating === 5),
+    close: !required && !locked,
   }
 }
 

@@ -89,7 +89,7 @@ check('the card: Save waits for the photos, and the row shows under the stars',
   cardFn.includes('if (!rating || stay.photosShort > 0) return') && cardFn.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />'))
 const sheet = card.slice(card.indexOf('export function StayAskModal'))
 check('the ask: its ways out come from askExits with the photos still short',
-  sheet.includes('const exits = askExits(rating, stay.photosShort)') && sheet.includes('disabled={!exits.save || stay.saving}') &&
+  sheet.includes("const exits = askExits(rating, stay.photosShort, { ratingRequired: mode === 'video' })") && sheet.includes('disabled={!exits.save || stay.saving}') &&
   /\{exits\.skip && \(\s*\n\s*<TouchableOpacity style=\{styles\.askSkipBtn\} onPress=\{onSkip\}/.test(sheet) &&
   sheet.includes('onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}') && sheet.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />'))
 check('…and no other way out: the overlay has no tap, Skip and Save are the only buttons besides the stars, flags and Take photos',
@@ -103,6 +103,12 @@ check('…both taken: Save and back, still no Skip (a low pick is saved)', way(3
 check('…5 stars instead: every way out, photos or not', way(5, 2, 0), { save: true, skip: true, close: true })
 check('…no star yet: Skip and back', way(0, 2, 0), { save: false, skip: true, close: true })
 check('the company not asking (0): 3 stars saves and closes at once', way(3, 0, 0), { save: true, skip: false, close: true })
+// After a Finished video a rating is required: the same lock, and never Skip or closing.
+const vway = (rating, required, count) => A.askExits(rating, P.photosShort(rating, required, count), { ratingRequired: true })
+check('after a video, 3 stars, none of 2 taken: nothing', vway(3, 2, 0), { save: false, skip: false, close: false })
+check('after a video, 3 stars, both taken: Save only', vway(3, 2, 2), { save: true, skip: false, close: false })
+check('after a video, 5 stars: Save only', vway(5, 2, 0), { save: true, skip: false, close: false })
+check('after a video, no star: nothing until one is picked', vway(0, 2, 0), { save: false, skip: false, close: false })
 const row = between(card, 'function StayPhotosRow(', '\n}\n')
 check('the row: only for a pick that needs photos; count, what\'s needed (one or many), Take photos',
   row.includes('if (!needsPhotos(stay.value.rating, stay.photosRequired)) return null') &&

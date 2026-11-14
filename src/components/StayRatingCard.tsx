@@ -20,7 +20,8 @@
 // back out of it, without taking the pictures"); the stars can still change.
 // The app is the gate: nothing on the server refuses the rating (see
 // lib/stayPhotos). The ask also comes right after a Finished walkthrough
-// video is saved (CKS 2026-11-13, lib/stayAsk asksAfterVideo).
+// video is saved (CKS 2026-11-13, lib/stayAsk asksAfterVideo), and there it
+// requires a rating: no Skip, no back button.
 
 import React, { useEffect, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Modal, ActivityIndicator } from 'react-native'
@@ -262,9 +263,11 @@ export function StayRatingCard({ stay, readOnly = false, onError, onTakePhotos }
  * backing out of it without the pictures"): under 5 stars, short of the
  * company's photos, there is no Save, no Skip, and Android's back button does
  * nothing; the stars can still change and Take photos opens the photo screen
- * (the sheet is back when it closes). Skip only before a star or at 5 stars.
- * Closing (back) otherwise neither saves nor skips: at Complete it stops the
- * Complete, and the ask comes again on the next one.
+ * (the sheet is back when it closes). At Complete, Skip only before a star or
+ * at 5 stars, and closing (back) otherwise neither saves nor skips: it stops
+ * the Complete, and the ask comes again on the next one. After a Finished
+ * video a rating is REQUIRED (Todd 2026-11-13): no Skip and no back button at
+ * all, only a star and Save.
  */
 export function StayAskModal({ visible, stay, mode = 'complete', onSave, onSkip, onClose, onTakePhotos }: {
   visible: boolean
@@ -282,7 +285,7 @@ export function StayAskModal({ visible, stay, mode = 'complete', onSave, onSkip,
   const picked = rating > 0
   // Under 5 stars and short of the company's photos (lib/stayPhotos): no way
   // out but 5 stars or the photos.
-  const exits = askExits(rating, stay.photosShort)
+  const exits = askExits(rating, stay.photosShort, { ratingRequired: mode === 'video' })
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}>
       <View style={styles.askOverlay}>

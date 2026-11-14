@@ -1734,7 +1734,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // Right after a Finished walkthrough video is saved (WalkthroughScreen
   // onSaved; CKS 2026-11-13, lib/stayAsk asksAfterVideo): on a clean that
   // shows the rating card and has no rating, the recorder closes and the ask
-  // opens on this screen, with Save. true = the recorder is closed.
+  // opens on this screen, with Save and no way out but a rating (no Skip, no
+  // back button; Todd 2026-11-13). true = the recorder is closed.
   function askStayAfterVideo(type: WalkthroughType): boolean {
     if (stayAskOpen || !asksAfterVideo({ type, shows: stayShows && !readOnly, rated: stay.saved })) return false
     setShowWalkthrough(false)
@@ -1747,7 +1748,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // rating is remembered); at Complete a refusal stops the Complete. Skip: the
   // ask is answered, remembered on this phone. Closing (Android's back, only
   // when the sheet lets it, StayAskModal): nothing is remembered, so the next
-  // Complete asks again.
+  // Complete asks again. (After a video the sheet offers neither Skip nor
+  // closing: only Save, and a refused save, which closes it to say why.)
   async function saveStayAsk() {
     const { error } = await stay.save()
     if (stayAskMode === 'complete') answerStayAsk(!error)
