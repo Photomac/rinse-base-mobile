@@ -30,6 +30,7 @@ import { byCrewDayOrder } from '../lib/jobOrder'
 import { PrepCard } from '../components/PrepCard'
 import { DriverStopsCard } from '../components/DriverStopsCard'
 import { SentBackCard } from '../components/SentBackCard'
+import { InspectionsToReviewCard } from '../components/InspectionsToReviewCard'
 import { JobClock } from '../components/JobClock'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
@@ -597,6 +598,10 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             </View>
           </View>
         </View>
+
+        {/* Inspections waiting for this person's review (CKS, 2026-11-13) —
+            renders nothing when none are, or the company has reminders off */}
+        <InspectionsToReviewCard user={user} onJobPress={onJobPress} reloadKey={todayJobs} />
 
         {/* Offline: rendering from the on-device cache — saved data, not live */}
         {offline && (
