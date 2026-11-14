@@ -5,7 +5,7 @@ import { useLang } from '../contexts/LangContext'
 import { CrewLine } from '../components/CrewLine'
 import { kindParts } from '../lib/cleanKind'
 import { sameDayInspections, scheduleRead } from '../lib/jobReads'
-import { placeLabel } from '../lib/crewScope'
+import { placeLabel, hiddenAddressText } from '../lib/crewScope'
 import { markSameDay } from '../lib/sameDayCheckin'
 import { JobScopeToggle } from '../components/JobScopeToggle'
 import { CrewGroupHeader } from '../components/CrewGroupHeader'
@@ -152,7 +152,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
   // sentinel street) is not a place: name it like the cards below do.
   const cellName = (job: any) => job.job_type === 'laundry_run' ? t('laundry_run')
     : job.job_type === 'task' ? (job.internal_notes || t('task')).split('\n')[0]
-    : placeLabel(job, canSeeClientNames, t('address_day_before'))
+    : placeLabel(job, canSeeClientNames, hiddenAddressText(t))
 
   const monthLabel = capFirst(anchor.toLocaleDateString(locale, { month: 'long', year: 'numeric' }))
   const weekStart = new Date(anchor); weekStart.setDate(anchor.getDate() - anchor.getDay())
@@ -299,7 +299,7 @@ export function ScheduleScreen({ user, onJobPress }: { user: any; onJobPress: (j
                       <Text style={[styles.statusText, { color }]}>{t((STATUS_LABEL_KEYS[job.status] || 'status_scheduled') as any)}</Text>
                     </View>
                   </View>
-                  <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : placeLabel(job, canSeeClientNames, t('address_day_before'))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}</Text>
+                  <Text style={styles.jobClient}>{job.job_type === 'laundry_run' ? `🧺 ${t('laundry_run')}` : job.job_type === 'inspection' ? `🔍 ${t('inspection')} · ${addr?.nickname || addr?.street || ''}` : job.job_type === 'task' ? `📌 ${(job.internal_notes || t('task')).split('\n')[0]}` : placeLabel(job, canSeeClientNames, hiddenAddressText(t))}{(job as any).job_number ? <Text style={{ fontWeight: '400', opacity: 0.55 }}>  #{(job as any).job_number}</Text> : null}{isCalendarMade(job) ? <Text>  📅</Text> : null}</Text>
                   {(!job.job_type || job.job_type === 'clean' || job.job_type === 'inspection') && <Text style={styles.jobAddress}>📍 {addr?.street}, {addr?.city}</Text>}
                   {kind.length > 0 && <Text style={styles.kindTag}>{kind.join('  ·  ')}</Text>}
                   {!!awaiting?.waiting.has(job.id) && <Text style={styles.answerTag}>⏳ {t('answer_needed_tag')}</Text>}
