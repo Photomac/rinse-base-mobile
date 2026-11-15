@@ -188,6 +188,26 @@ function seedServer() {
     .map(r => ({ video_mode: 'off', answer_type: 'tick', flag_answer: null, answer: null, ...r }))
   server.beforeLineAsks = false
   server.missingColumns = {}
+  // crew_job_context(uuid[]) (rinse-base-app 20261113171611), as the database
+  // answers this company (crew can't contact clients): the client's type, the
+  // place, no name or phone. Crew reads take the client from it since crew
+  // read scope stage 1 (lib/crewScope).
+  server.rpc.crew_job_context = (args: any) => (args?.p_job_ids ?? [])
+    .map((id: string) => (server.tables.jobs ?? []).find((j: any) => j.id === id))
+    .filter(Boolean)
+    .map((j: any) => ({ job_id: j.id, client_type: j.clients?.client_type ?? null, display_name: j.client_addresses?.nickname || j.client_addresses?.street || null, client_name: null, client_phone: null }))
+  // prep_restock_flags(uuid[]) (rinse-base-app 20261113171611): every open
+  // "needs restock" line at the given properties, by anyone, one row per
+  // property, item and level. Called with GET, so the array comes as '{A,B}'.
+  server.rpc.prep_restock_flags = (args: any) => {
+    const raw = args?.p_address_ids
+    const want: string[] = Array.isArray(raw) ? raw : String(raw ?? '').replace(/^\{|\}$/g, '').split(',').filter(Boolean)
+    const seen = new Set<string>()
+    return (server.tables.job_inventory_log ?? [])
+      .filter((l: any) => l.needs_restock === true && want.includes(l.jobs?.address_id))
+      .map((l: any) => ({ address_id: l.jobs.address_id, item_name: l.item_name, restock_level: l.restock_level ?? null }))
+      .filter((r: any) => { const k = `${r.address_id}|${r.item_name}|${r.restock_level}`; return seen.has(k) ? false : (seen.add(k), true) })
+  }
 }
 
 // ── Mock Supabase server ────────────────────────────────────────────────────
@@ -684,6 +704,12 @@ const scenarios: Record<string, () => Promise<void>> = {
       `addr ${pa.fromCache}/${(pa.data || []).length} linen ${pl.fromCache}/${(pl.data || []).length} stays ${pr.fromCache}`)
     ok('the prep card: today\'s Check first lines', pc.fromCache && (pc.data || []).map((l: any) => l.body).sort().join('|') === 'Spa photo|Water all the plants',
       `${pc.fromCache}/${(pc.data || []).length}`)
+    // Restock flags at the day's homes, logged on an earlier clean by anyone
+    // (prep_restock_flags since crew read scope stage 1), in the card's shape.
+    const prs = await c.cachedRead(prep.restock)
+    ok('the prep card: the restock flag at Red Rock Casita, from the phone',
+      prs.fromCache && JSON.stringify(prs.data) === JSON.stringify([{ item_name: 'Toilet paper', restock_level: null, jobs: { address_id: 'A2' } }]),
+      `${prs.fromCache} ${JSON.stringify(prs.data)}`)
   },
 
   // Live, Home still shows ONLY today, though the read now carries tomorrow.

@@ -427,8 +427,15 @@ async function main() {
     /<NavigationContainer\s+ref=\{navigationRef\}\s+onReady=\{\(\) => \{ const tab = pendingTab\.current; if \(tab\) \{ pendingTab\.current = null; navigationRef\.navigate\(tab\) \} \}\}/.test(app) &&
     /const navigationRef = createNavigationContainerRef/.test(app))
   ok('there is a Schedule tab to switch to', app.includes('name="Schedule"'))
+  // Since crew read scope stage 1 the read lives in lib/jobReads (scheduleJobById):
+  // the office's select as is, crew's through lib/crewScope (own cleans only, the
+  // client's type from crew_job_context).
+  const jobReadsSrc = src('src/lib/jobReads.ts')
+  const byId = jobReadsSrc.slice(jobReadsSrc.indexOf('export function scheduleJobById('), jobReadsSrc.indexOf('\n}\n', jobReadsSrc.indexOf('export function scheduleJobById(')))
   ok('the live read is Schedule\'s columns, one job, this company',
-    /supabase\.from\('jobs'\)\.select\(SCHEDULE_JOB_SELECT\)\s*\.eq\('id', jobId\)\.eq\('tenant_id', user\.tenant_id\)\.maybeSingle\(\)/.test(app))
+    /live: \(jobId\) => scheduleJobById\(user, jobId\)/.test(app) &&
+    /\.select\(jobSelectFor\(office, SCHEDULE_JOB_SELECT\)\)\s*\.eq\('id', jobId\)\.eq\('tenant_id', user\.tenant_id\), office, user\.id\)\s*\.maybeSingle\(\)/.test(byId) &&
+    byId.includes('withJobContext('))
   ok('the saved copies come through readCacheEntry, the queued writes through overlayPending(\'jobs\')',
     /saved: \(key\) => readCacheEntry\(key\)/.test(app) && /overlay: \(rows\) => overlayPending\('jobs', rows\)/.test(app))
   ok('the day-change prefetch runs on a job_assigned push and, since 2026-11-10, a job_rescheduled one',
@@ -437,15 +444,17 @@ async function main() {
 
   // ── Schedule's row, Schedule's rule, the screens' keys ──
   const schedule = src('src/screens/ScheduleScreen.tsx')
-  // The read is paged (lib/fetchAll.ts), so the builder sits inside fetchAllPages(() => ...).
-  const schedSelect = /cachedQuery\(`sched:\$\{user\.id\}`, (?:fetchAllPages\(\(\) => )?supabase\.from\('jobs'\)\s*\.select\('([^']+)'\)/.exec(schedule)?.[1]
-  ok('SCHEDULE_JOB_SELECT is exactly ScheduleScreen\'s select', schedSelect === SCHEDULE_JOB_SELECT, schedSelect ? '' : 'Schedule\'s select not found')
+  // The read is paged (lib/fetchAll.ts) and lives in lib/jobReads (scheduleRead).
+  const schedRead = jobReadsSrc.slice(jobReadsSrc.indexOf('export function scheduleRead('), jobReadsSrc.indexOf('\n}\n', jobReadsSrc.indexOf('export function scheduleRead(')))
+  ok('ScheduleScreen reads through scheduleRead(), whose select is SCHEDULE_JOB_SELECT',
+    schedule.includes('cachedRead(scheduleRead(user, start, end))') && schedRead.includes('.select(jobSelectFor(office, SCHEDULE_JOB_SELECT))'))
   ok('Schedule still leaves cancelled cleans out and shows crew only their own (what openable() mirrors)',
-    schedule.includes(".neq('status', 'cancelled')") && /isOwner\s*\?\s*\(data \?\? \[\]\)\s*:\s*\(data \?\? \[\]\)\.filter\(\(j: any\) => isMyJob\(j, user\.id\)\)/.test(schedule) &&
+    schedRead.includes(".neq('status', 'cancelled')") && /onlyMine\(/.test(schedRead) &&
+    /isOwner\s*\?\s*\(data \?\? \[\]\)\s*:\s*\(data \?\? \[\]\)\.filter\(\(j: any\) => isMyJob\(j, user\.id\)\)/.test(schedule) &&
     /const isOwner = \['owner', 'admin', 'manager', 'dispatcher'\]\.includes\(user\.role\)/.test(schedule))
   ok('the saved keys are the ones Home and Schedule write',
     savedKeys('U').join() === 'dash:today:U,sched:U' &&
-    src('src/lib/jobReads.ts').includes('key: `dash:today:${user.id}`') && schedule.includes('cachedQuery(`sched:${user.id}`'))
+    jobReadsSrc.includes('key: `dash:today:${user.id}`') && schedRead.includes('key: `sched:${user.id}`'))
 
   console.log(failures ? `\n${failures} FAILED` : '\nall passed')
   process.exit(failures ? 1 : 0)

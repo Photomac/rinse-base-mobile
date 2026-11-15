@@ -96,7 +96,9 @@ check('the switch: its own read of the one column', /key: `scten:\$\{tenantId\}`
 check('the two-choice switch: its own read of the one column', /key: `rtcten:\$\{tenantId\}`[\s\S]{0,120}\.select\('restock_two_choice'\)\.eq\('id', tenantId\)\.maybeSingle\(\)/.test(reads), true)
 check('the clean\'s lines and the prep card\'s open flags read the kind of low', [
   /key: `inv:log:\$\{jobId\}`[\s\S]{0,400}\.select\('[^']*\bneeds_restock, restock_level\b[^']*'\)/.test(reads),
-  /key: `prep:restock:[\s\S]{0,200}\.select\('item_name, restock_level, jobs!inner\(address_id\)'\)/.test(reads),
+  // Since crew read scope stage 1: prep_restock_flags() (every open flag at the
+  // day's homes, by anyone), kept in the card's row shape with restock_level.
+  /key: `prep:restock:[\s\S]{0,800}supabase\.rpc\('prep_restock_flags', \{ p_address_ids: addrIds \}, \{ get: true \}\)[\s\S]{0,300}item_name: r\.item_name, restock_level: r\.restock_level, jobs: \{ address_id: r\.address_id \}/.test(reads),
 ], [true, true])
 check('the day pack saves Supplies, the switches included, for cleans AND inspections',
   /if \(\(!isTask \|\| job\.job_type === 'inspection'\) && addrId\) \{\s*reads\.push\(inventoryItemsRead\(addrId\), inventoryLogRead\(job\.id\), inventoryRoomsRead\(addrId\), linenExtrasRead\(job\.id\),\s*openRestockRead\(addrId\), supplyCountsTenantRead\(user\.tenant_id\), restockTwoChoiceTenantRead\(user\.tenant_id\)\)/.test(reads), true)

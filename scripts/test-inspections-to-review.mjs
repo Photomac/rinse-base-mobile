@@ -63,7 +63,8 @@ console.log('3. In the source')
 const card = readFileSync(join(repo, 'src/components/InspectionsToReviewCard.tsx'), 'utf8')
 check('the card reads only my_inspections_to_review()', [card.includes("supabase.rpc('my_inspections_to_review')"), /supabase\.from\('(?!jobs')/.test(card)], [true, false])
 check('…opens a clean with Schedule\'s columns, pinned to the company, like a push tap',
-  card.includes(".select(SCHEDULE_JOB_SELECT)\n      .eq('id', item.jobId).eq('tenant_id', user.tenant_id).maybeSingle()"), true)
+  // lib/jobReads scheduleJobById: Schedule's columns, this company; crew only a clean they are on (crew read scope stage 1).
+  card.includes('await scheduleJobById(user, item.jobId)'), true)
 check('…keeps what it shows on an error and renders nothing when empty', [card.includes('if (error) return'), card.includes('if (!items.length) return null')], [true, true])
 check('…reloads on an inspection push and when the app comes back', [card.includes("=== 'inspection_result') load()"), card.includes("if (s === 'active') load()")], [true, true])
 const home = readFileSync(join(repo, 'src/screens/DashboardScreen.tsx'), 'utf8')

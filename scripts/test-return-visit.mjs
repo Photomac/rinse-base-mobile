@@ -46,9 +46,14 @@ check('any other job, even ticked: nothing added', returnVisitValues({ job_type:
 
 console.log('\nthe screens')
 const reads = read('src/lib/jobReads.ts'), schedule = read('src/screens/ScheduleScreen.tsx'), dash = read('src/screens/DashboardScreen.tsx')
-check('Home\'s day read carries source_report_id', /dashTodayRead[\s\S]*?\.select\('[^']*\binternal_notes, source_report_id,/.test(reads), true)
-check('the Schedule read carries it', /\.select\('[^']*\binternal_notes, source_report_id,/.test(schedule), true)
-check('Needs closing carries it', /\.select\('id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, source_report_id,/.test(dash), true)
+// Since crew read scope stage 1 the three reads are the office's selects in
+// jobReads (Home's day, Needs closing) and pushTap (Schedule), read through
+// jobReads; crew send each through lib/crewScope, which keeps the column.
+const constSel = (src, name) => new RegExp(`export const ${name} = '([^']+)'`).exec(src)?.[1] ?? ''
+const pushTapSrc = readFileSync(join(repo, 'src/lib/pushTap.ts'), 'utf8')
+check('Home\'s day read carries source_report_id', /\.select\(jobSelectFor\(office, HOME_DAY_SELECT\)\)/.test(reads) && /\binternal_notes, source_report_id,/.test(constSel(reads, 'HOME_DAY_SELECT')), true)
+check('the Schedule read carries it', schedule.includes('cachedRead(scheduleRead(') && /\binternal_notes, source_report_id,/.test(constSel(pushTapSrc, 'SCHEDULE_JOB_SELECT')), true)
+check('Needs closing carries it', dash.includes('cachedRead(dashStrandedRead(') && /^id, job_number, tenant_id, status, scheduled_start, scheduled_end, is_turnover, job_type, internal_notes, source_report_id,/.test(constSel(reads, 'HOME_STRANDED_SELECT')), true)
 const screen = read('src/screens/JobDetailScreen.tsx')
 check('the tick: on a repair visit not yet completed, in the Notes card',
   /<TextInput style=\{styles\.notesInput\}[^\n]*\n\s*\{isRepairVisit\(job\) && job\.status !== 'completed' && !isLookAndQuoteNotes\(job\.internal_notes\) && \(/.test(screen), true)

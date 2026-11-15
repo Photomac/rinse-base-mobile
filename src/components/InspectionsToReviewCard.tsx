@@ -18,7 +18,7 @@ import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { localeFor } from '../lib/i18n'
 import { fmtDate } from '../lib/timezone'
-import { SCHEDULE_JOB_SELECT } from '../lib/pushTap'
+import { scheduleJobById } from '../lib/jobReads'
 import { readToReview, onInspectionReviewed, VERDICT_KEY, type ToReview } from '../lib/inspectionsToReview'
 import { CARD, BORDER, TEXT, TEXT_MUTED } from '../lib/theme'
 
@@ -54,8 +54,7 @@ export function InspectionsToReviewCard({ user, onJobPress, reloadKey }: { user:
   async function open(item: ToReview) {
     if (opening) return
     setOpening(item.inspectionId)
-    const { data, error } = await supabase.from('jobs').select(SCHEDULE_JOB_SELECT)
-      .eq('id', item.jobId).eq('tenant_id', user.tenant_id).maybeSingle()
+    const { data, error } = await scheduleJobById(user, item.jobId)
     setOpening(null)
     if (error || !data) { Alert.alert(t('insp_todo_open_failed')); return }
     onJobPress(data)

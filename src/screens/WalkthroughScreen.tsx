@@ -312,7 +312,7 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
     <SafeAreaView style={styles.container} edges={['top']}>
       {header}
       <View style={styles.jobInfo}>
-        <Text style={styles.jobName}>{addr?.nickname || client?.full_name}</Text>
+        <Text style={styles.jobName}>{addr?.nickname || client?.full_name || addr?.street}</Text>
         {!!addr?.street && <Text style={styles.jobAddr}>{addr.street}{addr?.city ? `, ${addr.city}` : ''}</Text>}
         {!!line && <Text style={styles.lineLabel}>{line.label}</Text>}
       </View>
