@@ -7,6 +7,7 @@ import { ensureCameraCapture, ensureMediaLibrary } from '../lib/permissions'
 import { Image } from 'react-native'
 import { useLang } from '../contexts/LangContext'
 import { localeFor, ti } from '../lib/i18n'
+import { planEmailSave, sameEmail, startEmailChange, confirmEmailChange, type EmailChangeIO, type EmailChangeFailure } from '../lib/loginEmail'
 import { pendingOpCount, rejectedOps, clearRejected, flushOutbox } from '../lib/outbox'
 import { SLATE_DARK, GOLD } from '../lib/theme'
 import { CrewWeekCard } from '../components/CrewWeekCard'
@@ -43,6 +44,29 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
   const [contactEmail, setContactEmail] = useState(user.email || '')
   const [contactPhone, setContactPhone] = useState(user.phone || '')
   const [savingContact, setSavingContact] = useState(false)
+  // Changing the email moves the sign-in too, by a code sent to the new
+  // address (src/lib/loginEmail.ts). `emailStep` is the address waiting for
+  // its code. `emailSaved` holds a just-saved address over the profile reload
+  // the sign-in change triggers (that reload can read users.email a moment
+  // before the new one lands); it lets go once the profile shows it.
+  const [loginEmail, setLoginEmail] = useState<string | null>(null)
+  const [emailSaved, setEmailSaved] = useState<string | null | undefined>(undefined)
+  const shownEmail: string | null = emailSaved !== undefined ? emailSaved : (user.email || null)
+  const setShownEmail = (e: string | null) => setEmailSaved(e)
+  const [emailStep, setEmailStep] = useState<string | null>(null)
+  const [emailCode, setEmailCode] = useState('')
+  React.useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => setLoginEmail(session?.user?.email ?? null)).catch(() => {})
+  }, [])
+  React.useEffect(() => {
+    if (emailSaved !== undefined && (user.email || null) === emailSaved) setEmailSaved(undefined)
+  }, [user.email, emailSaved])
+  const emailIO: EmailChangeIO = {
+    requestCode: (email) => supabase.auth.updateUser({ email }),
+    resendCode: (email) => supabase.auth.resend({ type: 'email_change', email }),
+    verifyCode: (email, code) => supabase.auth.verifyOtp({ email, token: code, type: 'email_change' }),
+    saveContact: (email) => supabase.from('users').update({ email }).eq('id', user.id),
+  }
   const [checkingUpdate, setCheckingUpdate] = useState(false)
 
   // ── Manual update check ───────────────────────────────────────────────────
@@ -186,15 +210,55 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
     : { color: '#B45309', bg: '#FFFBEB', border: '#FDE68A' }
   const fmtToDate = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString(localeFor(lang), { month: 'short', day: 'numeric', year: 'numeric' })
 
+  function emailFailureText(failure: EmailChangeFailure, message: string) {
+    return failure === 'taken' ? t('email_taken')
+      : failure === 'rate_limited' ? t('email_rate_limited')
+      : failure === 'network' ? t('login_network_error')
+      : failure === 'bad_code' ? t('reset_code_invalid')
+      : message || t('error')
+  }
+
   async function saveContact() {
+    const plan = planEmailSave(contactEmail, shownEmail, loginEmail)
+    if (plan.kind === 'invalid') { Alert.alert(t('error'), t('email_invalid')); return }
     setSavingContact(true)
-    const { error } = await supabase.from('users')
-      .update({ email: contactEmail.trim() || null, phone: contactPhone.trim() || null })
-      .eq('id', user.id)
+    // The phone, and an email that leaves the sign-in alone, save as before.
+    // A new email is NOT written here: it waits for the code below.
+    const patch: { phone: string | null; email?: string | null } = { phone: contactPhone.trim() || null }
+    if (plan.kind === 'contact_only') patch.email = plan.email
+    const { error } = await supabase.from('users').update(patch).eq('id', user.id)
+    if (error) { setSavingContact(false); Alert.alert(t('error'), error.message); return }
+    user.phone = contactPhone.trim()
+    if (plan.kind === 'contact_only') {
+      user.email = plan.email ?? ''; setShownEmail(plan.email)
+      setSavingContact(false); setEditingContact(false)
+      return
+    }
+    const r = await startEmailChange(emailIO, plan.email)
     setSavingContact(false)
-    if (error) { Alert.alert(t('error'), error.message); return }
-    user.email = contactEmail.trim(); user.phone = contactPhone.trim()
-    setEditingContact(false)
+    if (!r.ok) { Alert.alert(t('error'), emailFailureText(r.failure, r.message)); return }
+    setEmailCode(''); setEmailStep(plan.email)
+  }
+
+  async function confirmEmail() {
+    if (!emailStep) return
+    const email = emailStep
+    setSavingContact(true)
+    const r = await confirmEmailChange(emailIO, email, emailCode)
+    setSavingContact(false)
+    if (!r.ok) { Alert.alert(t('error'), emailFailureText(r.failure, r.message)); return }
+    setLoginEmail(email)
+    if (r.contactSaved) { user.email = email; setShownEmail(email) }
+    setEmailStep(null); setEditingContact(false)
+    Alert.alert('✅', ti(t(r.contactSaved ? 'email_changed' : 'email_changed_contact_failed'), { email }))
+  }
+
+  async function resendEmailCode() {
+    if (!emailStep) return
+    setSavingContact(true)
+    const r = await startEmailChange(emailIO, emailStep, true)
+    setSavingContact(false)
+    Alert.alert(r.ok ? '✅' : t('error'), r.ok ? ti(t('email_code_sent'), { email: emailStep }) : emailFailureText(r.failure, r.message))
   }
 
   async function pickAvatar() {
@@ -295,16 +359,35 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <Text style={styles.sectionTitle}>{t('contact_info')}</Text>
             {!editingContact && (
-              <TouchableOpacity onPress={() => { setContactEmail(user.email || ''); setContactPhone(user.phone || ''); setEditingContact(true) }}>
+              <TouchableOpacity onPress={() => { setContactEmail(shownEmail || ''); setContactPhone(user.phone || ''); setEmailStep(null); setEditingContact(true) }}>
                 <Text style={{ color: GOLD, fontSize: 13, fontWeight: '700' }}>{t('edit')}</Text>
               </TouchableOpacity>
             )}
           </View>
-          {editingContact ? (
+          {editingContact && emailStep ? (
+            <>
+              <Text style={styles.contactNote}>{ti(t('email_code_sent'), { email: emailStep })}</Text>
+              <Text style={[styles.rowLabel, { marginTop: 10 }]}>{t('reset_code_label')}</Text>
+              <TextInput value={emailCode} onChangeText={setEmailCode} keyboardType="number-pad" maxLength={12} autoFocus
+                style={[styles.input, { letterSpacing: 4, fontWeight: '700' }]} placeholder="········" placeholderTextColor="#9E8E72" />
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                <TouchableOpacity style={[styles.contactBtn, { backgroundColor: '#F1F5F9' }]} onPress={() => { setEmailStep(null); setEditingContact(false) }} disabled={savingContact}>
+                  <Text style={{ color: '#475569', fontWeight: '700', fontSize: 13 }}>{t('cancel')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.contactBtn, { backgroundColor: GOLD }]} onPress={confirmEmail} disabled={savingContact}>
+                  <Text style={{ color: '#1A1408', fontWeight: '800', fontSize: 13 }}>{savingContact ? t('saving') : t('email_code_confirm')}</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity onPress={resendEmailCode} disabled={savingContact} style={{ marginTop: 12, alignItems: 'center' }}>
+                <Text style={{ color: '#475569', fontWeight: '700', fontSize: 13 }}>{t('reset_resend')}</Text>
+              </TouchableOpacity>
+            </>
+          ) : editingContact ? (
             <>
               <Text style={styles.rowLabel}>{t('email')}</Text>
-              <TextInput value={contactEmail} onChangeText={setContactEmail} autoCapitalize="none" keyboardType="email-address"
+              <TextInput value={contactEmail} onChangeText={setContactEmail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address"
                 style={styles.input} placeholderTextColor="#9E8E72" />
+              <Text style={styles.contactNote}>{t('email_login_note')}</Text>
               <Text style={[styles.rowLabel, { marginTop: 10 }]}>{t('phone')}</Text>
               <TextInput value={contactPhone} onChangeText={setContactPhone} keyboardType="phone-pad"
                 style={styles.input} placeholderTextColor="#9E8E72" />
@@ -318,12 +401,26 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
               </View>
             </>
           ) : (
-            [[t('email'), user.email], [t('phone'), user.phone || t('not_set')]].map(([l, v]) => (
-              <View key={l} style={styles.row}>
-                <Text style={styles.rowLabel}>{l}</Text>
-                <Text style={styles.rowValue}>{v}</Text>
-              </View>
-            ))
+            <>
+              {[[t('email'), shownEmail || t('not_set')], [t('phone'), user.phone || t('not_set')]].map(([l, v]) => (
+                <View key={l} style={styles.row}>
+                  <Text style={styles.rowLabel}>{l}</Text>
+                  <Text style={styles.rowValue}>{v}</Text>
+                </View>
+              ))}
+              {/* The sign-in email, only when it isn't the contact email (a
+                  change made before this screen moved the login, or one the
+                  office made). Saving the contact email again moves it. */}
+              {loginEmail && !sameEmail(loginEmail, shownEmail) && (
+                <>
+                  <View style={styles.row}>
+                    <Text style={styles.rowLabel}>{t('signin_email')}</Text>
+                    <Text style={styles.rowValue}>{loginEmail}</Text>
+                  </View>
+                  {!!shownEmail && <Text style={styles.contactNote}>{ti(t('signin_email_differs'), { email: shownEmail })}</Text>}
+                </>
+              )}
+            </>
           )}
         </View>
         {/* Own pay, loaded with the profile through user_private_details()
@@ -497,6 +594,7 @@ const styles = StyleSheet.create({
   rowLast: { borderBottomWidth: 0 },
   input: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, fontSize: 14, color: '#0F172A', backgroundColor: '#fff', marginTop: 4 },
   contactBtn: { flex: 1, paddingVertical: 11, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  contactNote: { fontSize: 12, color: '#64748B', lineHeight: 17, marginTop: 6 },
   langRow: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 8 },
   langOpt: { flex: 1, backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   langOptActive: { backgroundColor: '#1D4ED8', borderColor: '#1D4ED8' },
