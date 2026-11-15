@@ -123,6 +123,9 @@ export function LoginScreen({ refusal = null, onClearRefusal }: {
         <View style={styles.form}>
           <Text style={styles.formTitle}>{t('reset_title')}</Text>
           <Text style={styles.formSub}>{t('reset_instructions')}</Text>
+          {/* GoTrue answers "sent" for an address it doesn't know, so a code
+              asked for with the wrong email just never comes. Say which one. */}
+          <Text style={styles.formSub}>{t('reset_which_email')}</Text>
           <Text style={styles.label}>{t('email')}</Text>
           <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder={t('email_placeholder')} placeholderTextColor={TEXT_LIGHT} autoCapitalize="none" keyboardType="email-address" autoFocus />
           <TouchableOpacity style={[styles.button, loading && { opacity: 0.6 }]} onPress={sendResetCode} disabled={loading}>
