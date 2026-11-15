@@ -1,8 +1,9 @@
 import React, { useState } from 'react'
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, StatusBar, Image } from 'react-native'
 import { supabase } from '../lib/supabase'
-import { SLATE_DARK, GOLD, SURFACE, CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT } from '../lib/theme'
+import { SLATE_DARK, GOLD, GOLD_MUTED, SURFACE, CARD, BORDER, TEXT, TEXT_MUTED, TEXT_LIGHT } from '../lib/theme'
 import { useLang } from '../contexts/LangContext'
+import type { SignInRefusal } from '../lib/signInRefusal'
 
 // 'login' → normal sign-in. 'reset_request' → enter email, send the 6-digit
 // recovery code. 'reset_verify' → enter code + new password. The email
@@ -11,7 +12,13 @@ import { useLang } from '../contexts/LangContext'
 // code works here and on the web.
 type Mode = 'login' | 'reset_request' | 'reset_verify'
 
-export function LoginScreen() {
+// `refusal`: why the last sign-in was turned away after the password was
+// accepted (App.tsx, src/lib/signInRefusal.ts). Without it a deactivated crew
+// member just saw this screen come back and took it for a wrong password.
+export function LoginScreen({ refusal = null, onClearRefusal }: {
+  refusal?: SignInRefusal | null
+  onClearRefusal?: () => void
+} = {}) {
   const [mode, setMode] = useState<Mode>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -32,6 +39,9 @@ export function LoginScreen() {
     // her iPhone while the same credentials worked on another handset.
     const addr = email.trim()
     if (!addr || !password) { Alert.alert(t('login_failed'), !addr ? t('enter_email') : t('enter_password')); return }
+    // A new attempt: the old reason goes. If this login is still turned away,
+    // App.tsx puts it back once the profile check answers.
+    onClearRefusal?.()
     setLoading(true)
     const { error } = await supabase.auth.signInWithPassword({ email: addr, password })
     if (error) {
@@ -88,6 +98,12 @@ export function LoginScreen() {
 
       {mode === 'login' && (
         <View style={styles.form}>
+          {refusal && (
+            <View style={styles.refusal} accessibilityRole="alert" accessibilityLiveRegion="polite">
+              <Text style={styles.refusalTitle}>{t(refusal === 'deactivated' ? 'signin_deactivated_title' : 'signin_no_profile_title')}</Text>
+              <Text style={styles.refusalBody}>{t(refusal === 'deactivated' ? 'signin_deactivated_body' : 'signin_no_profile_body')}</Text>
+            </View>
+          )}
           <Text style={styles.label}>{t('email')}</Text>
           <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder={t('email_placeholder')} placeholderTextColor={TEXT_LIGHT} autoCapitalize="none" keyboardType="email-address" />
           <Text style={styles.label}>{t('password')}</Text>
@@ -176,6 +192,10 @@ const styles = StyleSheet.create({
   form: { backgroundColor: CARD, borderRadius: 20, padding: 24, borderWidth: 1, borderColor: BORDER, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.06, shadowRadius: 16 },
   formTitle: { color: TEXT, fontSize: 18, fontWeight: '800', marginBottom: 6 },
   formSub: { color: TEXT_MUTED, fontSize: 13, lineHeight: 19, marginBottom: 4 },
+  // Gold pale with a dark-gold edge: a plain notice, not an error banner.
+  refusal: { backgroundColor: '#FDF6E3', borderRadius: 12, borderLeftWidth: 4, borderLeftColor: GOLD_MUTED, padding: 14, marginBottom: 4 },
+  refusalTitle: { color: TEXT, fontSize: 15, fontWeight: '800', marginBottom: 4 },
+  refusalBody: { color: TEXT_MUTED, fontSize: 13, lineHeight: 19 },
   label: { color: TEXT_MUTED, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 6, marginTop: 12 },
   input: { backgroundColor: SURFACE, borderRadius: 12, padding: 14, color: TEXT, fontSize: 15, borderWidth: 1, borderColor: BORDER },
   codeInput: { fontSize: 22, fontWeight: '800', letterSpacing: 8, textAlign: 'center' },
