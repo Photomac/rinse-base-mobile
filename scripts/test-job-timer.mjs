@@ -59,8 +59,10 @@ const detail = read('src/screens/JobDetailScreen.tsx')
 const comp = read('src/components/JobClock.tsx')
 const between = (s, a, b) => s.slice(s.indexOf(a), s.indexOf(b, s.indexOf(a)))
 
+// Home's select is HOME_DAY_SELECT since crew read scope stage 1 (crew send it through lib/crewScope).
 check('Home\'s day read fetches started_at',
-  /started_at/.test(between(reads, 'export function dashTodayRead(', 'export function homeDayRows(')), true)
+  /\.select\(jobSelectFor\(office, HOME_DAY_SELECT\)\)/.test(between(reads, 'export function dashTodayRead(', 'export function homeDayRows(')) &&
+  /started_at/.test(between(reads, 'export const HOME_DAY_SELECT', '\n')), true)
 check('Home: the Active job bar shows the clock, day shift only',
   /\{dailyMode && <JobClock job=\{activeJob\}/.test(dash), true)
 check('Home: in-progress cards in Today\'s list show it, day shift only',

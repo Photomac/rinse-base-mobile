@@ -10,7 +10,7 @@ import { LoginScreen } from './src/screens/LoginScreen'
 import { DashboardScreen } from './src/screens/DashboardScreen'
 import { ScheduleScreen } from './src/screens/ScheduleScreen'
 import { OpenJobsScreen } from './src/screens/OpenJobsScreen'
-import { boardQuery, boardJobsFor } from './src/lib/openJobs'
+import { boardRows, boardJobsFor } from './src/lib/openJobs'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { TeamTodayScreen } from './src/screens/TeamTodayScreen'
 import { MyWeekScreen } from './src/screens/MyWeekScreen'
@@ -42,7 +42,8 @@ import { setCurrentTz, setMultiMarket, fmtTimeAt } from './src/lib/timezone'
 import { setCurrentCurrency } from './src/lib/money'
 import { flushOutbox, onOutboxDrained, onCompletePastRefusedPhotos, overlayPending } from './src/lib/outbox'
 import { prefetchDays, isDayChangePush } from './src/lib/offlinePrefetch'
-import { tappedJobId, onScreen, tapRouter, loadTappedJob, tapLedger, SCHEDULE_JOB_SELECT, type TapIO } from './src/lib/pushTap'
+import { tappedJobId, onScreen, tapRouter, loadTappedJob, tapLedger, type TapIO } from './src/lib/pushTap'
+import { scheduleJobById } from './src/lib/jobReads'
 import { flushIncidentNotifies } from './src/lib/incidentNotify'
 import { flushSOSQueue, resumableSOS } from './src/lib/sosQueue'
 import * as Notifications from 'expo-notifications'
@@ -62,8 +63,7 @@ const taps = tapLedger(AsyncStorage)
 // Where a tapped job push looks for its job (lib/pushTap): live, then the
 // saved copies, with queued writes laid over.
 const tapIO = (user: any): TapIO => ({
-  live: (jobId) => supabase.from('jobs').select(SCHEDULE_JOB_SELECT)
-    .eq('id', jobId).eq('tenant_id', user.tenant_id).maybeSingle(),
+  live: (jobId) => scheduleJobById(user, jobId),
   saved: (key) => readCacheEntry(key),
   overlay: (rows) => overlayPending('jobs', rows),
 })
@@ -398,11 +398,12 @@ function AppInner() {
       // clean still offered to another property's crew first
       // (jobs.open_to_all_at) isn't this person's to see, and a clean is open
       // while it has a spot left (max_crew), not just until it is staffed.
+      // open_board_jobs() (lib/openJobs): the cleans this person could claim
+      // now, as the list reads them. A failed read leaves the badge as it was.
       const now = new Date()
-      const { data } = await boardQuery(supabase.from('jobs')
-        .select('id, status, scheduled_start, max_crew, open_for_claims_at, open_to_all_at, client_addresses!jobs_address_id_fkey(default_crew), job_assignments(user_id)'),
-        user.tenant_id, now)
-      setOpenJobsCount(boardJobsFor(data ?? [], user.id, now.getTime()).length)
+      const { data, error } = await supabase.rpc('open_board_jobs', {}, { get: true })
+      if (error) return
+      setOpenJobsCount(boardJobsFor(boardRows(data), now.getTime()).length)
     } catch { /* badge is best-effort */ }
   }
 

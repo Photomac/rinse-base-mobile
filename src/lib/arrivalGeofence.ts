@@ -109,8 +109,8 @@ export async function refreshArrivalGeofences(user: any) {
       .filter((j: any) => canFenceOn(j.client_addresses))
       .map((j: any) => ({
         identifier: j.id,
-        latitude: Number(j.client_addresses.lat),
-        longitude: Number(j.client_addresses.lng),
+        latitude: Number(j.client_addresses?.lat),
+        longitude: Number(j.client_addresses?.lng),
         radius: RADIUS_M,
         notifyOnEnter: true,
         notifyOnExit: site,

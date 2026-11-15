@@ -412,7 +412,7 @@ export function JobPhotosScreen({ job, user, onBack, preselectedItem, requiredOu
       </View>
 
       <View style={styles.jobInfo}>
-        <Text style={styles.jobName}>{addr?.nickname || client?.full_name}</Text>
+        <Text style={styles.jobName}>{addr?.nickname || client?.full_name || addr?.street}</Text>
         <Text style={styles.jobAddr}>{addr?.street}, {addr?.city}</Text>
       </View>
 
