@@ -533,6 +533,7 @@ export const translations = {
     // A crew clean outside yesterday → +30 days, once the company's crew read scope is on (lib/crewScope hiddenAddressLabel).
     address_past_hidden: 'Past clean · address no longer shown',
     address_not_yet: 'Address not shown yet',
+    open_jobs_open_failed: 'Couldn\'t open this clean. Check your signal and try again.',
     login_invalid_credentials: 'Email or password is incorrect. Check both and try again.',
     login_network_error: "Couldn't reach the server — check your internet connection and try again.",
     perm_bg_location_title: 'Background location off',
@@ -1728,6 +1729,7 @@ export const translations = {
     job_cancelled_label: 'Cancelado',
     address_past_hidden: 'Limpieza pasada · la dirección ya no se muestra',
     address_not_yet: 'La dirección aún no se muestra',
+    open_jobs_open_failed: 'No se pudo abrir esta limpieza. Revisa tu señal e inténtalo de nuevo.',
     login_invalid_credentials: 'El correo o la contraseña son incorrectos. Revísalos e inténtalo de nuevo.',
     login_network_error: 'No se pudo conectar al servidor — revisa tu conexión a internet e inténtalo de nuevo.',
     perm_bg_location_title: 'Ubicación en segundo plano desactivada',
@@ -2907,6 +2909,7 @@ export const translations = {
     job_cancelled_label: 'Cancelado',
     address_past_hidden: 'Limpeza anterior · o endereço não é mais exibido',
     address_not_yet: 'O endereço ainda não é exibido',
+    open_jobs_open_failed: 'Não foi possível abrir esta limpeza. Verifique o sinal e tente de novo.',
     login_invalid_credentials: 'E-mail ou senha incorretos. Confira os dois e tente de novo.',
     login_network_error: 'Não foi possível conectar ao servidor — verifique sua internet e tente de novo.',
     perm_bg_location_title: 'Localização em segundo plano desativada',

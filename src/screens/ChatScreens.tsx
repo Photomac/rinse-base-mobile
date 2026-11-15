@@ -49,14 +49,15 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
         supabase.from('message_channels').select('*')
           .eq('tenant_id', user.tenant_id)
           .order('last_message_at', { ascending: false, nullsFirst: false }),
-        supabase.from('users').select('id, full_name, nickname, role, avatar_url')
-          .eq('tenant_id', user.tenant_id)
-          .eq('is_active', true)
-          .neq('id', user.id)
-          .order('full_name'),
+        // Every active teammate's name, nickname, role and avatar, no phone or
+        // email (crew_team_directory, rinse-base-app 20261113171611). Once a
+        // company's crew read scope is on, crew read users rows only for the
+        // office and the people on their own cleans; the picker still lists
+        // everyone (decision D7).
+        supabase.rpc('crew_team_directory', {}, { get: true }),
       ])
       setChannels(chanRes.data ?? [])
-      setCrew(crewRes.data ?? [])
+      setCrew(((crewRes.data ?? []) as any[]).filter(u => u.id !== user.id))
     } catch (err) { console.warn('Chat load failed:', err) }
     setLoading(false)
   }

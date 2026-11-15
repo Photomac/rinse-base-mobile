@@ -10,7 +10,7 @@ import { LoginScreen } from './src/screens/LoginScreen'
 import { DashboardScreen } from './src/screens/DashboardScreen'
 import { ScheduleScreen } from './src/screens/ScheduleScreen'
 import { OpenJobsScreen } from './src/screens/OpenJobsScreen'
-import { boardQuery, boardJobsFor } from './src/lib/openJobs'
+import { boardRows, boardJobsFor } from './src/lib/openJobs'
 import { MileageScreen } from './src/screens/MileageScreen'
 import { TeamTodayScreen } from './src/screens/TeamTodayScreen'
 import { MyWeekScreen } from './src/screens/MyWeekScreen'
@@ -380,11 +380,12 @@ function AppInner() {
       // clean still offered to another property's crew first
       // (jobs.open_to_all_at) isn't this person's to see, and a clean is open
       // while it has a spot left (max_crew), not just until it is staffed.
+      // open_board_jobs() (lib/openJobs): the cleans this person could claim
+      // now, as the list reads them. A failed read leaves the badge as it was.
       const now = new Date()
-      const { data } = await boardQuery(supabase.from('jobs')
-        .select('id, status, scheduled_start, max_crew, open_for_claims_at, open_to_all_at, client_addresses!jobs_address_id_fkey(default_crew), job_assignments(user_id)'),
-        user.tenant_id, now)
-      setOpenJobsCount(boardJobsFor(data ?? [], user.id, now.getTime()).length)
+      const { data, error } = await supabase.rpc('open_board_jobs', {}, { get: true })
+      if (error) return
+      setOpenJobsCount(boardJobsFor(boardRows(data), now.getTime()).length)
     } catch { /* badge is best-effort */ }
   }
 
