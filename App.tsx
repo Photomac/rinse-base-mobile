@@ -34,6 +34,7 @@ import { flushVideoQueue } from './src/lib/videoQueue'
 import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/lib/profileCache'
 import { dayClockAtOffice, effectiveTimeMode, type DayClockAtOffice } from './src/lib/dayClock'
 import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
+import { refuseSignInWithoutProfile, type SignInRefusal } from './src/lib/signInRefusal'
 import { USERS_READABLE_COLUMNS, fetchMyPay } from './src/lib/userPrivateDetails'
 import { clearDataCache, readCacheEntry } from './src/lib/dataCache'
 import { clearCarriedPhotos } from './src/lib/carriedPhotoFiles'
@@ -175,6 +176,9 @@ function AppInner() {
   // from Home's earnings card when it isn't their tab.
   const [subScreen, setSubScreen] = useState<'mileage' | 'team' | 'week' | null>(null)
   const [activeChannel, setActiveChannel] = useState<any>(null)
+  // Why the last sign-in was turned away (deactivated, or no crew profile),
+  // shown on the login screen. Cleared by the next sign-in attempt.
+  const [signInRefusal, setSignInRefusal] = useState<SignInRefusal | null>(null)
   const lastAuthId = useRef<string | null>(null)
 
   useEffect(() => {
@@ -264,8 +268,22 @@ function AppInner() {
     let effective = data
     if (!data) {
       if (error) effective = await loadCachedProfile(authId)
-      else clearCachedProfile(authId)
+      else {
+        clearCachedProfile(authId)
+        // A deactivated crew member reads exactly like a login with no row
+        // (RLS skips inactive rows). Ask the database which, say so on the
+        // login screen, and sign the phone out (src/lib/signInRefusal.ts).
+        // Unknown or 'active': nothing changes, as before.
+        await refuseSignInWithoutProfile({
+          profileStatus: () => supabase.rpc('my_profile_status'),
+          show: setSignInRefusal,
+          signOut: () => supabase.auth.signOut({ scope: 'local' }),
+        })
+      }
     }
+    // A profile opened: any earlier refusal is stale (a reset-code sign-in
+    // never passes through the login button that clears it).
+    if (effective) setSignInRefusal(null)
     // Before setUser: the first paint of the dashboard already formats job
     // times, and a late call here would render one frame in the wrong zone.
     setMultiMarket(effective?._multiMarket)
@@ -592,7 +610,7 @@ function AppInner() {
   }
 
   if (!session || !user) {
-    return <LoginScreen />
+    return <LoginScreen refusal={signInRefusal} onClearRefusal={() => setSignInRefusal(null)} />
   }
 
   if (activeChannel) {
