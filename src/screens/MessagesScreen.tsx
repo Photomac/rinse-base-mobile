@@ -137,7 +137,7 @@ export function MessagesScreen({ job, user, onBack }: Props) {
           <Text style={styles.backText}>← {t('back')}</Text>
         </TouchableOpacity>
         <View style={styles.headerInfo}>
-          <Text style={styles.headerTitle} numberOfLines={1}>💬 {addr?.nickname || (job.clients as any)?.full_name}</Text>
+          <Text style={styles.headerTitle} numberOfLines={1}>💬 {addr?.nickname || (job.clients as any)?.full_name || addr?.street}</Text>
           <Text style={styles.headerSub}>{ti(t('n_messages'), { n: String(messages.length) })}</Text>
         </View>
         <View style={{ width: 60 }} />

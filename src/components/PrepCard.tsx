@@ -77,10 +77,10 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
     if (props.length === 0) { setSections([]); return }
     let cancelled = false
     ;(async () => {
-      const addrIds = [...new Set(props.map(p => p.job.client_addresses.id))]
+      const addrIds = [...new Set(props.map(p => p.job.client_addresses?.id))]
       const nameByAddr: Record<string, string> = {}
       const jobByAddr: Record<string, any> = {}
-      props.forEach(p => { nameByAddr[p.job.client_addresses.id] = p.name; jobByAddr[p.job.client_addresses.id] ||= p.job })
+      props.forEach(p => { nameByAddr[p.job.client_addresses?.id] = p.name; jobByAddr[p.job.client_addresses?.id] ||= p.job })
 
       // Each read is cached like the rest of the day, so the card survives a
       // dead zone. A failed read just drops its section — never the card.
@@ -128,7 +128,7 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
         const totals: Record<string, { qty: number; order: number }> = {}
         let cleansWithLinen = 0
         for (const p of props) {
-          const rows = (linen ?? []).filter((l: any) => l.address_id === p.job.client_addresses.id)
+          const rows = (linen ?? []).filter((l: any) => l.address_id === p.job.client_addresses?.id)
           if (rows.length) cleansWithLinen++
           for (const l of rows) {
             const qty = Math.max(0, (l.par_level || 0) + (extraFor[`${p.job.id}:${l.id}`] || 0))
@@ -145,7 +145,7 @@ export function PrepCard({ user, jobs, onJobPress }: { user: any; jobs: any[]; o
         // Owner-typed and almost never a bare color in practice ("Blue laundry
         // bags", "Labelled bag - GP6"): translate the phrase; only wrap a bare
         // color in the "{color} bags" template.
-        const bagIds = [...new Set(props.map(p => p.job.client_addresses.id))].filter(id => addrById[id]?.laundry_bag_color)
+        const bagIds = [...new Set(props.map(p => p.job.client_addresses?.id))].filter(id => addrById[id]?.laundry_bag_color)
         const bx = await mtx(bagIds.map(id => String(addrById[id].laundry_bag_color)))
         const bags = bagIds.map(id => {
           const raw = String(addrById[id].laundry_bag_color).trim()
