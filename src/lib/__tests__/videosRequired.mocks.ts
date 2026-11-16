@@ -36,6 +36,9 @@ export const FileSystem = {
 
 export const usableAccessToken = async () => (net.online || video.tokenOffline ? 'token' : null)
 
+/** Nothing else going over the network (lib/videoBusy): these scenarios' clips are small, one request each. */
+export async function videoBusy() { return { outbox: 0, writeWaitMs: 0, photos: false, sos: false } }
+
 export const supabase = {
   from: (table: string) => {
     const t: any = base.from(table)

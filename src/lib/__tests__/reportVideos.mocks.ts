@@ -4,7 +4,7 @@
 // rules: past the filer's 24 hours), and can lose an answer. Swapped in by
 // scripts/test-report-videos.mjs at build time.
 import { supabase as videoSupabase, net } from './videosRequired.mocks'
-export { AsyncStorage, net, reported, reportClientError, video, FileSystem, usableAccessToken } from './videosRequired.mocks'
+export { AsyncStorage, net, reported, reportClientError, video, FileSystem, usableAccessToken, videoBusy } from './videosRequired.mocks'
 
 export const reports = {
   /** Report ids on the server: a row naming any other is refused with 23503. */
