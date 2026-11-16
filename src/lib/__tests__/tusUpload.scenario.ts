@@ -46,6 +46,12 @@ class World {
   slowUntil: number | null = null
   /** The final piece lands but its answer is lost. */
   loseFinalAnswer = false
+  /** The next piece lands in full, then never answers (cancelled for no progress). */
+  hangAfterLanding = false
+  /** The next piece ends at once with no answer and no byte sent (the phone's uploader failing). */
+  failFastNext = false
+  /** Starting the next piece throws (the file can't be read, the uploader won't start). */
+  throwNext = false
   /** The server forgets a finished upload's address (as Supabase may). */
   forgetFinished = true
   /** PATCH answers this status this many times. */
@@ -82,6 +88,7 @@ class World {
         return answer(200, { 'upload-offset': String(u.offset), 'upload-length': String(u.size) })
       },
       sendChunk: async (url, offset, length, headers, onProgress): Promise<ChunkSend> => {
+        if (this.throwNext) { this.throwNext = false; throw new Error('ExponentFileSystem.createUploadTask is not a function') }
         this.calls.push('PATCH')
         this.pieces.push(length)
         const id = url.split('/').pop()!
@@ -104,6 +111,13 @@ class World {
             return
           }
           if (this.hangNext) { this.hangNext = false; u.busy = true; return }
+          if (this.failFastNext) { this.failFastNext = false; resolve(null); return }
+          if (this.hangAfterLanding) {
+            this.hangAfterLanding = false
+            u.offset += length; this.bytesSent += length
+            if (u.offset === u.size) this.objects.set(u.path, u.size)
+            return
+          }
           const finish = () => {
             u.offset += length; this.bytesSent += length
             onProgress(length)
@@ -335,6 +349,64 @@ const scenarios: Record<string, () => Promise<void>> = {
     w2.busyFn = (c) => ({ outbox: 0, writeWaitMs: 0, photos: false, sos: c >= 2 && c < 4 })
     const r2 = await tusUpload(clip(7 * MB), io2)
     ok('an SOS mid-piece: the piece gives way', [r2.ok, r2.trace.some(t => /gave way/.test(t))], [true, true])
+  },
+
+  async finishedButAnswerLost() {
+    // What production does (probe 2026-11-16): a finished upload's address is
+    // kept, and asking it answers the full length.
+    const w = new World()
+    w.forgetFinished = false
+    w.loseFinalAnswer = true
+    const r = await tusUpload(clip(SIZE), w.io())
+    ok('the last piece\'s answer is lost, the server still has the address: stored in the same pass', r.ok, true)
+    ok('…by asking it once, nothing sent again', [w.calls[w.calls.length - 1], w.pieces.length], ['HEAD', 5])
+    ok('…its upload state cleared', w.state, null)
+  },
+
+  async stalledButAllThere() {
+    const w = new World()
+    w.forgetFinished = false
+    let n = 0
+    const io = w.io()
+    const send = io.sendChunk
+    io.sendChunk = async (...a) => { if (++n === 5) w.hangAfterLanding = true; return send(...a) }
+    const r = await tusUpload(clip(SIZE), io)
+    ok('the last piece landed but never answered (cancelled after a minute): stored, not a failure', r.ok, true)
+  },
+
+  async uploaderTrouble() {
+    // Flagged: the phone's uploader, not the link.
+    const w1 = new World(); w1.throwNext = true
+    const r1 = await tusUpload(clip(SIZE), w1.io())
+    ok('a piece that can\'t be started is flagged as the uploader\'s trouble', r1.ok ? null : r1.pathTrouble, true)
+    const w2 = new World(); let n2 = 0
+    const io2 = w2.io(); const s2 = io2.sendChunk
+    io2.sendChunk = async (...a) => { if (++n2 === 2) w2.failFastNext = true; return s2(...a) }
+    const r2 = await tusUpload(clip(SIZE), io2)
+    ok('a piece over at once with nothing sent: flagged (one piece banked)', r2.ok ? null : [r2.pathTrouble, r2.progressed], [true, true])
+    const w3 = new World(); w3.patchStatus = { status: 415, times: 1 }
+    const r3 = await tusUpload(clip(SIZE), w3.io())
+    ok('the server refuses the request itself (415): flagged, a server answer', r3.ok ? null : [r3.pathTrouble, r3.kind], [true, 'server'])
+    const w4 = new World(); w4.createStatus = 400; w4.createBody = 'Invalid Upload-Metadata'
+    const r4 = await tusUpload(clip(SIZE), w4.io())
+    ok('a create refused as a bad request (not "already exists"): flagged', r4.ok ? null : r4.pathTrouble, true)
+    // Not flagged: the link, or the rules.
+    const w5 = new World(); w5.patchStatus = { status: 403, times: 1 }
+    const r5 = await tusUpload(clip(SIZE), w5.io())
+    ok('the sign-in rules refuse a piece (403): not the uploader', r5.ok ? null : !!r5.pathTrouble, false)
+    const w6 = new World(); let n6 = 0
+    const io6 = w6.io(); const s6 = io6.sendChunk
+    io6.sendChunk = async (...a) => { if (++n6 === 3) w6.dropNextAfter = 2 * MB; return s6(...a) }
+    const r6 = await tusUpload(clip(SIZE), io6)
+    ok('a connection that drops partway: not the uploader', r6.ok ? null : !!r6.pathTrouble, false)
+    const w7 = new World(); let n7 = 0
+    const io7 = w7.io(); const s7 = io7.sendChunk
+    io7.sendChunk = async (...a) => { if (++n7 === 2) w7.hangNext = true; return s7(...a) }
+    const r7 = await tusUpload(clip(SIZE), io7)
+    ok('a piece that stalls: not the uploader (a weak link keeps its resumable upload)', r7.ok ? null : !!r7.pathTrouble, false)
+    const w8 = new World(); w8.offline = true
+    const r8 = await tusUpload(clip(SIZE), w8.io())
+    ok('no signal at all: not the uploader', r8.ok ? null : !!r8.pathTrouble, false)
   },
 
   async conflicts() {

@@ -76,7 +76,7 @@ const oneShots: string[] = []
   ok('…and sending only the missing pieces', tus.reads.map(([p]) => Math.round(p / MB)), [12, 18, 24])
   ok('…one row', rows('job_videos', 'J2').length, 1)
 
-  // ── A link that never moves a byte, while the server answers ──
+  // ── The phone's piece uploader fails at once, every time (the server answers) ──
   tus.calls = []; tus.reads = []
   tus.sizes.set('J3', Math.round(14.9 * MB))
   tus.failPieces = 99
@@ -84,14 +84,34 @@ const oneShots: string[] = []
   await settle()
   reported.length = 0
   for (let i = 0; i < 3; i++) await flushVideoQueue({ force: true })
+  const switched = reported.filter(m => /resumable upload failing on this phone/.test(m))
+  ok('three passes of the uploader failing at once: reported once, as switching to one request', switched.length, 1)
+  ok('…naming the clip, its size and the trace', /^videoQueue: clip [0-9a-f-]{36} resumable upload failing on this phone \(3 tries, 14\.9 MB\): .* \| switching to one request \| .*piece failed at once/.test(switched[0] ?? ''), true)
+  ok('…and not as "keeps failing" (it isn\'t stuck yet)', reported.filter(m => /keeps failing/.test(m)).length, 0)
+  const b3 = oneShots.length
+  tus.calls = []
+  await flushVideoQueue()
+  ok('the next pass sends it the old way, as one request, and it lands', [oneShots.length - b3, tus.calls.filter(c => c === 'PATCH').length, (await queuedJobVideos('J3')).length], [1, 0, 0])
+  ok('…one row', rows('job_videos', 'J3').length, 1)
+  tus.failPieces = 0
+
+  // ── The server keeps refusing pieces (503): the link's trouble, not the phone's ──
+  tus.calls = []; tus.reads = []
+  tus.sizes.set('J8', Math.round(14.9 * MB))
+  tus.patch503 = 99
+  await save('J8')
+  await settle()
+  reported.length = 0
+  for (let i = 0; i < 3; i++) await flushVideoQueue({ force: true })
   const stuck = reported.filter(m => /keeps failing/.test(m))
-  ok('no progress at all for three passes: reported once, as before', stuck.length, 1)
+  ok('no progress for three passes on the server\'s side: reported once as "keeps failing", as before', stuck.length, 1)
   ok('…with the old start, so the error log reads the same', /^videoQueue: clip [0-9a-f-]{36} keeps failing \(3 tries, 14\.9 MB, file present\): /.test(stuck[0] ?? ''), true)
   ok('…plus how far it got and what happened on the phone', /0\.0 MB on the server \| .*new upload, 14\.9 MB/.test(stuck[0] ?? ''), true)
-  ok('…and the crew see it as stuck', (await queuedJobVideos('J3'))[0]?.stuck, true)
-  tus.failPieces = 0
+  ok('…it keeps its resumable upload (no switch)', reported.filter(m => /switching to one request/.test(m)).length, 0)
+  ok('…and the crew see it as stuck', (await queuedJobVideos('J8'))[0]?.stuck, true)
+  tus.patch503 = 0
   await flushVideoQueue({ force: true })
-  ok('the link recovers: it lands', (await queuedJobVideos('J3')).length, 0)
+  ok('the server recovers: it lands, resumably', [(await queuedJobVideos('J8')).length, tus.calls.includes('PATCH')], [0, true])
 
   // ── A small clip: the one request, as before ──
   tus.calls = []
