@@ -35,6 +35,7 @@ import { saveCachedProfile, loadCachedProfile, clearCachedProfile } from './src/
 import { dayClockAtOffice, effectiveTimeMode, type DayClockAtOffice } from './src/lib/dayClock'
 import { myUsersRowFilter, pickMyUsersRow } from './src/lib/myUsersRow'
 import { refuseSignInWithoutProfile, type SignInRefusal } from './src/lib/signInRefusal'
+import { createProfileLoads, sameProfile } from './src/lib/profileLoads'
 import { USERS_READABLE_COLUMNS, fetchMyPay } from './src/lib/userPrivateDetails'
 import { clearDataCache, readCacheEntry } from './src/lib/dataCache'
 import { clearCarriedPhotos } from './src/lib/carriedPhotoFiles'
@@ -180,19 +181,30 @@ function AppInner() {
   // shown on the login screen. Cleared by the next sign-in attempt.
   const [signInRefusal, setSignInRefusal] = useState<SignInRefusal | null>(null)
   const lastAuthId = useRef<string | null>(null)
+  // The profile on screen, for comparing a reload against (sameProfile).
+  const shownProfile = useRef<any>(null)
+  // One profile load at a time, and only when the one on screen isn't current
+  // (src/lib/profileLoads.ts): a launch used to load it three times.
+  const [profileLoads] = useState(() => createProfileLoads())
 
   useEffect(() => {
     // Offline-tolerant (src/lib/supabase.ts): with the hour-long token lapsed
     // and no signal, this hands back the stored sign-in instead of null.
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
-      if (session) { lastAuthId.current = session.user.id; loadUser(session.user.id) }
+      if (session) {
+        const authId = session.user.id
+        lastAuthId.current = authId
+        profileLoads.request('startup', authId, gen => loadUser(authId, gen))
+      }
       else setLoading(false)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
         setSession(session)
-        lastAuthId.current = session.user.id; loadUser(session.user.id)
+        const authId = session.user.id
+        lastAuthId.current = authId
+        profileLoads.request(_event, authId, gen => loadUser(authId, gen))
         return
       }
       // No session with this event. SIGNED_OUT is an explicit sign-out or a
@@ -203,6 +215,9 @@ function AppInner() {
       // signal to the login screen, where nothing can be queued.)
       isSignedOut(_event, session).then((signedOut) => {
         if (!signedOut) return
+        // A load still out for this login must not bring the profile back.
+        profileLoads.reset()
+        shownProfile.current = null
         setSession(null)
         // Safe to drop the offline profile copy: this is never a network blip.
         if (_event === 'SIGNED_OUT' && lastAuthId.current) { clearCachedProfile(lastAuthId.current); clearDataCache(); clearCarriedPhotos() }
@@ -217,7 +232,12 @@ function AppInner() {
     return () => subscription.unsubscribe()
   }, [])
 
-  async function loadUser(authId: string) {
+  // gen: profileLoads' generation for this load. A sign-out (or another
+  // login) while it is out makes its answer stale, and it applies nothing.
+  async function loadUser(authId: string, gen: number) {
+    // Some of the profile came from the offline copy or a default, not the
+    // server: the next token renewal reloads it (src/lib/profileLoads.ts).
+    let stale = false
     // The row the database acts as for this login: the active row whose id is
     // the login, else the active row linked by auth_user_id. Both candidates
     // in one read (RLS shows at most these two); `.maybeSingle()` errored when
@@ -244,6 +264,7 @@ function AppInner() {
         // phone's zone, and they overwrote the good offline copy.
         const prev = await loadCachedProfile(authId)
         settings = prev && prev.tenant_id === data.tenant_id ? settingsFrom(prev) : defaultSettings()
+        stale = true
       }
       Object.assign(data, settings)
       // The person's clock over the company's. Unreadable now: the last good
@@ -254,10 +275,14 @@ function AppInner() {
         personal = prev && prev.id === data.id
           ? { mode: prev._personTimeMode ?? null, atOffice: dayClockAtOffice(prev._dayClockAtOffice) }
           : { mode: null, atOffice: null }
+        stale = true
       }
       data._personTimeMode = personal.mode
       data._dayClockAtOffice = personal.atOffice
       data._timeMode = effectiveTimeMode(personal.mode, data._companyTimeMode)
+      // Signed out while this was out: don't write a copy back after the
+      // sign-out cleared it.
+      if (!profileLoads.isCurrent(gen)) return
       saveCachedProfile(authId, data)
     }
     // Offline fallback: a fetch ERROR (no signal, server down) is not proof the
@@ -267,6 +292,7 @@ function AppInner() {
     // and fall through to login.
     let effective = data
     if (!data) {
+      if (!profileLoads.isCurrent(gen)) return
       if (error) effective = await loadCachedProfile(authId)
       else {
         clearCachedProfile(authId)
@@ -280,7 +306,11 @@ function AppInner() {
           signOut: () => supabase.auth.signOut({ scope: 'local' }),
         })
       }
+      if (effective) stale = true
     }
+    // The refusal's sign-out (or the crew's own) landed while this was out:
+    // the sign-out has already put the login screen up.
+    if (!profileLoads.isCurrent(gen)) return
     // A profile opened: any earlier refusal is stale (a reset-code sign-in
     // never passes through the login button that clears it).
     if (effective) setSignInRefusal(null)
@@ -289,19 +319,27 @@ function AppInner() {
     setMultiMarket(effective?._multiMarket)
     setCurrentTz(effective?._tz)
     setCurrentCurrency(effective?._currency)
-    setUser(effective)
+    // Nothing changed since the last load: keep the object on screen, so the
+    // reads and listeners keyed on it don't all run again.
+    const next = sameProfile(shownProfile.current, effective) ? shownProfile.current : effective
+    if (next !== shownProfile.current) { shownProfile.current = next; setUser(next) }
     setLoading(false)
+    profileLoads.settle(gen, authId, { shown: !!effective, stale })
     if (effective) {
       setErrorContext({ tenantId: effective.tenant_id, email: effective.email, role: effective.role })
-      registerPushToken(effective).catch(console.warn)
       // Which bundle is this device on? Answers "did this OTA land here".
+      // On every load (launch, and a renewal's reload about hourly), as before.
       reportClientVersion().catch(console.warn)
-      startLocationTracking(effective).catch(console.warn)
-      // An SOS that outlived the process (app killed, phone rebooted) keeps
-      // trailing; one resolved while we were dead clears itself instead.
-      // Runs on a cached profile too: a crew member who reopened the app in a
-      // dead zone is exactly who should still have a live trail resuming.
-      resumeSOSTrailIfOpen().catch(console.warn)
+      // Once per login per sign-in, and again if the company or role changed.
+      if (profileLoads.choresDue(authId, effective)) {
+        registerPushToken(effective).catch(console.warn)
+        startLocationTracking(effective).catch(console.warn)
+        // An SOS that outlived the process (app killed, phone rebooted) keeps
+        // trailing; one resolved while we were dead clears itself instead.
+        // Runs on a cached profile too: a crew member who reopened the app in a
+        // dead zone is exactly who should still have a live trail resuming.
+        resumeSOSTrailIfOpen().catch(console.warn)
+      }
     }
   }
 
