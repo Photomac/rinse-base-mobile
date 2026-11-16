@@ -151,7 +151,8 @@ check('the settings type carries _currency', /type CompanySettings = \{[\s\S]*?\
 check('the default is null (→ $)', /const defaultSettings = \(\): CompanySettings => \(\{\n[^\n]*_currency: null,/.test(app), true)
 check('last good settings (weak signal) keep the currency', /const settingsFrom = [\s\S]*?_currency: p\._currency \?\? null,[\s\S]*?\n\}\)/.test(app), true)
 check('set before setUser, next to the zone, on every profile path (cached too)',
-  /setCurrentTz\(effective\?\._tz\)\n\s*setCurrentCurrency\(effective\?\._currency\)\n\s*setUser\(effective\)/.test(app), true)
+  // (setUser(next): an unchanged reload keeps the object on screen, src/lib/profileLoads.ts.)
+  /setCurrentTz\(effective\?\._tz\)\n\s*setCurrentCurrency\(effective\?\._currency\)\n(?:\s*\/\/[^\n]*\n)*\s*const next = sameProfile\(shownProfile\.current, effective\) \? shownProfile\.current : effective\n\s*if \(next !== shownProfile\.current\) \{ shownProfile\.current = next; setUser\(next\) \}/.test(app), true)
 check('cleared on sign-out with the zone', /setCurrentTz\(null\)\n\s*setCurrentCurrency\(null\)/.test(app), true)
 check('App.tsx imports setCurrentCurrency', /import \{ setCurrentCurrency \} from '\.\/src\/lib\/money'/.test(app), true)
 
