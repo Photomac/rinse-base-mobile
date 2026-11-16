@@ -25,7 +25,7 @@
 //   From a worktree, point the parity check at the web repo:
 //   RINSEBASE_WEB_REPO=/path/to/rinsebase-app node scripts/test-team-today.mjs
 import { readFileSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { join, dirname, posix } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -171,18 +171,37 @@ check('notes the office reads on Payroll (English, as the web writes)', [
 check('the cap is the server\'s 16 h', E.SHIFT_CAP_MS, 16 * 3600_000)
 
 // Parity with the web's own endDay.ts, when that repo is on this machine.
+// endDay.ts is copied with every file it imports by a relative path, all the
+// way down, each at its own path in the web repo: timezone.ts reaches into
+// supabase/functions/_shared/ (property-clock.ts → timezone-lookup.ts), so a
+// copy of src/lib alone can't load.
 const webRepo = process.env.RINSEBASE_WEB_REPO || join(repo, '..', 'rinsebase-app')
+const webShow = p => execFileSync('git', ['-C', webRepo, 'show', `origin/main:${p}`], { stdio: ['ignore', 'pipe', 'ignore'] })
+const WEB_END_DAY = 'src/lib/endDay.ts'
 let webDir = null
-try {
-  webDir = mkdtempSync(join(tmpdir(), 'team-today-web-'))
-  mkdirSync(join(webDir, 'lib'))
-  for (const f of ['endDay.ts', 'timezone.ts']) {
-    writeFileSync(join(webDir, 'lib', f), execFileSync('git', ['-C', webRepo, 'show', `origin/main:src/lib/${f}`], { stdio: ['ignore', 'pipe', 'ignore'] }))
-  }
-} catch { webDir = null }
+try { webShow(WEB_END_DAY); webDir = mkdtempSync(join(tmpdir(), 'team-today-web-')) } catch { webDir = null }
 if (!webDir) console.log('–  web parity skipped (no rinsebase-app checkout with origin/main)')
 else {
-  const W = await import(join(webDir, 'lib', 'endDay.ts'))
+  // Loaded once, the modules live in memory: the copy goes away right after,
+  // even when a copy or the import fails.
+  let W
+  try {
+    const copied = [], queue = [[WEB_END_DAY, null]]
+    while (queue.length) {
+      const [p, from] = queue.shift()
+      if (copied.includes(p)) continue
+      let src
+      try { src = webShow(p) } catch { throw new Error(`web parity: ${p} (imported by ${from}) is not on rinsebase-app origin/main`) }
+      mkdirSync(dirname(join(webDir, p)), { recursive: true })
+      writeFileSync(join(webDir, p), src)
+      copied.push(p)
+      for (const [, spec] of src.toString().matchAll(/(?:\bfrom|^\s*import)\s*['"](\.\.?\/[^'"]+)['"]/gm)) {
+        queue.push([posix.normalize(posix.join(posix.dirname(p), spec)), p])
+      }
+    }
+    console.log(`–  web parity reads ${copied.join(', ')} from rinsebase-app origin/main`)
+    W = await import(join(webDir, WEB_END_DAY))
+  } finally { rmSync(webDir, { recursive: true, force: true }) }
   let same = 0, differ = []
   const base = at('07:00')
   const offs = [-90, -1, 0, 1, 59, 60, 61, 300, 301, 7 * 60, 15 * 60, 16 * 60, 16 * 60 + 1, 20 * 60].map(m => m * 60_000)
@@ -201,7 +220,6 @@ else {
   check(`web parity: ${same} answers identical to rinsebase-app origin/main endDay.ts`, differ.slice(0, 3), [])
   check('web parity: same cap and graces', [E.SHIFT_CAP_MS, E.FUTURE_GRACE_MS, E.START_FUTURE_GRACE_MS], [W.SHIFT_CAP_MS, W.FUTURE_GRACE_MS, W.START_FUTURE_GRACE_MS])
   check('web parity: same notes', [E.endedNote('shift', 'Carla', 'x'), E.startedNote('Carla')], [W.endedNote('shift', 'Carla', 'x'), W.startedNote('Carla')])
-  rmSync(webDir, { recursive: true, force: true })
 }
 
 // ── Typing a time, on the company's clock ───────────────────────────────────
