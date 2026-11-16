@@ -25,6 +25,7 @@ const SCENARIOS = [
   'fresh', 'metadata', 'dropAndResume', 'lostFinalAnswer', 'oldAddress', 'goneAddress', 'reportNoOverwrite',
   'refusedAndUnsupported', 'stall', 'suspendedIsNotAStall', 'giveWayBeforePiece', 'stuckOutboxDoesntFreeze',
   'giveWayMidPiece', 'giveWayIsCapped', 'photosDontCancelSosDoes', 'conflicts',
+  'finishedButAnswerLost', 'stalledButAllThere', 'uploaderTrouble',
 ]
 
 let failed = 0
