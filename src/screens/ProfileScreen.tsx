@@ -13,6 +13,12 @@ import { SLATE_DARK, GOLD } from '../lib/theme'
 import { CrewWeekCard } from '../components/CrewWeekCard'
 import { currencySymbol } from '../lib/money'
 import { crewTrainingUrl } from '../lib/trainingVideos'
+import { signOutThisPhone, signOutConfirm, loadSignOutFacts, type SignOutFacts } from '../lib/signOutWarning'
+import { openPunchesRead } from '../lib/locationTracker'
+import { readSoon, readCacheEntry } from '../lib/dataCache'
+import { dashTodayRead } from '../lib/jobReads'
+import { overlayPending } from '../lib/outbox'
+import { todayKey } from '../lib/timezone'
 // JS API only — expo-updates is already in the native binary (it is what
 // delivers OTAs), so reading these adds no native dependency and this screen
 // stays OTA-shippable.
@@ -22,6 +28,13 @@ import * as Updates from 'expo-updates'
 // extra; it is what lets this line keep saying "v1.1.4 (24)" now that
 // Updates.runtimeVersion is a hash rather than the version.
 import * as Application from 'expo-application'
+
+// How long the Sign out confirm waits for a live "are they clocked in?"
+// before using the saved copy, and the most it waits at all (nothing saved,
+// no answer: it says nothing about the clock). A tap that sits silent feels
+// broken.
+const SIGN_OUT_FACTS_WAIT_MS = 1500
+const SIGN_OUT_FACTS_DEADLINE_MS = 2500
 
 const ROLE_KEYS: Record<string, string> = {
   owner: 'role_owner', manager: 'role_manager', dispatcher: 'role_dispatcher',
@@ -259,6 +272,34 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
     const r = await startEmailChange(emailIO, emailStep, true)
     setSavingContact(false)
     Alert.alert(r.ok ? '✅' : t('error'), r.ok ? ti(t('email_code_sent'), { email: emailStep }) : emailFailureText(r.failure, r.message))
+  }
+
+  // ── Sign out ──────────────────────────────────────────────────────────────
+  // This phone only, and the confirm says what it costs: the password to get
+  // back in, and (when known) that they're clocked in or have cleans left
+  // today (lib/signOutWarning, CKS 2026-11-16). The clock waits at most
+  // SIGN_OUT_FACTS_WAIT_MS for a live answer, then uses the saved copy;
+  // cleans left today come from Home's saved copy only.
+  const [signOutChecking, setSignOutChecking] = useState(false)
+  async function confirmSignOut() {
+    setSignOutChecking(true)
+    let facts: SignOutFacts | null = null
+    try {
+      facts = await loadSignOutFacts({
+        userId: user.id,
+        today: todayKey(),
+        openPunches: async () => (await readSoon<any[]>(openPunchesRead(user.id), SIGN_OUT_FACTS_WAIT_MS)).data ?? null,
+        dayRows: () => readCacheEntry<any[]>(dashTodayRead(user, new Date()).key),
+        overlay: overlayPending,
+        deadlineMs: SIGN_OUT_FACTS_DEADLINE_MS,
+      })
+    } catch { facts = null }
+    setSignOutChecking(false)
+    const { title, body } = signOutConfirm(facts, t)
+    Alert.alert(title, body, [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('sign_out'), style: 'destructive', onPress: () => { signOutThisPhone(supabase.auth).catch(() => {}) } },
+    ])
   }
 
   async function pickAvatar() {
@@ -542,7 +583,7 @@ export function ProfileScreen({ user, onAvatarUpdate, onOpenMileage, onOpenTeam 
             </TouchableOpacity>
           ))}
         </View>
-        <TouchableOpacity style={styles.signOutBtn} onPress={() => Alert.alert(t('sign_out'), t('sign_out_confirm'), [{ text: t('cancel'), style: 'cancel' }, { text: t('sign_out'), style: 'destructive', onPress: () => supabase.auth.signOut() }])}>
+        <TouchableOpacity style={[styles.signOutBtn, signOutChecking && { opacity: 0.6 }]} onPress={confirmSignOut} disabled={signOutChecking}>
           <Text style={styles.signOutText}>{t('sign_out')}</Text>
         </TouchableOpacity>
 
