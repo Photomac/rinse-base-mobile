@@ -101,6 +101,12 @@ export interface PendingVideo {
   // The file isn't on the phone. Kept, not dropped: it's evidence, the server's
   // record still says it exists, and the office should hear about it.
   fileGone?: boolean
+  /** A big clip: passes in a row where the phone's piece uploader was the
+   *  trouble, not the link (lib/tusUpload pathTrouble). */
+  tusMisses?: number
+  /** A big clip that goes the old way, as one request: its resumable upload
+   *  kept failing on this phone (TUS_FALLBACK_AFTER). */
+  oneShot?: boolean
 }
 
 // iOS can move the app's data folder when the app is updated, so the absolute
@@ -302,7 +308,7 @@ function timeoutFor(sizeBytes: number | null): number {
   return Math.min(45 * 60_000, Math.max(240_000, Math.round((bytes / 20_000) * 1000)))
 }
 
-type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; noToken?: boolean; lineDropped?: boolean; waiting?: boolean; progressed?: boolean; sent?: number; trace?: string[] }
+type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; noToken?: boolean; lineDropped?: boolean; waiting?: boolean; progressed?: boolean; sent?: number; trace?: string[]; pathTrouble?: boolean }
 
 // ── Big clips: the resumable upload's state and the phone's side of it ─────
 async function readTusAll(): Promise<Record<string, TusState>> {
@@ -443,11 +449,11 @@ async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
     try { const info: any = await FileSystem.getInfoAsync(resolveLocal(entry.localUri)); if (info?.exists && typeof info.size === 'number') size = info.size } catch { /* the old way */ }
   }
   let storedBig = false
-  if (!entry.stored && size != null && size > TUS_CHUNK) {
+  if (!entry.stored && size != null && size > TUS_CHUNK && !entry.oneShot) {
     const r = await uploadBig(entry, size)
     if (r.ok) storedBig = true
     else if (!r.unsupported) {
-      return { ok: false, kind: r.kind, message: r.message, noToken: r.noToken, progressed: r.progressed, sent: r.sent, trace: r.trace }
+      return { ok: false, kind: r.kind, message: r.message, noToken: r.noToken, progressed: r.progressed, sent: r.sent, trace: r.trace, pathTrouble: r.pathTrouble }
     }
     // No resumable uploads on this server: the one request below, as before.
   }
@@ -571,6 +577,12 @@ async function serverAnswers(): Promise<boolean> {
 
 /** After this many failed uploads with the server answering, the crew are told and it waits between tries. */
 const STUCK_AFTER = 3
+/** After this many passes in a row where a big clip's resumable upload failed
+ *  in the phone's own piece uploader (not the link) while the server
+ *  answered, that clip goes the old way, as one request. A safety net for a
+ *  phone or build where the uploader misbehaves: it is never worse than
+ *  before resumable uploads. A weak link never trips it. */
+const TUS_FALLBACK_AFTER = 3
 
 let flushing = false
 
@@ -621,6 +633,24 @@ export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ upl
       if (result.kind === 'network' && !clipFailed) noSignal = true
       const attempts = progressed ? 0 : (entry.attempts ?? 0) + 1
       const failures = progressed ? 0 : (entry.failures ?? 0) + (clipFailed ? 1 : 0)
+      // The phone's piece uploader is the trouble (the server answered): after
+      // TUS_FALLBACK_AFTER passes this clip goes as one request from the next
+      // pass on, with a clean count, and the office hears of it once.
+      const miss = !!result.pathTrouble && !progressed && (result.kind === 'server' || clipFailed)
+      const tusMisses = progressed ? 0 : (entry.tusMisses ?? 0) + (miss ? 1 : 0)
+      const switchNow = !entry.oneShot && tusMisses >= TUS_FALLBACK_AFTER
+      if (switchNow) {
+        const mb = entry.size_bytes ? `${(entry.size_bytes / 1_048_576).toFixed(1)} MB` : 'size unknown'
+        const trace = result.trace?.length ? ` | ${result.trace.join(' ; ')}` : ''
+        reportClientError(`videoQueue: clip ${entry.id} resumable upload failing on this phone (${tusMisses} tries, ${mb}): ${result.message} | switching to one request${trace}`.slice(0, 1500), undefined, 'videoQueue', { keepKnownNoise: true })
+        await writeTus(entry.id, null)
+        live.delete(entry.id)
+        survivors.push({
+          ...entry, oneShot: true, tusMisses: undefined, attempts: 0, failures: undefined, fileGone: undefined,
+          lastErrorKind: 'network', lastError: result.message, nextAttemptAt: undefined,
+        })
+        continue
+      }
       const reportNow = clipFailed && attempts >= STUCK_AFTER && !entry.reportedStuck
       if (reportNow) {
         const mb = entry.size_bytes ? `${(entry.size_bytes / 1_048_576).toFixed(1)} MB` : 'size unknown'
@@ -637,6 +667,7 @@ export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ upl
         attempts,
         failures: failures || undefined,
         reportedStuck: entry.reportedStuck || reportNow || undefined,
+        tusMisses: tusMisses || undefined,
         fileGone: undefined,
         lastErrorKind: result.kind,
         lastError: result.message,

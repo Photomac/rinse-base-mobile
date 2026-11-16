@@ -19,6 +19,13 @@
 //     no overwrite, and "already exists" means an earlier try landed.
 //   - Every resume starts by asking the server how much it has (HEAD,
 //     Upload-Offset). The server's number is the truth, never ours.
+//     Production keeps a finished upload's address and answers its full
+//     length (probe 2026-11-16), so a full answer means stored, even when the
+//     last piece's own answer was lost or the piece was cancelled.
+//   - A failure that looks like the phone's piece uploader rather than the
+//     link is flagged (pathTrouble); after a few, lib/videoQueue sends that
+//     clip the old way, as one request. A stall or dropped connection never
+//     is: a weak link keeps its resumable upload.
 //   - No total time limit. A piece that makes no progress for TUS_STALL_MS is
 //     cancelled (on iPhone the background upload never gives up on its own,
 //     even with no signal). A gap in the watch ticks means the app was
@@ -50,6 +57,9 @@ export const TAP_WAIT_MS = 2_000
 export const TAP_CANCELS = 3
 /** Watch ticks further apart than this: the app was suspended in between. */
 const SUSPENDED_GAP_MS = 10_000
+/** A piece that ends this fast with no answer and no byte sent: the phone's
+ *  uploader, not the link (a dead link takes longer, or sends something). */
+export const PIECE_DEAD_MS = 5_000
 const TRACE_MAX = 12
 
 export interface TusState {
@@ -130,6 +140,14 @@ export type TusResult =
       noToken?: boolean
       /** The server has no resumable endpoint: send it the old way. */
       unsupported?: boolean
+      /** The trouble looks like the phone's own piece uploader, not the link:
+       *  a piece couldn't be read or started, the server refused the request
+       *  itself (a 4xx other than busy, gone or the sign-in rules), or a piece
+       *  ended within PIECE_DEAD_MS with no answer and no byte sent. After a
+       *  few of these the queue sends the clip the old way (lib/videoQueue).
+       *  Never set for a stall or a dropped connection: a weak link keeps its
+       *  resumable upload. */
+      pathTrouble?: boolean
       trace: string[]
     }
 
@@ -165,12 +183,21 @@ export async function tusUpload(clip: TusClip, io: TusIO): Promise<TusResult> {
   }
   let offset = 0
   let firstOffset: number | null = null
-  const fail = (kind: 'network' | 'server', message: string, extra: { noToken?: boolean; unsupported?: boolean } = {}): TusResult => {
+  const fail = (kind: 'network' | 'server', message: string, extra: { noToken?: boolean; unsupported?: boolean; pathTrouble?: boolean } = {}): TusResult => {
     note(`${kind}: ${message}`)
     if (state) io.saveState({ ...state, offset, trace }).catch(() => {})
     return { ok: false, kind, message, progressed: firstOffset != null && offset > firstOffset, sent: offset, trace, ...extra }
   }
   const kindOf = (status: number): 'network' | 'server' => (status >= 500 || status === 0 ? 'network' : 'server')
+  // A 4xx that isn't busy, gone or the sign-in rules: the request itself was wrong.
+  const badRequest = (status: number) => status >= 400 && status < 500 && ![401, 403, 404, 409, 410, 423].includes(status)
+  // The server has the whole clip (production keeps a finished upload's
+  // address, and answers its full length): stored, whatever the last answer was.
+  const allThere = async (): Promise<TusResult> => {
+    note('stored (the server has it all)')
+    await io.saveState(null)
+    return { ok: true, trace }
+  }
 
   let token = await io.token()
   if (!token) return fail('network', 'No signed-in session yet', { noToken: true })
@@ -242,7 +269,7 @@ export async function tusUpload(clip: TusClip, io: TusIO): Promise<TusResult> {
       return { ok: true, alreadyThere: true, trace }
     }
     if (a.status === 404 || a.status === 405 || a.status === 501) return fail('server', `no resumable uploads here (HTTP ${a.status})`, { unsupported: true })
-    return fail(kindOf(a.status), `HTTP ${a.status}${a.body ? `: ${a.body.slice(0, 120)}` : ''} starting the upload`)
+    return fail(kindOf(a.status), `HTTP ${a.status}${a.body ? `: ${a.body.slice(0, 120)}` : ''} starting the upload`, { pathTrouble: badRequest(a.status) })
   }
   firstOffset = offset
   io.progress?.(offset, clip.size, false)
@@ -258,13 +285,14 @@ export async function tusUpload(clip: TusClip, io: TusIO): Promise<TusResult> {
     const length = Math.min(TUS_CHUNK, clip.size - offset)
     const outboxAtStart = (await io.busy()).outbox
     let lastProgress = io.now()
+    let sawProgress = false
     let send: ChunkSend
     try {
       send = await io.sendChunk(state!.url, offset, length, headers({
         'Upload-Offset': String(offset), 'Content-Type': 'application/offset+octet-stream',
-      }), (sent) => { lastProgress = io.now(); io.progress?.(offset + Math.min(sent, length), clip.size, false) })
+      }), (sent) => { lastProgress = io.now(); if (sent > 0) sawProgress = true; io.progress?.(offset + Math.min(sent, length), clip.size, false) })
     } catch (e: any) {
-      return fail('network', `couldn't read the clip: ${e?.message || e}`)
+      return fail('network', `couldn't read or start the piece: ${e?.message || e}`, { pathTrouble: true })
     }
     const started = io.now()
     // Watch it: its answer, or a reason to cancel.
@@ -298,6 +326,7 @@ export async function tusUpload(clip: TusClip, io: TusIO): Promise<TusResult> {
       const got = await askOffset()
       if (typeof got === 'object') return got
       if (got === 'gone') return whenGone('upload address gone after a cancel')
+      if (got >= clip.size) return allThere()
       offset = got
       await io.saveState({ ...state!, offset, trace })
       if (cancelled === 'stall') return fail('network', `no progress for ${TUS_STALL_MS / 1000} s`)
@@ -309,10 +338,15 @@ export async function tusUpload(clip: TusClip, io: TusIO): Promise<TusResult> {
       const got = await askOffset()
       if (typeof got === 'object') return got
       if (got === 'gone') return whenGone('Network request failed')
+      // The last piece landed and only its answer was lost.
+      if (got >= clip.size) return allThere()
       const moved = got > offset
+      // Over at once with nothing sent: the uploader, not the link.
+      const dead = !moved && !sawProgress && io.now() - started < PIECE_DEAD_MS
       offset = got
       await io.saveState({ ...state!, offset, trace })
-      return fail('network', moved ? `Network request failed (piece partly landed, ${MB(offset)} MB on the server)` : 'Network request failed')
+      return fail('network', moved ? `Network request failed (piece partly landed, ${MB(offset)} MB on the server)`
+        : dead ? 'the piece failed at once, nothing sent' : 'Network request failed', { pathTrouble: dead })
     }
     if (a.status === 204 || a.status === 200) {
       const n = Number(a.header('upload-offset'))
@@ -334,7 +368,7 @@ export async function tusUpload(clip: TusClip, io: TusIO): Promise<TusResult> {
       continue
     }
     if (a.status === 404 || a.status === 410) return whenGone(`upload address gone (HTTP ${a.status})`)
-    return fail(kindOf(a.status), `HTTP ${a.status}${a.body ? `: ${a.body.slice(0, 120)}` : ''} sending a piece`)
+    return fail(kindOf(a.status), `HTTP ${a.status}${a.body ? `: ${a.body.slice(0, 120)}` : ''} sending a piece`, { pathTrouble: badRequest(a.status) })
   }
   note('stored')
   await io.saveState(null)
