@@ -8,7 +8,7 @@ import * as TaskManager from 'expo-task-manager'
 import * as Notifications from 'expo-notifications'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase, readStoredSession } from './supabase'
-import { cachedQuery } from './dataCache'
+import { cachedQuery, cachedRead, type CacheRead } from './dataCache'
 import { overlayPending } from './outbox'
 import { loadCachedProfile } from './profileCache'
 import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
@@ -148,6 +148,22 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
 // fence its property, and put it in day order.
 const JOB_FIELDS = 'id, status, scheduled_start, route_order, job_number, client_addresses!jobs_address_id_fkey(lat, lng, geocode_precision, nickname, street)'
 
+/** The person's open punches, each with its clean: checkWork's first read.
+ *  Also what Profile's Sign out confirm asks "are they clocked in?" from
+ *  (lib/signOutWarning), so both share one key and one shape: a copy either
+ *  one saves is one the other can read back offline. */
+export function openPunchesRead(userId: string): CacheRead {
+  return {
+    key: `track:open:${userId}`,
+    // Each punch brings its clean along: it can be one they aren't assigned
+    // to, or yesterday's, and neither is in checkWork's today read.
+    q: () => supabase
+      .from('job_time_entries')
+      .select(`id, user_id, job_id, entry_type, clocked_in_at, clocked_out_at, jobs!job_time_entries_job_id_fkey(${JOB_FIELDS})`)
+      .eq('user_id', userId).is('clocked_out_at', null).limit(20),
+  }
+}
+
 // Is this crew member actively working RIGHT NOW? Merely having a job scheduled
 // for later today is NOT "working" and must not broadcast a location (that was
 // the "why am I on the map at home, with the app closed?" leak). This gates
@@ -189,12 +205,7 @@ export async function checkWork(userId: string, daily = false): Promise<{ workin
   const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
   const todayEnd = new Date(now); todayEnd.setHours(23, 59, 59, 999)
   const [entriesRes, jobsRes] = await Promise.all([
-    // Each punch brings its clean along: it can be one they aren't assigned
-    // to, or yesterday's, and neither is in today's read below.
-    cachedQuery(`track:open:${userId}`, supabase
-      .from('job_time_entries')
-      .select(`id, user_id, job_id, entry_type, clocked_in_at, clocked_out_at, jobs!job_time_entries_job_id_fkey(${JOB_FIELDS})`)
-      .eq('user_id', userId).is('clocked_out_at', null).limit(20)),
+    cachedRead(openPunchesRead(userId)),
     // Embeds name their FK: a second FK between these tables would make an
     // unhinted embed ambiguous (HTTP 300), and this read would fail everywhere.
     cachedQuery(`track:today:${userId}`, supabase
