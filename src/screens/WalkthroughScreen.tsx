@@ -76,6 +76,10 @@ interface Row {
   size_bytes: number | null
   state: 'uploaded' | 'waiting' | 'failing' | 'stuck' | 'gone'
   lastError?: string | null
+  /** A big clip going up in pieces: bytes the server has so far. */
+  sent_bytes?: number | null
+  /** Waiting for a clock-out, Complete or photos to send first. */
+  paused?: boolean
 }
 
 const rowTrouble = (r: Row) => r.state === 'failing' || r.state === 'stuck' || r.state === 'gone'
@@ -144,6 +148,7 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
       .map(v => ({
         key: `q:${v.id}`, video_type: v.video_type, duration_seconds: v.duration_seconds, size_bytes: v.size_bytes,
         state: v.fileGone ? 'gone' : v.failing ? 'failing' : v.stuck ? 'stuck' : 'waiting', lastError: v.lastError,
+        sent_bytes: v.sent_bytes, paused: v.paused,
       }))
     const uploaded: Row[] = server.map(r => ({
       key: r.id, video_type: r.video_type, duration_seconds: r.duration_seconds, size_bytes: r.size_bytes, state: 'uploaded',
@@ -403,6 +408,8 @@ export function WalkthroughScreen({ job, user, defaultType, asked = false, start
                     : r.state === 'failing' ? `${t('walkthrough_status_rejected')}${r.lastError ? ` (${r.lastError})` : ''}`
                     : r.state === 'gone' ? t('walkthrough_status_gone')
                     : r.state === 'stuck' ? `${t('walkthrough_status_stuck')}${r.lastError ? ` (${r.lastError})` : ''}`
+                    : r.paused ? t('walkthrough_status_paused')
+                    : r.sent_bytes && r.size_bytes ? ti(t('walkthrough_status_sending'), { sent: (r.sent_bytes / 1_048_576).toFixed(1), total: (r.size_bytes / 1_048_576).toFixed(1) })
                     : `${t('walkthrough_status_waiting')}${r.size_bytes ? ` · ${fmtMb(r.size_bytes)}` : ''}`}
                 </Text>
               </View>

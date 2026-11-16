@@ -99,12 +99,14 @@ try {
     .replace(`import * as FileSystem from 'expo-file-system/legacy'`, `import { FileSystem } from './reportVideos.mocks'`)
     .replace(`from './supabase'`, `from './reportVideos.mocks'`)
     .replace(`from './errorReporter'`, `from './reportVideos.mocks'`)
+    .replace(`from './videoBusy'`, `from './reportVideos.mocks'`)
   writeFileSync(join(work, 'videoQueue.ts'), videoQueue)
   for (const f of ['outbox.mocks.ts', 'videosRequired.mocks.ts', 'reportVideos.mocks.ts']) cpSync(join(repo, 'src/lib/__tests__', f), join(work, f))
   cpSync(join(repo, 'src/lib/timezone.ts'), join(work, 'timezone.ts'))
   writeFileSync(join(work, 'scenario.ts'), read('src/lib/__tests__/reportVideos.scenario.ts')
     .replace(`from '../videoQueue'`, `from './videoQueue'`))
-  execSync('npx --yes esbuild outbox.ts videoQueue.ts outbox.mocks.ts videosRequired.mocks.ts reportVideos.mocks.ts timezone.ts scenario.ts --format=cjs --platform=node --outdir=out', {
+  cpSync(join(repo, 'src/lib/tusUpload.ts'), join(work, 'tusUpload.ts'))
+  execSync('npx --yes esbuild outbox.ts videoQueue.ts outbox.mocks.ts videosRequired.mocks.ts reportVideos.mocks.ts timezone.ts tusUpload.ts scenario.ts --format=cjs --platform=node --outdir=out', {
     cwd: work, stdio: ['ignore', 'ignore', 'inherit'],
   })
   try { execSync('node out/scenario.js', { cwd: work, stdio: 'inherit' }) } catch { scenarioFailed = true }

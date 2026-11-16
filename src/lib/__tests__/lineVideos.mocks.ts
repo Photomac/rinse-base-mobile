@@ -2,7 +2,7 @@
 // queue's doubles (videosRequired.mocks), plus a server that no longer has
 // some checklist lines. Swapped in by scripts/test-line-videos.mjs at build time.
 import { supabase as videoSupabase, net } from './videosRequired.mocks'
-export { AsyncStorage, net, reported, reportClientError, video, FileSystem, usableAccessToken } from './videosRequired.mocks'
+export { AsyncStorage, net, reported, reportClientError, video, FileSystem, usableAccessToken, videoBusy } from './videosRequired.mocks'
 
 export const lines = {
   /** Line ids the server no longer has (deleted while a clip waited): a row naming one is refused with 23503. */

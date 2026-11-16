@@ -12,9 +12,13 @@
 //     to complete must never wait behind it.
 //   - Two queues sharing one AsyncStorage key would overwrite each other's
 //     writes.
-// No new native modules: RN streams the file from disk through FormData (never
-// supabase-js .upload(blob), which writes 0-byte objects under RN), so this
-// ships over the air like the photo queue.
+// No new native modules: a clip up to 6 MB goes as one request, RN streaming
+// the file from disk through FormData (never supabase-js .upload(blob), which
+// writes 0-byte objects under RN). A bigger clip goes up resumably, in 6 MB
+// pieces (lib/tusUpload, CKS 2026-11-16): expo-file-system/legacy reads each
+// piece and sends it with its own uploader (on iPhone a background session, so
+// a piece keeps going with the screen locked). Both are in every store build
+// (1.1.5, 1.1.6, 1.1.7: expo-file-system 19.0.21), so this ships over the air.
 
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as FileSystem from 'expo-file-system/legacy'
@@ -22,6 +26,8 @@ import { supabase, usableAccessToken } from './supabase'
 import { uuid4, onBeforeQueuedComplete } from './outbox'
 import { reportClientError } from './errorReporter'
 import type { UploadErrorKind } from './photoQueue'
+import { tusUpload, TUS_CHUNK, type TusState, type HttpAnswer, type ChunkSend } from './tusUpload'
+import { videoBusy } from './videoBusy'
 
 const QUEUE_KEY = 'rinsebase.videoQueue.v1'
 // The clips the server has been told about. Its own key: a flush pass rewrites
@@ -30,6 +36,11 @@ const ANNOUNCED_KEY = 'rinsebase.videoQueue.announced.v1'
 const DIR = FileSystem.documentDirectory + 'pending_videos/'
 const SUPABASE_URL = 'https://cbnbhwclbtowfbjylnph.supabase.co'
 const BUCKET = 'job-videos'
+// A big clip's resumable upload, by clip id: its address on the server, and
+// how far it got (lib/tusUpload). Its own key, like ANNOUNCED_KEY: a pass
+// rewrites the queue from the copy it read when it started.
+const TUS_KEY = 'rinsebase.videoQueue.tus.v1'
+const TUS_ENDPOINT = `${SUPABASE_URL}/storage/v1/upload/resumable`
 
 // Recording limits, shared with WalkthroughScreen. 720p H.264 at 2.5 Mbps for
 // at most 2 minutes is ~38 MB; the byte cap stops a device that ignores the
@@ -284,12 +295,121 @@ onBeforeQueuedComplete(announceVideos)
 
 // A slow-but-alive link must be allowed to finish: budget 20 KB/s (one weak
 // bar), never less than the photo queue's 4 minutes, never more than 45.
+// Only a clip up to 6 MB (one request); a bigger one goes in pieces with no
+// total limit (lib/tusUpload).
 function timeoutFor(sizeBytes: number | null): number {
   const bytes = sizeBytes ?? WALKTHROUGH_MAX_BYTES
   return Math.min(45 * 60_000, Math.max(240_000, Math.round((bytes / 20_000) * 1000)))
 }
 
-type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; noToken?: boolean; lineDropped?: boolean; waiting?: boolean }
+type UploadResult = { ok: true } | { ok: false; kind: UploadErrorKind; message: string; stored?: boolean; noToken?: boolean; lineDropped?: boolean; waiting?: boolean; progressed?: boolean; sent?: number; trace?: string[] }
+
+// ── Big clips: the resumable upload's state and the phone's side of it ─────
+async function readTusAll(): Promise<Record<string, TusState>> {
+  try { const raw = await AsyncStorage.getItem(TUS_KEY); return raw ? JSON.parse(raw) : {} }
+  catch { return {} }
+}
+async function writeTus(id: string, st: TusState | null): Promise<void> {
+  try {
+    const all = await readTusAll()
+    if (st) all[id] = st
+    else delete all[id]
+    await AsyncStorage.setItem(TUS_KEY, JSON.stringify(all))
+  } catch { /* the server's offset is the truth; a lost copy only costs a new upload */ }
+}
+
+// What the crew see for a clip going up now: bytes on the server, and whether
+// it is waiting for other work to send first.
+const live = new Map<string, { sent: number; total: number; paused: boolean }>()
+
+function answerFrom(status: number, headers: Record<string, string> | Headers | null | undefined, body?: string): HttpAnswer {
+  return {
+    status,
+    body,
+    header(name: string) {
+      if (!headers) return null
+      if (typeof (headers as any).get === 'function') return (headers as Headers).get(name)
+      const want = name.toLowerCase()
+      for (const [k, v] of Object.entries(headers as Record<string, string>)) if (k.toLowerCase() === want) return String(v)
+      return null
+    },
+  }
+}
+
+/** A small request with its own short limit. Throws when nothing came back. */
+async function smallRequest(method: string, url: string, headers: Record<string, string>): Promise<HttpAnswer> {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), 20_000)
+  try {
+    const res = await fetch(url, { method, headers, signal: ac.signal })
+    let body: string | undefined
+    if (method !== 'HEAD' && !res.ok) { try { body = await res.text() } catch { /* status only */ } }
+    return answerFrom(res.status, res.headers, body)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Read one piece of the clip into its own file and send it as a PATCH. */
+async function sendPiece(entry: PendingVideo, url: string, offset: number, length: number, headers: Record<string, string>, onProgress: (sent: number) => void): Promise<ChunkSend> {
+  const piece = `${DIR}piece_${entry.id}.bin`
+  const b64 = await FileSystem.readAsStringAsync(resolveLocal(entry.localUri), { encoding: FileSystem.EncodingType.Base64, position: offset, length })
+  await FileSystem.writeAsStringAsync(piece, b64, { encoding: FileSystem.EncodingType.Base64 })
+  const task = FileSystem.createUploadTask(url, piece, {
+    httpMethod: 'PATCH',
+    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+    // iPhone: keeps going with the screen locked. Android: always in-process.
+    sessionType: FileSystem.FileSystemSessionType.BACKGROUND,
+    headers,
+  }, (p: any) => onProgress(Number(p?.totalBytesSent) || 0))
+  const done = task.uploadAsync()
+    .then((r: any) => (r ? answerFrom(r.status, r.headers, r.body) : null))
+    .finally(() => { FileSystem.deleteAsync(piece, { idempotent: true }).catch(() => {}) })
+  return { done, cancel: () => { task.cancelAsync().catch(() => {}) } }
+}
+
+/** The stored object's size, or null when it isn't there. One byte asked for. */
+async function storedSize(entry: PendingVideo, token: string): Promise<number | null> {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), 20_000)
+  try {
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/authenticated/${BUCKET}/${entry.storagePath}`, {
+      method: 'GET', headers: { Authorization: `Bearer ${token}`, Range: 'bytes=0-0' }, signal: ac.signal,
+    })
+    if (res.status === 206) {
+      const total = Number((res.headers.get('content-range') || '').split('/')[1])
+      return Number.isFinite(total) ? total : null
+    }
+    if (res.status === 200) {
+      const n = Number(res.headers.get('content-length'))
+      return Number.isFinite(n) ? n : null
+    }
+    return null
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function uploadBig(entry: PendingVideo, size: number) {
+  return tusUpload(
+    { path: entry.storagePath, bucket: BUCKET, size, mime: entry.mimeType, upsert: entry.video_type !== 'report' },
+    {
+      endpoint: TUS_ENDPOINT,
+      token: async () => { try { return await usableAccessToken() } catch { return null } },
+      request: (method, url, headers) => smallRequest(method, url, headers),
+      sendChunk: (url, offset, length, headers, onProgress) => sendPiece(entry, url, offset, length, headers, onProgress),
+      objectSize: async () => { const t = await usableAccessToken().catch(() => null); return t ? storedSize(entry, t) : null },
+      loadState: async () => (await readTusAll())[entry.id] ?? null,
+      saveState: (st) => writeTus(entry.id, st),
+      busy: () => videoBusy(),
+      now: () => Date.now(),
+      sleep: (ms) => new Promise(r => setTimeout(r, ms)),
+      progress: (sent, total, paused) => { live.set(entry.id, { sent, total, paused }) },
+    },
+  )
+}
 
 async function describeHttpError(res: Response): Promise<string> {
   let detail = `HTTP ${res.status}`
@@ -316,7 +436,23 @@ async function uploadOne(entry: PendingVideo): Promise<UploadResult> {
   }
   if (!token) return { ok: false, kind: 'network', message: 'No signed-in session yet', noToken: true }
 
-  if (!entry.stored) {
+  // A clip over one piece goes up resumably (lib/tusUpload). Its size from
+  // the file when the queue doesn't know it.
+  let size = entry.size_bytes
+  if (!entry.stored && size == null) {
+    try { const info: any = await FileSystem.getInfoAsync(resolveLocal(entry.localUri)); if (info?.exists && typeof info.size === 'number') size = info.size } catch { /* the old way */ }
+  }
+  let storedBig = false
+  if (!entry.stored && size != null && size > TUS_CHUNK) {
+    const r = await uploadBig(entry, size)
+    if (r.ok) storedBig = true
+    else if (!r.unsupported) {
+      return { ok: false, kind: r.kind, message: r.message, noToken: r.noToken, progressed: r.progressed, sent: r.sent, trace: r.trace }
+    }
+    // No resumable uploads on this server: the one request below, as before.
+  }
+
+  if (!entry.stored && !storedBig) {
     let res: Response
     try {
       const form = new FormData()
@@ -478,14 +614,21 @@ export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ upl
       }
       // No signal stops the pass: the rest would fail the same way. The server
       // answering means this clip is the trouble, so the next one gets its turn.
-      const clipFailed = result.kind === 'network' && !result.noToken && await serverAnswers()
+      // A big clip that got further this pass is moving, just slowly: it starts
+      // its count again, and isn't reported as stuck.
+      const progressed = !!result.progressed
+      const clipFailed = result.kind === 'network' && !result.noToken && !progressed && await serverAnswers()
       if (result.kind === 'network' && !clipFailed) noSignal = true
-      const attempts = (entry.attempts ?? 0) + 1
-      const failures = (entry.failures ?? 0) + (clipFailed ? 1 : 0)
+      const attempts = progressed ? 0 : (entry.attempts ?? 0) + 1
+      const failures = progressed ? 0 : (entry.failures ?? 0) + (clipFailed ? 1 : 0)
       const reportNow = clipFailed && attempts >= STUCK_AFTER && !entry.reportedStuck
       if (reportNow) {
         const mb = entry.size_bytes ? `${(entry.size_bytes / 1_048_576).toFixed(1)} MB` : 'size unknown'
-        reportClientError(`videoQueue: clip ${entry.id} keeps failing (${attempts} tries, ${mb}, file present): ${result.message}`, undefined, 'videoQueue', { keepKnownNoise: true })
+        // A big clip says how far it got and what happened on the phone: the
+        // server never sees an upload that didn't finish.
+        const sent = result.sent != null && entry.size_bytes ? ` | ${(result.sent / 1_048_576).toFixed(1)} MB on the server` : ''
+        const trace = result.trace?.length ? ` | ${result.trace.join(' ; ')}` : ''
+        reportClientError(`videoQueue: clip ${entry.id} keeps failing (${attempts} tries, ${mb}, file present): ${result.message}${sent}${trace}`.slice(0, 1500), undefined, 'videoQueue', { keepKnownNoise: true })
       }
       survivors.push({
         ...entry,
@@ -506,6 +649,20 @@ export async function flushVideoQueue(opts?: { force?: boolean }): Promise<{ upl
     const seen = new Set(q.map(e => e.id))
     const next = [...survivors, ...(await readQueue()).filter(e => !seen.has(e.id))]
     await writeQueue(next)
+    // A landed clip's upload state goes with it, and its progress line.
+    const queued = new Set(next.map(e => e.id))
+    const tus = await readTusAll()
+    if (Object.keys(tus).some(id => !queued.has(id))) {
+      for (const id of Object.keys(tus)) if (!queued.has(id)) delete tus[id]
+      try { await AsyncStorage.setItem(TUS_KEY, JSON.stringify(tus)) } catch { /* next pass */ }
+    }
+    // A piece file left by an app killed mid-piece, for a clip that has landed.
+    for (const e of q) {
+      if (!queued.has(e.id) && e.size_bytes != null && e.size_bytes > TUS_CHUNK) {
+        FileSystem.deleteAsync(`${DIR}piece_${e.id}.bin`, { idempotent: true }).catch(() => {})
+      }
+    }
+    for (const id of [...live.keys()]) if (!queued.has(id)) live.delete(id)
     return { uploaded, remaining: next.length }
   } finally {
     flushing = false
@@ -527,18 +684,29 @@ export interface QueuedJobVideo {
   /** The file isn't on this phone. */
   fileGone: boolean
   lastError: string | null
+  /** A big clip: bytes the server has (null: not started, or one request). */
+  sent_bytes: number | null
+  /** Going up now but waiting for other work (clock-out, Complete, photos) to send first. */
+  paused: boolean
 }
 
 /** This job's videos still on the device, for listing next to uploaded ones.
  *  Not a report's video: it is no walkthrough or line clip, and never counts
  *  as one (pendingReportVideos has those). */
 export async function queuedJobVideos(jobId: string): Promise<QueuedJobVideo[]> {
+  const tus = await readTusAll()
   return (await readQueue())
     .filter(v => v.job_id === jobId && v.video_type !== 'report')
-    .map(v => ({
-      id: v.id, video_type: v.video_type, checklist_item_id: lineOf(v), duration_seconds: v.duration_seconds, size_bytes: v.size_bytes,
-      created_at: v.created_at, failing: v.lastErrorKind === 'server', stuck: (v.failures ?? 0) >= STUCK_AFTER, fileGone: !!v.fileGone, lastError: v.lastError ?? null,
-    }))
+    .map(v => {
+      const now = live.get(v.id)
+      const sent = now?.sent ?? tus[v.id]?.offset ?? null
+      return {
+        id: v.id, video_type: v.video_type, checklist_item_id: lineOf(v), duration_seconds: v.duration_seconds, size_bytes: v.size_bytes,
+        created_at: v.created_at, failing: v.lastErrorKind === 'server', stuck: (v.failures ?? 0) >= STUCK_AFTER, fileGone: !!v.fileGone, lastError: v.lastError ?? null,
+        sent_bytes: v.stored ? v.size_bytes : sent,
+        paused: !!now?.paused && flushing,
+      }
+    })
 }
 
 /** How many of this report's videos are still on their way from this phone

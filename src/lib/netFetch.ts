@@ -123,6 +123,17 @@ export function lastTripFailed(): boolean {
 // Requests out and not yet answered, and when each went out. Only those with
 // a deadline: an upload may rightly take minutes.
 const inflight = new Map<object, number>()
+// The writes among them (inserts, updates, RPCs, edge functions): a video
+// piece gives way to a save that is waiting (lib/videoQueue, lib/tusUpload).
+const writesOut = new Map<object, number>()
+
+/** How long the oldest save on its way has waited for an answer, in ms (0:
+ *  none out). Asks nothing of the network. */
+export function oldestWriteWaitMs(): number {
+  let oldest = Infinity
+  for (const sentAt of writesOut.values()) oldest = Math.min(oldest, sentAt)
+  return oldest === Infinity ? 0 : Math.max(1, Date.now() - oldest)
+}
 
 /** Has a request waited NET_TIMEOUTS.stall with nothing at all coming back
  *  since it went out? One slow answer on a link that is answering others
@@ -240,6 +251,7 @@ export async function netFetch(input: any, init: any = {}): Promise<Response> {
   const onCallerAbort = () => ac.abort()
   const outKey = {}
   if (deadline) inflight.set(outKey, Date.now())
+  if (deadline && method !== 'GET' && method !== 'HEAD') writesOut.set(outKey, Date.now())
   if (callerSignal) {
     if (callerSignal.aborted) ac.abort()
     else callerSignal.addEventListener?.('abort', onCallerAbort)
@@ -256,6 +268,7 @@ export async function netFetch(input: any, init: any = {}): Promise<Response> {
     throw e
   } finally {
     inflight.delete(outKey)
+    writesOut.delete(outKey)
     if (timer) clearTimeout(timer)
     callerSignal?.removeEventListener?.('abort', onCallerAbort)
   }
