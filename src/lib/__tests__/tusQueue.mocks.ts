@@ -13,8 +13,10 @@ export const tus = {
   uploads: new Map<string, { size: number; offset: number; path: string }>(),
   objects: new Map<string, number>(),
   calls: [] as string[],
-  /** createUploadTask fails the next N pieces before any byte lands (a dead link the server still answers on). */
+  /** createUploadTask fails the next N pieces at once, before any byte (the phone's uploader misbehaving). */
   failPieces: 0,
+  /** The server answers the next N pieces with 503 (trouble on the server's side, not the phone's uploader). */
+  patch503: 0,
   /** The piece after this many pieces fails (the signal drops); -1: never. */
   dropAfterPieces: -1,
   pieces: 0,
@@ -58,6 +60,7 @@ export const FileSystem = {
         const offset = Number(opts.headers['Upload-Offset'])
         if (offset !== u.offset) return { status: 409, headers: {}, body: '' }
         if (tus.failPieces > 0) { tus.failPieces--; throw new Error('Network request failed') }
+        if (tus.patch503 > 0) { tus.patch503--; return { status: 503, headers: {}, body: 'Service Unavailable' } }
         if (tus.dropAfterPieces >= 0 && tus.pieces >= tus.dropAfterPieces) { tus.dropAfterPieces = -1; throw new Error('Network request failed') }
         tus.pieces++
         const length = Math.min(6 * 1024 * 1024, u.size - u.offset)
