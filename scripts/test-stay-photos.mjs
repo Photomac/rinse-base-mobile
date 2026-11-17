@@ -86,29 +86,30 @@ check('the count is read again on request (the photo screen closed)', hook.inclu
 const cardFn = between(card, 'export function StayRatingCard(', '\n/**\n * The ask at Complete')
 check('the card: Save waits for the photos, and the row shows under the stars',
   cardFn.includes('const canSave = rating > 0 && !(stay.saved && !stay.dirty) && stay.photosShort === 0') &&
-  cardFn.includes('if (!rating || stay.photosShort > 0) return') && cardFn.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />'))
+  cardFn.includes('if (!rating || stay.photosShort > 0) return') && cardFn.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} onNoPhotos={saveNoPhotos} />'))
 const sheet = card.slice(card.indexOf('export function StayAskModal'))
 check('the ask: its ways out come from askExits with the photos still short',
   sheet.includes("const exits = askExits(rating, stay.photosShort, { ratingRequired: mode === 'video' })") && sheet.includes('disabled={!exits.save || stay.saving}') &&
   /\{exits\.skip && \(\s*\n\s*<TouchableOpacity style=\{styles\.askSkipBtn\} onPress=\{onSkip\}/.test(sheet) &&
-  sheet.includes('onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}') && sheet.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />'))
+  sheet.includes('onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}') &&
+  sheet.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos}\n            onNoPhotos={exits.noPhotos && !stay.saving ? () => confirmNoPhotos(t, onSaveNoPhotos) : undefined} />'))
 check('…and no other way out: the overlay has no tap, Skip and Save are the only buttons besides the stars, flags and Take photos',
   !/askOverlay\}[^>]*onPress/.test(sheet) && (sheet.match(/onPress=\{/g) ?? []).length === 2)
 // The real rules (lib/stayAsk askExits) with the real count (photosShort).
 const A = await import(join(repo, 'src/lib/stayAsk.ts'))
 const way = (rating, required, count) => A.askExits(rating, P.photosShort(rating, required, count))
-check('3 stars, 2 photos asked, none taken: no Save, no Skip, no back button', way(3, 2, 0), { save: false, skip: false, close: false })
-check('…one taken: still none', way(3, 2, 1), { save: false, skip: false, close: false })
-check('…both taken: Save and back, still no Skip (a low pick is saved)', way(3, 2, 2), { save: true, skip: false, close: true })
-check('…5 stars instead: every way out, photos or not', way(5, 2, 0), { save: true, skip: true, close: true })
-check('…no star yet: Skip and back', way(0, 2, 0), { save: false, skip: true, close: true })
-check('the company not asking (0): 3 stars saves and closes at once', way(3, 0, 0), { save: true, skip: false, close: true })
+check('3 stars, 2 photos asked, none taken: no Save, no Skip, no back button; No photos to add', way(3, 2, 0), { save: false, skip: false, close: false, noPhotos: true })
+check('…one taken: still only No photos to add', way(3, 2, 1), { save: false, skip: false, close: false, noPhotos: true })
+check('…both taken: Save and back, still no Skip (a low pick is saved)', way(3, 2, 2), { save: true, skip: false, close: true, noPhotos: false })
+check('…5 stars instead: every way out, photos or not', way(5, 2, 0), { save: true, skip: true, close: true, noPhotos: false })
+check('…no star yet: Skip and back', way(0, 2, 0), { save: false, skip: true, close: true, noPhotos: false })
+check('the company not asking (0): 3 stars saves and closes at once', way(3, 0, 0), { save: true, skip: false, close: true, noPhotos: false })
 // After a Finished video a rating is required: the same lock, and never Skip or closing.
 const vway = (rating, required, count) => A.askExits(rating, P.photosShort(rating, required, count), { ratingRequired: true })
-check('after a video, 3 stars, none of 2 taken: nothing', vway(3, 2, 0), { save: false, skip: false, close: false })
-check('after a video, 3 stars, both taken: Save only', vway(3, 2, 2), { save: true, skip: false, close: false })
-check('after a video, 5 stars: Save only', vway(5, 2, 0), { save: true, skip: false, close: false })
-check('after a video, no star: nothing until one is picked', vway(0, 2, 0), { save: false, skip: false, close: false })
+check('after a video, 3 stars, none of 2 taken: only No photos to add', vway(3, 2, 0), { save: false, skip: false, close: false, noPhotos: true })
+check('after a video, 3 stars, both taken: Save only', vway(3, 2, 2), { save: true, skip: false, close: false, noPhotos: false })
+check('after a video, 5 stars: Save only', vway(5, 2, 0), { save: true, skip: false, close: false, noPhotos: false })
+check('after a video, no star: nothing until one is picked', vway(0, 2, 0), { save: false, skip: false, close: false, noPhotos: false })
 const row = between(card, 'function StayPhotosRow(', '\n}\n')
 check('the row: only for a pick that needs photos; count, what\'s needed (one or many), Take photos',
   row.includes('if (!needsPhotos(stay.value.rating, stay.photosRequired)) return null') &&
@@ -127,10 +128,35 @@ const photos = read('src/screens/JobPhotosScreen.tsx')
 check('the photo screen takes the type, only one it knows, else After as before',
   photos.includes("const [selectedType, setSelectedType] = useState(() => PHOTO_TYPES.some(pt => pt.id === initialType) ? initialType as string : 'after')"))
 
+// ── No photos to add (CKS, Catherine 2026-11-16) ────────────────────────────
+// "sometimes there won't be pictures to add, just the walk-through video. In
+// that case, if they tap 4 or lower, it can save the rating, pop a flag, and
+// notify me that it's a low rating with no pictures."
+check('the row offers No photos to add only while short and not already saved that way; "No more" once some are taken',
+  row.includes('{short && !flagged && !!onNoPhotos && (') &&
+  row.includes("t(stay.photoCount > 0 ? 'stay_photos_none_more' : 'stay_photos_none')") &&
+  row.includes('const flagged = short && stay.savedWithoutPhotos') && row.includes("flagged ? t('stay_photos_none_saved')"))
+const confirmFn = between(card, 'export function confirmNoPhotos(', '\n}\n')
+check('a confirm first: Cancel, or Save without photos',
+  confirmFn.includes("Alert.alert(t('stay_photos_none_title'), t('stay_photos_none_body'), [") &&
+  confirmFn.includes("{ text: t('cancel'), style: 'cancel' }") && confirmFn.includes("{ text: t('stay_photos_none_confirm'), onPress: onYes }"))
+const noPhotosFn = between(card, '  function saveNoPhotos() {', '\n  }\n')
+check('the card: confirmed, saves with photosSkipped (only when short)',
+  noPhotosFn.includes('if (!rating || stay.photosShort === 0) return') && noPhotosFn.includes('await stay.save({ photosSkipped: true })'))
+check('the hook: photosSkipped only where the company asks for photos, true only when short; a save clears or sets the flag',
+  hook.includes('const photosSkipped = required > 0 ? (opts?.photosSkipped === true && short) : undefined') &&
+  hook.includes('setSkipped(photosSkipped === true)') && hook.includes('savedWithoutPhotos: skipped && saved && !dirty'))
+check('the flag is read back on its own (a database without the column changes nothing), only where photos are asked for, and never waited on by the count',
+  hook.indexOf('if (!need) return') < hook.indexOf(".select('stay_photos_skipped')") &&
+  hook.includes("if (active && !error && data && !touched.current) setSkipped(data.stay_photos_skipped === true)") &&
+  !between(hook, 'const [server, queued] = await Promise.all([', '])').includes('stay_photos_skipped') &&
+  !/select\('stay_rating, stay_condition_flags, stay_condition_note[^']*stay_photos_skipped/.test(hook))
+
 // ── the words ───────────────────────────────────────────────────────────────
 const i18n = read('src/lib/i18n.ts')
 const langs = ['en', 'es', 'pt'].map(l => between(i18n, `\n  ${l}: {`, '\n  },'))
-const KEYS = ['stay_photos_count', 'stay_photos_need_one', 'stay_photos_need_many', 'stay_photos_take']
+const KEYS = ['stay_photos_count', 'stay_photos_need_one', 'stay_photos_need_many', 'stay_photos_take',
+  'stay_photos_none', 'stay_photos_none_more', 'stay_photos_none_title', 'stay_photos_none_body', 'stay_photos_none_confirm', 'stay_photos_none_saved']
 check('every string in en, es and pt', langs.map(b => KEYS.every(k => b.includes(`${k}:`))), [true, true, true])
 check('the counts go in each language', langs.map(b => /stay_photos_count: '[^']*\{\{n\}\}[^']*\{\{need\}\}/.test(b) && /stay_photos_need_many: '[^']*\{\{need\}\}/.test(b)), [true, true, true])
 check('…naming the photo types as the photo screen labels them',

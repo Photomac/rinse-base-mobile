@@ -33,6 +33,17 @@
 // photos open the way again. At Complete, Skip shows only before a star is
 // picked or at 5 stars: a 1-4 pick is an answer, so it's saved, not skipped
 // (askExits).
+//
+// No photos to add (CKS, Catherine 2026-11-16): "the rating happens after the
+// cleaning is already done, so sometimes there won't be pictures to add, just
+// the walk-through video. In that case, if they tap 4 or lower, it can save
+// the rating, pop a flag, and notify me that it's a low rating with no
+// pictures." So under 5 stars and short of the photos, the one way out besides
+// the photos or 5 stars is "No photos to add" (askExits noPhotos): after a
+// confirm it saves the rating with jobs.stay_photos_skipped = true (stayWrite),
+// the clean shows the flag in the office, and the office's low-rating text
+// (owner-sms-events stay_rating_low) says the rating has no photos. Still no
+// Skip and no closing while short.
 
 export const STAY_FLAGS = [
   { key: 'heavy_mess',  i18n: 'stay_flag_heavy_mess',  icon: '🧹' },
@@ -43,10 +54,21 @@ export const STAY_FLAGS = [
   { key: 'items_moved', i18n: 'stay_flag_items_moved', icon: '📦' },
 ] as const
 
-export interface StayValue { rating: number; flags: string[]; note: string }
+export interface StayValue {
+  rating: number
+  flags: string[]
+  note: string
+  /** Saved short of the company's photos ("No photos to add"): true; saved
+   *  with them (or at 5 stars) where the company asks for photos: false; left
+   *  out where it doesn't, so a company with the rule off never writes the
+   *  column (useStayRating decides). */
+  photosSkipped?: boolean
+}
 
 /** The jobs.stay_* columns, as StayRatingCard has always written them (the
- *  web JobPanel and the host portal read the same five). */
+ *  web JobPanel and the host portal read the same five), and
+ *  stay_photos_skipped only when the save says (StayValue.photosSkipped): the
+ *  office's flag for a rating saved without the photos the company asks for. */
 export function stayWrite(v: StayValue, userId: string | null | undefined, now: Date) {
   return {
     stay_rating: v.rating,
@@ -54,6 +76,7 @@ export function stayWrite(v: StayValue, userId: string | null | undefined, now: 
     stay_condition_note: v.note.trim() || null,
     stay_rated_at: now.toISOString(),
     stay_rated_by: userId ?? null,
+    ...(typeof v.photosSkipped === 'boolean' ? { stay_photos_skipped: v.photosSkipped } : {}),
   }
 }
 
@@ -78,19 +101,22 @@ export function asksAfterVideo(s: { type: string; shows: boolean; rated: boolean
 }
 
 /** The ways out of the ask, for the stars picked and the photos still short
- *  (lib/stayPhotos photosShort). Under 5 stars and short: none (the stars
- *  can still change, and Take photos opens the photo screen, the sheet still
- *  waiting). Skip only before a star or at 5 stars. Save once a star is
- *  picked and nothing is short. Closing (Android's back) whenever nothing is
- *  short. `ratingRequired` (the ask after a Finished video, Todd 2026-11-13):
- *  no Skip and no closing at all; a star and Save is the only way out. */
-export function askExits(rating: number, short: number, opts: { ratingRequired?: boolean } = {}): { save: boolean; skip: boolean; close: boolean } {
+ *  (lib/stayPhotos photosShort). Under 5 stars and short: only "No photos to
+ *  add" (noPhotos: a confirm, then the rating saves flagged, CKS 2026-11-16);
+ *  the stars can still change, and Take photos opens the photo screen, the
+ *  sheet still waiting. Skip only before a star or at 5 stars. Save once a
+ *  star is picked and nothing is short. Closing (Android's back) whenever
+ *  nothing is short. `ratingRequired` (the ask after a Finished video, Todd
+ *  2026-11-13): no Skip and no closing at all; a star and Save (or No photos
+ *  to add) is the only way out. */
+export function askExits(rating: number, short: number, opts: { ratingRequired?: boolean } = {}): { save: boolean; skip: boolean; close: boolean; noPhotos: boolean } {
   const locked = short > 0
   const required = !!opts.ratingRequired
   return {
     save: rating > 0 && !locked,
     skip: !required && !locked && (rating === 0 || rating === 5),
     close: !required && !locked,
+    noPhotos: rating > 0 && locked,
   }
 }
 

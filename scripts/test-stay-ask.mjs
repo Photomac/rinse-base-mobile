@@ -95,17 +95,19 @@ try {
   check('not on a clean without the card, not once rated', [vid('after', false, false), vid('after', true, true)], [false, false])
 
   const exits = (rating, short) => A.askExits(rating, short)
-  check('no star yet: Skip and closing, no Save', exits(0, 0), { save: false, skip: true, close: true })
-  check('5 stars: Save, Skip, closing', exits(5, 0), { save: true, skip: true, close: true })
+  check('no star yet: Skip and closing, no Save', exits(0, 0), { save: false, skip: true, close: true, noPhotos: false })
+  check('5 stars: Save, Skip, closing', exits(5, 0), { save: true, skip: true, close: true, noPhotos: false })
   check('1-4 stars, nothing short: Save and closing, no Skip (a low pick is an answer)',
-    [1, 2, 3, 4].map(n => exits(n, 0)), Array(4).fill({ save: true, skip: false, close: true }))
-  check('1-4 stars, short of photos: no Save, no Skip, no closing',
-    [1, 2, 3, 4].map(n => exits(n, 2)), Array(4).fill({ save: false, skip: false, close: false }))
+    [1, 2, 3, 4].map(n => exits(n, 0)), Array(4).fill({ save: true, skip: false, close: true, noPhotos: false }))
+  check('1-4 stars, short of photos: no Save, no Skip, no closing; only No photos to add (CKS 2026-11-16)',
+    [1, 2, 3, 4].map(n => exits(n, 2)), Array(4).fill({ save: false, skip: false, close: false, noPhotos: true }))
+  check('No photos to add never without a star, nor with nothing short',
+    [exits(0, 2).noPhotos, exits(5, 0).noPhotos, exits(3, 0).noPhotos], [false, false, false])
   const req = (rating, short) => A.askExits(rating, short, { ratingRequired: true })
-  check('rating required (after a video), no star yet: nothing but picking one', req(0, 0), { save: false, skip: false, close: false })
-  check('rating required, 5 stars: Save only (no Skip, no closing)', req(5, 0), { save: true, skip: false, close: false })
-  check('rating required, 1-4 stars with the photos: Save only', [1, 2, 3, 4].map(n => req(n, 0)), Array(4).fill({ save: true, skip: false, close: false }))
-  check('rating required, 1-4 stars short of photos: nothing', [1, 2, 3, 4].map(n => req(n, 1)), Array(4).fill({ save: false, skip: false, close: false }))
+  check('rating required (after a video), no star yet: nothing but picking one', req(0, 0), { save: false, skip: false, close: false, noPhotos: false })
+  check('rating required, 5 stars: Save only (no Skip, no closing)', req(5, 0), { save: true, skip: false, close: false, noPhotos: false })
+  check('rating required, 1-4 stars with the photos: Save only', [1, 2, 3, 4].map(n => req(n, 0)), Array(4).fill({ save: true, skip: false, close: false, noPhotos: false }))
+  check('rating required, 1-4 stars short of photos: only No photos to add', [1, 2, 3, 4].map(n => req(n, 1)), Array(4).fill({ save: false, skip: false, close: false, noPhotos: true }))
   check('not required unless asked for (the Complete ask is as above)', [A.askExits(0, 0, {}), A.askExits(0, 0, { ratingRequired: false })], [exits(0, 0), exits(0, 0)])
 
   // ── the write ───────────────────────────────────────────────────────────
@@ -116,6 +118,11 @@ try {
   check('an empty note is null, no user is null',
     [A.stayWrite({ rating: 2, flags: [], note: '   ' }, undefined, at).stay_condition_note, A.stayWrite({ rating: 2, flags: [], note: '' }, null, at).stay_rated_by],
     [null, null])
+  check('no photosSkipped (the company not asking for photos): the column is left out',
+    Object.hasOwn(A.stayWrite({ rating: 3, flags: [], note: '' }, 'u1', at), 'stay_photos_skipped'), false)
+  check('photosSkipped true / false: written as said (No photos to add / saved with them)',
+    [A.stayWrite({ rating: 3, flags: [], note: '', photosSkipped: true }, 'u1', at).stay_photos_skipped,
+     A.stayWrite({ rating: 5, flags: [], note: '', photosSkipped: false }, 'u1', at).stay_photos_skipped], [true, false])
   check('the six flags the web card knows, in its order',
     A.STAY_FLAGS.map(f => f.key), ['heavy_mess', 'damage', 'smoking', 'pets', 'extra_time', 'items_moved'])
 
@@ -142,6 +149,10 @@ try {
   const w = globalThis.__stayWrites.at(-1)
   check('the save is an outbox write on the clean', [w.table, w.op, w.match, w.values.stay_rating, w.values.stay_condition_flags, w.values.stay_rated_by], ['jobs', 'update', { id: 'job-4' }, 5, ['damage'], 'u9'])
   check('queued on the phone counts as saved', queued, { error: null, queued: true })
+  check('…with no photosSkipped, no flag column in the write', Object.hasOwn(w.values, 'stay_photos_skipped'), false)
+  await R.saveStayRating('job-6', 'u9', { rating: 2, flags: [], note: '', photosSkipped: true })
+  check('No photos to add: the flag rides in the same write', globalThis.__stayWrites.at(-1).values.stay_photos_skipped, true)
+  await new Promise(r => setTimeout(r, 20))
   await new Promise(r => setTimeout(r, 20))
   check('a saved rating means Complete won\'t ask', await R.stayAskedBefore('job-4'), true)
   globalThis.__stayAnswer = { error: { message: 'refused' }, queued: false }
@@ -185,7 +196,7 @@ check('the card shows on the gate it always had', has(detail, 'const stayShows =
 check('one rating for the card and the ask', [has(detail, 'const stay = useStayRating(job, user, stayShows)'), has(body, '{stayShows && <StayRatingCard stay={stay} readOnly={readOnly}'), has(detail, '<StayAskModal visible={stayAskOpen} stay={stay}')], [true, true, true])
 check('the card reads nothing until it shows', has(card, 'if (!enabled) return'), true)
 check('one save, through the outbox (no live-only write left in the card)',
-  [has(card, 'await saveStayRating(job.id, user?.id, { rating, flags, note })'), /\.update\(/.test(card), has(lib, "writeThrough({ table: 'jobs', op: 'update', match: { id: jobId }")], [true, false, true])
+  [has(card, 'await saveStayRating(job.id, user?.id, { rating, flags, note, photosSkipped })'), /\.update\(/.test(card), has(lib, "writeThrough({ table: 'jobs', op: 'update', match: { id: jobId }")], [true, false, true])
 
 const complete = detail.slice(at_('  async function completeJob() {'), at_('  // complete_when_photos_land'))
 const p = s => complete.indexOf(s)
@@ -206,17 +217,17 @@ check('not remembered because it showed: only Skip remembers (a saved rating doe
 check('at Complete it opens in the Complete mode', has(firstFn, "setStayAskMode('complete')\n      setStayAskOpen(true)"), true)
 check('an answer is taken once, and handed over after the sheet has gone',
   [has(askFn, 'if (!stayAnswer.current || stayGo.current !== null) return'), has(askFn, 'setTimeout(stayAskGone, 600)')], [true, true])
-const saveFn = fnBody('async function saveStayAsk()'), skipFn = fnBody('function skipStayAsk()'), closeFn = fnBody('function closeStayAsk()')
+const saveFn = fnBody('async function saveStayAsk(opts?: { photosSkipped?: boolean })'), skipFn = fnBody('function skipStayAsk()'), closeFn = fnBody('function closeStayAsk()')
 check('at Complete: Save carries on unless refused; Skip carries on; closing stops',
-  [has(saveFn, "const { error } = await stay.save()\n    if (stayAskMode === 'complete') answerStayAsk(!error)"),
+  [has(saveFn, "const { error } = await stay.save(opts)\n    if (stayAskMode === 'complete') answerStayAsk(!error)"),
    has(skipFn, "if (stayAskMode === 'complete') answerStayAsk(true)"), has(closeFn, "if (stayAskMode === 'complete') answerStayAsk(false)")], [true, true, true])
 check('after a video each just closes the sheet; a refused save says why',
   [saveFn, skipFn, closeFn].map(f => has(f, 'else setStayAskOpen(false)')).concat(has(saveFn, "if (error) setTimeout(() => Alert.alert(t('error'), error.message || String(error)), 650)")),
   [true, true, true, true])
 const modal = detail.slice(at_('<StayAskModal '), at_('<StayAskModal ') + 400)
-check('the sheet: one rating, its mode, the three answers, Take photos',
-  ['visible={stayAskOpen} stay={stay} mode={stayAskMode}', 'onSave={saveStayAsk}', 'onSkip={skipStayAsk}', 'onClose={closeStayAsk}', 'onTakePhotos={takeStayPhotos} />'].map(x => has(modal, x)),
-  [true, true, true, true, true])
+check('the sheet: one rating, its mode, the answers (No photos to add = a Save with the flag), Take photos',
+  ['visible={stayAskOpen} stay={stay} mode={stayAskMode}', 'onSave={() => saveStayAsk()}', 'onSaveNoPhotos={() => saveStayAsk({ photosSkipped: true })}', 'onSkip={skipStayAsk}', 'onClose={closeStayAsk}', 'onTakePhotos={takeStayPhotos} />'].map(x => has(modal, x)),
+  [true, true, true, true, true, true])
 
 // ── after a Finished video ────────────────────────────────────────────────
 const vidFn = fnBody('function askStayAfterVideo(type: WalkthroughType): boolean {')

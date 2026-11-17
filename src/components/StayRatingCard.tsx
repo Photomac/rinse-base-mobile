@@ -22,9 +22,15 @@
 // lib/stayPhotos). The ask also comes right after a Finished walkthrough
 // video is saved (CKS 2026-11-13, lib/stayAsk asksAfterVideo), and there it
 // requires a rating: no Skip, no back button.
+//
+// No photos to add (CKS 2026-11-16, lib/stayAsk askExits noPhotos): the
+// rating comes after the clean, so sometimes there's nothing left to take a
+// photo of. Under 5 stars and short, the photo row offers "No photos to add":
+// a confirm, then the rating saves with jobs.stay_photos_skipped = true, the
+// office's flag, and the office's low-rating text says it has no photos.
 
 import React, { useEffect, useRef, useState } from 'react'
-import { View, Text, TouchableOpacity, TextInput, StyleSheet, Modal, ActivityIndicator } from 'react-native'
+import { View, Text, TouchableOpacity, TextInput, StyleSheet, Modal, ActivityIndicator, Alert } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { useLang } from '../contexts/LangContext'
 import { STAY_FLAGS, askExits, type StayValue } from '../lib/stayAsk'
@@ -46,8 +52,9 @@ export interface StayRating {
   setRating: (n: number) => void
   toggleFlag: (key: string) => void
   setNote: (text: string) => void
-  /** Save what is picked (lib/stayRating: the outbox). */
-  save: () => Promise<{ error: any; queued: boolean }>
+  /** Save what is picked (lib/stayRating: the outbox). `photosSkipped`:
+   *  "No photos to add", saved short of the photos with the office's flag. */
+  save: (opts?: { photosSkipped?: boolean }) => Promise<{ error: any; queued: boolean }>
   /** The company's number of photos a rating under 5 stars needs (0 = off). */
   photosRequired: number
   /** The clean's Before/Damage photos, landed or on their way. */
@@ -56,6 +63,9 @@ export interface StayRating {
   photosShort: number
   /** Count the photos again (the photo screen closed). */
   refreshPhotos: () => void
+  /** The saved rating went without the photos ("No photos to add"), and
+   *  nothing has been picked since: the row says the office was told. */
+  savedWithoutPhotos: boolean
 }
 
 /** The clean's stay rating. `enabled` = the card shows: nothing is read before. */
@@ -72,6 +82,9 @@ export function useStayRating(job: any, user: any, enabled: boolean): StayRating
   const [required, setRequired] = useState(0)
   const [photoCount, setPhotoCount] = useState(0)
   const [photoTick, setPhotoTick] = useState(0)
+  // Saved without the photos (jobs.stay_photos_skipped): read back where the
+  // company asks for photos, and set by a save here.
+  const [skipped, setSkipped] = useState(false)
   const tenantId: string | undefined = user?.tenant_id || job?.tenant_id
 
   // Any rating already on this clean (read-back if reopened).
@@ -102,6 +115,14 @@ export function useStayRating(job: any, user: any, enabled: boolean): StayRating
       if (!active) return
       setRequired(need)
       if (!need) return
+      // The flag (saved without the photos): its own read, live only, and not
+      // waited on, so a slow one never holds up the count that opens Save. A
+      // database without the column, or no signal, says nothing; the rating's
+      // own read above is untouched.
+      Promise.resolve(supabase.from('jobs').select('stay_photos_skipped').eq('id', job.id).maybeSingle())
+        .then(({ data, error }) => {
+          if (active && !error && data && !touched.current) setSkipped(data.stay_photos_skipped === true)
+        }, () => {})
       const [server, queued] = await Promise.all([
         cachedRead(stayPhotosRead(job.id)).then(r => r.data, () => null),
         queuedJobPhotos(job.id).catch(() => []),
@@ -119,27 +140,44 @@ export function useStayRating(job: any, user: any, enabled: boolean): StayRating
     setRating: n => { edit(); setRatingState(n) },
     toggleFlag: key => { edit(); setFlags(f => f.includes(key) ? f.filter(k => k !== key) : [...f, key]) },
     setNote: text => { edit(); setNoteState(text) },
-    save: async () => {
+    save: async (opts) => {
+      // Where the company asks for photos, every save says whether it went
+      // without them (a later save with them, or at 5 stars, clears the
+      // flag); where it doesn't, the column is never written.
+      const short = photosShort(rating, required, photoCount) > 0
+      const photosSkipped = required > 0 ? (opts?.photosSkipped === true && short) : undefined
       setSaving(true)
-      const res = await saveStayRating(job.id, user?.id, { rating, flags, note })
+      const res = await saveStayRating(job.id, user?.id, { rating, flags, note, photosSkipped })
       setSaving(false)
-      if (!res.error) { setSaved(true); setDirty(false) }
+      if (!res.error) { setSaved(true); setDirty(false); setSkipped(photosSkipped === true) }
       return res
     },
     photosRequired: required,
     photoCount,
     photosShort: photosShort(rating, required, photoCount),
     refreshPhotos: () => setPhotoTick(n => n + 1),
+    savedWithoutPhotos: skipped && saved && !dirty,
   }
 }
 
+/** "Save without photos?": the confirm before No photos to add saves. */
+export function confirmNoPhotos(t: (k: any) => string, onYes: () => void) {
+  Alert.alert(t('stay_photos_none_title'), t('stay_photos_none_body'), [
+    { text: t('cancel'), style: 'cancel' },
+    { text: t('stay_photos_none_confirm'), onPress: onYes },
+  ])
+}
+
 /** Under 5 stars, with the company asking for photos: "Photos k of N", what
- *  is still needed, and Take photos. Nothing otherwise. */
-function StayPhotosRow({ stay, onTakePhotos }: { stay: StayRating; onTakePhotos?: () => void }) {
+ *  is still needed, Take photos, and, while short, No photos to add (saves
+ *  with the office's flag after a confirm). Once saved that way: the flag
+ *  line instead of what's needed. Nothing otherwise. */
+function StayPhotosRow({ stay, onTakePhotos, onNoPhotos }: { stay: StayRating; onTakePhotos?: () => void; onNoPhotos?: () => void }) {
   const { t } = useLang()
   if (!needsPhotos(stay.value.rating, stay.photosRequired)) return null
   const need = stay.photosRequired
   const short = stay.photosShort > 0
+  const flagged = short && stay.savedWithoutPhotos
   return (
     <View style={[styles.photosRow, short ? styles.photosRowShort : styles.photosRowOk]}>
       <Text style={[styles.photosCount, { color: short ? '#92400E' : '#065F46' }]}>
@@ -147,12 +185,18 @@ function StayPhotosRow({ stay, onTakePhotos }: { stay: StayRating; onTakePhotos?
       </Text>
       {short && (
         <Text style={styles.photosNeed}>
-          {need === 1 ? t('stay_photos_need_one') : ti(t('stay_photos_need_many'), { need: String(need) })}
+          {flagged ? t('stay_photos_none_saved')
+            : need === 1 ? t('stay_photos_need_one') : ti(t('stay_photos_need_many'), { need: String(need) })}
         </Text>
       )}
       {!!onTakePhotos && (
         <TouchableOpacity style={styles.photosBtn} onPress={onTakePhotos} disabled={stay.saving}>
           <Text style={styles.photosBtnText}>📷 {t('stay_photos_take')}</Text>
+        </TouchableOpacity>
+      )}
+      {short && !flagged && !!onNoPhotos && (
+        <TouchableOpacity style={styles.noPhotosBtn} onPress={onNoPhotos} disabled={stay.saving}>
+          <Text style={styles.noPhotosBtnText}>{t(stay.photoCount > 0 ? 'stay_photos_none_more' : 'stay_photos_none')}</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -201,6 +245,14 @@ export function StayRatingCard({ stay, readOnly = false, onError, onTakePhotos }
     const { error } = await stay.save()
     if (error) onError?.(error.message || String(error))
   }
+  // No photos to add (CKS 2026-11-16): confirmed, the rating saves flagged.
+  function saveNoPhotos() {
+    if (!rating || stay.photosShort === 0) return
+    confirmNoPhotos(t, async () => {
+      const { error } = await stay.save({ photosSkipped: true })
+      if (error) onError?.(error.message || String(error))
+    })
+  }
 
   if (readOnly) {
     // Nothing can be picked here, so a rating is the one read back.
@@ -232,7 +284,7 @@ export function StayRatingCard({ stay, readOnly = false, onError, onTakePhotos }
       <Text style={styles.sub}>{t('stay_rating_sub')}</Text>
 
       <StayPicker stay={stay} />
-      <StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />
+      <StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} onNoPhotos={saveNoPhotos} />
 
       <TextInput
         style={styles.note}
@@ -268,13 +320,19 @@ export function StayRatingCard({ stay, readOnly = false, onError, onTakePhotos }
  * the Complete, and the ask comes again on the next one. After a Finished
  * video a rating is REQUIRED (Todd 2026-11-13): no Skip and no back button at
  * all, only a star and Save.
+ *
+ * Short of the photos under 5 stars, "No photos to add" (askExits noPhotos,
+ * CKS 2026-11-16) is the other way out: a confirm, then onSaveNoPhotos saves
+ * the rating with the office's flag, and the ask is answered like a Save.
  */
-export function StayAskModal({ visible, stay, mode = 'complete', onSave, onSkip, onClose, onTakePhotos }: {
+export function StayAskModal({ visible, stay, mode = 'complete', onSave, onSaveNoPhotos, onSkip, onClose, onTakePhotos }: {
   visible: boolean
   stay: StayRating
   /** 'complete': at Complete. 'video': right after a Finished video was saved. */
   mode?: 'complete' | 'video'
   onSave: () => void
+  /** No photos to add, confirmed: save the rating flagged (stay.save({ photosSkipped: true })). */
+  onSaveNoPhotos: () => void
   onSkip: () => void
   onClose: () => void
   /** Opens the photo screen on Before; the sheet comes back when it closes. */
@@ -294,7 +352,8 @@ export function StayAskModal({ visible, stay, mode = 'complete', onSave, onSkip,
           <Text style={styles.askTitle}>{t('stay_rating_title')}</Text>
           <Text style={styles.sub}>{t('stay_rating_sub')}</Text>
           <StayPicker stay={stay} />
-          <StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} />
+          <StayPhotosRow stay={stay} onTakePhotos={onTakePhotos}
+            onNoPhotos={exits.noPhotos && !stay.saving ? () => confirmNoPhotos(t, onSaveNoPhotos) : undefined} />
           <TouchableOpacity style={[styles.askSaveBtn, (!exits.save || stay.saving) && styles.saveBtnDisabled]}
             onPress={onSave} disabled={!exits.save || stay.saving}>
             {stay.saving ? <ActivityIndicator color="#fff" size="small" />
@@ -347,4 +406,7 @@ const styles = StyleSheet.create({
   photosNeed: { fontSize: 12, color: '#92400E', marginTop: 4, lineHeight: 17 },
   photosBtn: { marginTop: 8, borderRadius: 8, paddingVertical: 9, alignItems: 'center', backgroundColor: SLATE_DARK },
   photosBtnText: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  // No photos to add: quieter than Take photos, which is what the company wants.
+  noPhotosBtn: { marginTop: 8, borderRadius: 8, paddingVertical: 9, alignItems: 'center', borderWidth: 1, borderColor: '#FCD34D', backgroundColor: '#fff' },
+  noPhotosBtnText: { color: '#92400E', fontSize: 13, fontWeight: '700' },
 })
