@@ -1753,8 +1753,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // when the sheet lets it, StayAskModal): nothing is remembered, so the next
   // Complete asks again. (After a video the sheet offers neither Skip nor
   // closing: only Save, and a refused save, which closes it to say why.)
-  async function saveStayAsk() {
-    const { error } = await stay.save()
+  // No photos to add (confirmed in the sheet, CKS 2026-11-16) is a Save with
+  // the office's flag: photosSkipped.
+  async function saveStayAsk(opts?: { photosSkipped?: boolean }) {
+    const { error } = await stay.save(opts)
     if (stayAskMode === 'complete') answerStayAsk(!error)
     else setStayAskOpen(false)
     if (error) setTimeout(() => Alert.alert(t('error'), error.message || String(error)), 650)
@@ -3329,7 +3331,8 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
           Finished video (askStayAfterVideo). A refused save says why (at
           Complete it stops the Complete); the next Complete asks again. */}
       <StayAskModal visible={stayAskOpen} stay={stay} mode={stayAskMode}
-        onSave={saveStayAsk}
+        onSave={() => saveStayAsk()}
+        onSaveNoPhotos={() => saveStayAsk({ photosSkipped: true })}
         onSkip={skipStayAsk}
         onClose={closeStayAsk}
         onTakePhotos={takeStayPhotos} />
