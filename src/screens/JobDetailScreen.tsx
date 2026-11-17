@@ -6,7 +6,7 @@ import { noteAtRisk } from '../lib/issueNoteGuard'
 import { ensureCameraCapture } from '../lib/permissions'
 import { supabase } from '../lib/supabase'
 // Job times render in the tenant's zone, not the phone's — src/lib/timezone.ts.
-import { fmtTimeAt, fmtTimeRangeAt, zoneTag } from '../lib/timezone'
+import { clockOf, fmtTimeAt, fmtTimeRangeAt, zoneTag } from '../lib/timezone'
 import { fmtWallTime, type NextArrival } from '../lib/nextArrival'
 import { JobPhotosScreen } from './JobPhotosScreen'
 import { WalkthroughScreen } from './WalkthroughScreen'
@@ -38,6 +38,7 @@ import { useMachineTranslation } from '../lib/machineTranslate'
 import { ti, localeFor } from '../lib/i18n'
 import { bagLine } from '../lib/laundryBags'
 import { PAUSE_REASONS, pauseReasonLabel } from '../lib/pauseReason'
+import { CANT_FINISH_PAUSE_NOTE, UNFINISHED_REASONS, canMarkUnfinished, finishingAt, isPausedClean, pausedText } from '../lib/unfinishedReason'
 import { captureRequiredPhoto, captureCheckFirstPhoto } from '../lib/requiredPhotoCapture'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -331,6 +332,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const [jobStartAt, setJobStartAt] = useState<string | null>(job.started_at ?? null)
   const [showPauseModal, setShowPauseModal] = useState(false)
   const [pauseReason, setPauseReason] = useState('')
+  // "Can't finish today" (CKS 11/16, lib/unfinishedReason): when this clean was
+  // paused (jobs.unfinished_at, read on its own below: null with no signal or
+  // before the server has the column), and the ask's answers.
+  const [unfinishedAt, setUnfinishedAt] = useState<string | null>(job.unfinished_at ?? null)
+  const [showCantFinish, setShowCantFinish] = useState(false)
+  const [cantReason, setCantReason] = useState('')
+  const [cantNote, setCantNote] = useState('')
   const [propMeta, setPropMeta] = useState<{ bedrooms: number | null; bathrooms: number | null; sqft: number | null; beds?: number | null; sleeps?: number | null; crew_notes?: string | null; lockbox_code?: string | null; wifi_name?: string | null; wifi_password?: string | null; arrival_instructions?: string | null } & MapsAddress | null>(null)
   const [accessCode, setAccessCode] = useState<string | null>(null)
   const timerRef = useRef<any>(null)
@@ -784,6 +792,17 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       )
     })
   }
+
+  // Paused? Read on its own, so no other read of this clean names the column:
+  // an error (no signal, a server without it yet) leaves what we had.
+  useEffect(() => {
+    if (job.status !== 'in_progress') { setUnfinishedAt(null); return }
+    let live = true
+    Promise.resolve(supabase.from('jobs').select('unfinished_at').eq('id', job.id).maybeSingle())
+      .then(({ data, error }: any) => { if (live && !error) setUnfinishedAt(data?.unfinished_at ?? null) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [job.id, job.status])
 
   // Day shift: a row from Home carries started_at. Otherwise read it (the saved
   // copy with no signal), with a Start still queued on this phone laid over it.
@@ -1668,6 +1687,59 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     setSaving(false)
   }
 
+  // A server answer that means "no signal" rather than "no": the phone can't
+  // queue these two (they decide on the server), so say so plainly.
+  function unfinishedError(error: any): string {
+    const m = String(error?.message ?? '')
+    if (!m || /network|fetch|timed? ?out|abort|offline/i.test(m)) return t('cant_finish_offline')
+    return m
+  }
+
+  // "Can't finish today": on a per-clean clock, stop this person's clock first
+  // (the same write as Pause, noted "Can't finish today"), then the server
+  // pauses the clean and tells the office. Nothing else on the clean changes.
+  async function confirmCantFinish() {
+    if (!cantReason) { Alert.alert(t('select_reason')); return }
+    setSaving(true)
+    if (!dailyMode && activeEntry && activeEntry.user_id === user.id && !activeEntry.clocked_out_at) {
+      const now = new Date()
+      const closed = {
+        clocked_out_at: now.toISOString(),
+        pause_reason: CANT_FINISH_PAUSE_NOTE,
+        duration_minutes: Math.round((now.getTime() - new Date(activeEntry.clocked_in_at).getTime()) / 60000),
+      }
+      const { error: closeErr } = await writeThrough({
+        table: 'job_time_entries', op: 'update', match: { id: activeEntry.id }, values: closed,
+      })
+      if (closeErr) {
+        setSaving(false)
+        Alert.alert(t('error'), t('clock_out_failed'))
+        return
+      }
+      tracker.punched({ ...activeEntry, ...closed }, user).catch(() => {})
+    }
+    const { data, error } = await supabase.rpc('mark_clean_unfinished', {
+      p_job_id: job.id, p_reason: cantReason, p_note: cantNote.trim() ? cantNote.trim().slice(0, 500) : null,
+    })
+    setSaving(false)
+    loadTimeEntries()
+    if (error) { Alert.alert(t('error'), unfinishedError(error)); return }
+    setUnfinishedAt((data as any)?.unfinished_at ?? new Date().toISOString())
+    setShowCantFinish(false)
+    setCantReason('')
+    setCantNote('')
+    Alert.alert('⏸ ' + t('cant_finish'), t('cant_finish_sent'))
+  }
+
+  // Continue a paused clean on a day shift (no punch: the shift is the pay).
+  async function handleContinueDaily() {
+    setSaving(true)
+    const { error } = await supabase.rpc('resume_unfinished_clean', { p_job_id: job.id })
+    setSaving(false)
+    if (error) { Alert.alert(t('error'), unfinishedError(error)); return }
+    setUnfinishedAt(null)
+  }
+
   async function handleResume() {
     if (!(await passClockInLocation(handleResume))) return
     const gate = clockInGate.current
@@ -1695,6 +1767,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     startLocationTracking(user, { requestBackground: true }).catch(() => {})
     loadTimeEntries()
     setSaving(false)
+    // Back on a clean that was paused ("Can't finish today"): it isn't any
+    // more. No signal leaves it paused on the server; the punch still counts.
+    if (unfinishedAt) {
+      Promise.resolve(supabase.rpc('resume_unfinished_clean', { p_job_id: job.id }))
+        .then(({ error }: any) => { if (!error) setUnfinishedAt(null) })
+        .catch(() => {})
+    }
   }
 
   // Lead-owned sign-off: only the job's flagged lead completes; owner/manager
@@ -2793,7 +2872,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
             </View>
           )}
 
-          {!dailyMode && isPaused && (
+          {!dailyMode && isPaused && !unfinishedAt && (
             <View style={[styles.timeEntry, { backgroundColor: '#FEF9C3', borderColor: '#FCD34D' }]}>
               <Text style={[styles.timeEntryText, { color: '#854D0E' }]}>⏸ {t('paused')}</Text>
             </View>
@@ -2896,6 +2975,35 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                 </TouchableOpacity>
               )}
             </View>
+          )}
+
+          {/* Can't finish today / paused for another day (CKS 11/16,
+              lib/unfinishedReason). Cleans only, started, by someone on the
+              clean or the office. Per-clean clock: Resume (above) picks it
+              back up; a day shift has its own Continue here. */}
+          {!readOnly && !isTask && job.status === 'in_progress' && (onThisClean || isAdminRole) && (
+            isPausedClean(job, unfinishedAt) ? (
+              <View style={{ marginTop: 12 }}>
+                <View style={[styles.timeEntry, { backgroundColor: '#FEF3C7', borderColor: '#FCD34D', marginBottom: 0 }]}>
+                  <Text style={[styles.timeEntryText, { color: '#92400E', fontWeight: '700' }]}>
+                    ⏸ {pausedText(job, unfinishedAt, clockOf(job.client_addresses), { paused: t('paused'), finishing: t('paused_finishing') }, locale)}
+                  </Text>
+                  {!finishingAt(job, clockOf(job.client_addresses)) && (
+                    <Text style={[styles.timeEntryText, { color: '#92400E', marginTop: 2 }]}>{t('paused_clean_banner')}</Text>
+                  )}
+                </View>
+                {dailyMode && !completeNotOnClean && (
+                  <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL, marginTop: 8 }]} onPress={handleContinueDaily} disabled={saving}>
+                    {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>▶ {t('continue_clean')}</Text>}
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : canMarkUnfinished(job, unfinishedAt) && !notOnThisClean ? (
+              <TouchableOpacity style={[styles.clockBtn, { backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FCD34D', marginTop: 10 }]}
+                onPress={() => setShowCantFinish(true)} disabled={saving}>
+                <Text style={[styles.clockBtnText, { color: '#92400E' }]}>⏸ {t('cant_finish')}</Text>
+              </TouchableOpacity>
+            ) : null
           )}
         </View>
 
@@ -3365,6 +3473,45 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
               </TouchableOpacity>
               <TouchableOpacity style={[styles.modalConfirmBtn, !pauseReason && { opacity: 0.4 }]} onPress={confirmPause} disabled={!pauseReason || saving}>
                 {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>{t('pause_job')}</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Can't finish today (CKS 11/16) */}
+      <Modal visible={showCantFinish} transparent animationType="slide" onRequestClose={() => { if (!saving) setShowCantFinish(false) }}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>⏸ {t('cant_finish_title')}</Text>
+            <Text style={styles.modalSub}>{t('cant_finish_hint')}</Text>
+            <Text style={[styles.modalSub, { fontWeight: '700', marginTop: 4 }]}>{t('cant_finish_pick')}</Text>
+            {UNFINISHED_REASONS.map(({ value, key }) => (
+              <TouchableOpacity
+                key={value}
+                style={[styles.reasonBtn, cantReason === value && styles.reasonBtnActive]}
+                onPress={() => setCantReason(value)}
+                disabled={saving}
+              >
+                <Text style={[styles.reasonBtnText, cantReason === value && { color: '#fff' }]}>{t(key)}</Text>
+              </TouchableOpacity>
+            ))}
+            <TextInput
+              value={cantNote}
+              onChangeText={setCantNote}
+              placeholder={t('cant_finish_note_ph')}
+              placeholderTextColor="#9CA3AF"
+              multiline
+              maxLength={500}
+              editable={!saving}
+              style={{ borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, padding: 10, minHeight: 56, marginTop: 8, fontSize: 14, color: '#111827', textAlignVertical: 'top' }}
+            />
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setShowCantFinish(false); setCantReason(''); setCantNote('') }} disabled={saving}>
+                <Text style={{ color: '#6B7280', fontWeight: '600' }}>{t('cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalConfirmBtn, !cantReason && { opacity: 0.4 }]} onPress={confirmCantFinish} disabled={!cantReason || saving}>
+                {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={{ color: '#fff', fontWeight: '700' }}>{t('cant_finish_send')}</Text>}
               </TouchableOpacity>
             </View>
           </View>
