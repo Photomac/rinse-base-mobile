@@ -28,6 +28,13 @@
 // (a line clip never does); the card and the ask share one rating and one
 // save; the strings exist in en, es and pt.
 //
+// At a company that rates at arrival (tenants.stay_rating_at_arrival, CKS
+// 2026-11-17): an Arrival video asks too, the ask there requires a rating and
+// has no No photos to add (photosOnly); Start opens the recorder on Arrival
+// (arrivalStep), with a clean that has its arrival video asks straight away;
+// leaving that recorder without a video still asks; the switch is its own
+// cached read, in the day pack, off on any error.
+//
 // Usage: node scripts/test-stay-ask.mjs
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -93,6 +100,17 @@ try {
   check('a saved Finished video asks, on a clean that shows the card, unrated', vid('after', true, false), true)
   check('not an Arrival video, not a line clip', [vid('before', true, false), vid('line', true, false)], [false, false])
   check('not on a clean without the card, not once rated', [vid('after', false, false), vid('after', true, true)], [false, false])
+  const vidA = (type, shows, rated) => A.asksAfterVideo({ type, shows, rated, atArrival: true })
+  check('rating at arrival: an Arrival video asks too, and a Finished one still does (a clean left unrated)',
+    [vidA('before', true, false), vidA('after', true, false)], [true, true])
+  check('…never a line clip, a clean without the card, or a rated one',
+    [vidA('line', true, false), vidA('before', false, false), vidA('before', true, true)], [false, false, false])
+  check('…off: an Arrival video never asks', A.asksAfterVideo({ type: 'before', shows: true, rated: false, atArrival: false }), false)
+
+  const step = (hasArrival, rated) => A.arrivalStep({ hasArrival, rated })
+  check('Start, no arrival video on the clean (or no answer): the recorder', [step(false, false), step(null, null), step(false, true), step(null, false)], ['record', 'record', 'record', 'record'])
+  check('…one there already and no rating (or no answer): the ask', [step(true, false), step(true, null)], ['ask', 'ask'])
+  check('…one there and a rating: nothing', step(true, true), null)
 
   const exits = (rating, short) => A.askExits(rating, short)
   check('no star yet: Skip and closing, no Save', exits(0, 0), { save: false, skip: true, close: true, noPhotos: false })
@@ -109,6 +127,11 @@ try {
   check('rating required, 1-4 stars with the photos: Save only', [1, 2, 3, 4].map(n => req(n, 0)), Array(4).fill({ save: true, skip: false, close: false, noPhotos: false }))
   check('rating required, 1-4 stars short of photos: only No photos to add', [1, 2, 3, 4].map(n => req(n, 1)), Array(4).fill({ save: false, skip: false, close: false, noPhotos: true }))
   check('not required unless asked for (the Complete ask is as above)', [A.askExits(0, 0, {}), A.askExits(0, 0, { ratingRequired: false })], [exits(0, 0), exits(0, 0)])
+  const arr = (rating, short) => A.askExits(rating, short, { ratingRequired: true, photosOnly: true })
+  check('at arrival, 1-4 stars short of photos: no way out at all, not even No photos to add (the photos or 5 stars)',
+    [1, 2, 3, 4].map(n => arr(n, 1)), Array(4).fill({ save: false, skip: false, close: false, noPhotos: false }))
+  check('at arrival, with the photos or at 5 stars: Save only; no star yet: nothing',
+    [arr(3, 0), arr(5, 0), arr(0, 0)], [{ save: true, skip: false, close: false, noPhotos: false }, { save: true, skip: false, close: false, noPhotos: false }, { save: false, skip: false, close: false, noPhotos: false }])
 
   // ── the write ───────────────────────────────────────────────────────────
   const at = new Date('2026-11-07T15:04:05.000Z')
@@ -226,16 +249,17 @@ check('after a video each just closes the sheet; a refused save says why',
   [true, true, true, true])
 const modal = detail.slice(at_('<StayAskModal '), at_('<StayAskModal ') + 400)
 check('the sheet: one rating, its mode, the answers (No photos to add = a Save with the flag), Take photos',
-  ['visible={stayAskOpen} stay={stay} mode={stayAskMode}', 'onSave={() => saveStayAsk()}', 'onSaveNoPhotos={() => saveStayAsk({ photosSkipped: true })}', 'onSkip={skipStayAsk}', 'onClose={closeStayAsk}', 'onTakePhotos={takeStayPhotos} />'].map(x => has(modal, x)),
+  ['visible={stayAskOpen} stay={stay} mode={stayAskMode} videoSaved={stayAskVideoSaved}', 'onSave={() => saveStayAsk()}', 'onSaveNoPhotos={() => saveStayAsk({ photosSkipped: true })}', 'onSkip={skipStayAsk}', 'onClose={closeStayAsk}', 'onTakePhotos={takeStayPhotos} />'].map(x => has(modal, x)),
   [true, true, true, true, true, true])
 
 // ── after a Finished video ────────────────────────────────────────────────
 const vidFn = fnBody('function askStayAfterVideo(type: WalkthroughType): boolean {')
-check('after a video: only a Finished one, on a clean that shows the card, unrated, nothing open already',
-  has(vidFn, 'if (stayAskOpen || !asksAfterVideo({ type, shows: stayShows && !readOnly, rated: stay.saved })) return false'), true)
-check('…the recorder closes (owed videos re-read), the ask opens in the video mode, and says so',
-  ['setShowWalkthrough(false)', 'if (videoEnabled && !isTask) loadVideosOwed()', "setStayAskMode('video')", 'setStayAskOpen(true)', 'return true'].map(x => has(vidFn, x)),
-  [true, true, true, true, true])
+check('after a video: a Finished one (an Arrival one where the company rates at arrival), on a clean that shows the card, unrated, nothing open already',
+  has(vidFn, 'if (stayAskOpen || !asksAfterVideo({ type, shows: stayShows && !readOnly, rated: stay.saved, atArrival: ratesAtArrival })) return false'), true)
+check('…the recorder closes (owed videos re-read), the ask opens in the video mode (arrival for an Arrival video), and says the video is saved',
+  ['setShowWalkthrough(false)', 'if (videoEnabled && !isTask) loadVideosOwed()', "setStayAskMode(type === 'before' ? 'arrival' : 'video')", 'setStayAskVideoSaved(true)', 'setStayAskOpen(true)', 'return true'].map(x => has(vidFn, x)),
+  [true, true, true, true, true, true])
+check('…any saved video ends Start\'s guided recorder', has(vidFn, 'arrivalGuided.current = false'), true)
 check('…nothing waits on it (no Complete is held)', [has(vidFn, 'stayAnswer.current ='), has(vidFn, 'new Promise')], [false, false])
 const recorderMount = detail.slice(at_('  if (showWalkthrough) {'), at_('  if (showWalkthrough) {') + 1200)
 check('the walkthrough recorder hands its saves over; the line recorder does not',
@@ -253,16 +277,41 @@ check('the Complete still goes through the outbox', has(detail, "const { error: 
 
 const sheet = card.slice(card.indexOf('export function StayAskModal'))
 check('the ask: the card\'s question, stars and flags, Save (and complete), Skip',
-  ["t('stay_rating_title')", '<StayPicker stay={stay} />', "t(mode === 'video' ? 'stay_save' : 'stay_ask_save_complete')", "t('stay_ask_skip')"].map(s => has(sheet, s)),
+  ["t('stay_rating_title')", '<StayPicker stay={stay} />', "t(mode === 'complete' ? 'stay_ask_save_complete' : 'stay_save')", "t('stay_ask_skip')"].map(s => has(sheet, s)),
   [true, true, true, true])
 check('…its ways out from askExits: Save, Skip, and closing only when it allows',
-  ['const exits = askExits(rating, stay.photosShort, { ratingRequired: mode === \'video\' })', 'disabled={!exits.save || stay.saving}', '{exits.skip && (', 'onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}'].map(s => has(sheet, s)),
+  ['const exits = askExits(rating, stay.photosShort, { ratingRequired: mode !== \'complete\', photosOnly: mode === \'arrival\' })', 'disabled={!exits.save || stay.saving}', '{exits.skip && (', 'onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}'].map(s => has(sheet, s)),
   [true, true, true, true])
 check('…after a video it says the video is saved', has(sheet, "{mode === 'video' && <Text style={styles.askVideoSaved}>✓ {t('stay_ask_after_video')}</Text>}"), true)
 // (Under 5 stars, short of the company's photos, the ask neither saves nor
 // skips: scripts/test-stay-photos.mjs.)
+check('…at arrival it says the arrival video is saved, or, with none, that it comes before the cleaning',
+  [has(sheet, "{mode === 'arrival' && (videoSaved"), has(sheet, "t('stay_ask_after_arrival')"), has(sheet, "t('stay_ask_before_cleaning')")], [true, true, true])
 check('the new strings in English, Spanish and Portuguese',
-  ['stay_ask_save_complete', 'stay_ask_skip', 'stay_ask_after_video', 'stay_save'].map(k => (i18n.match(new RegExp(`\\b${k}: '`, 'g')) ?? []).length), [3, 3, 3, 3])
+  ['stay_ask_save_complete', 'stay_ask_skip', 'stay_ask_after_video', 'stay_save', 'stay_ask_after_arrival', 'stay_ask_before_cleaning'].map(k => (i18n.match(new RegExp(`\\b${k}: '`, 'g')) ?? []).length), [3, 3, 3, 3, 3, 3])
+
+// ── at arrival: Start opens the recorder (CKS 2026-11-17) ──────────────────
+const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
+check('the switch: its own read of its own column, cached', has(reads, "export const stayAtArrivalTenantRead = (tenantId: string): CacheRead => ({\n  key: `sraten:${tenantId}`,\n  q: () => supabase.from('tenants')\n    .select('stay_rating_at_arrival').eq('id', tenantId).maybeSingle(),"), true)
+check('…in the day pack (Start opens the recorder with no signal)', has(reads, 'if (!isTask) reads.push(stayAtArrivalTenantRead(user.tenant_id))'), true)
+check('…read on open; an error or no column is off', has(detail, "cachedRead(stayAtArrivalTenantRead(user.tenant_id))\n      .then(r => setRateAtArrival(!r.error && (r.data as any)?.stay_rating_at_arrival === true))"), true)
+check('…only with videos on, on a clean with the rating card', has(detail, 'const ratesAtArrival = rateAtArrival && videoEnabled && !isTask && !isResidential'), true)
+const arrivalAsk = detail.slice(at_('  function askArrivalVideo() {'), at_('  function openWalkthrough('))
+check('Start, rating at arrival: no question, the recorder (once, for whoever works it, not on a view-only clean)',
+  [has(arrivalAsk, 'if (!arrivalAsked.current && !recordsForOthers && ratesAtArrival && !readOnly) {\n      arrivalAsked.current = true\n      void guideArrival()\n      return\n    }'),
+   arrivalAsk.indexOf('void guideArrival()') < arrivalAsk.indexOf("Alert.alert(`🎥 ${t('walkthrough_arrival_title')}`")], [true, true])
+check('…what the clean has decides: the recorder on Arrival (remembered as guided), or the ask at once',
+  [has(arrivalAsk, 'const step = arrivalStep({ hasArrival, rated: stay.saved || rated })'),
+   has(arrivalAsk, "arrivalGuided.current = true\n      openWalkthrough('before')"), has(arrivalAsk, 'askStayAtArrival(false)')], [true, true, true])
+check('…read live, at most 4 seconds each, the phone\'s own clips counted',
+  [(arrivalAsk.match(/, 4000\)/g) ?? []).length, has(arrivalAsk, 'queuedJobVideos(job.id).catch(() => null)'), has(arrivalAsk, 'return lists ? arrivalOnClean(lists) : null')], [2, true, true])
+const leftFn = fnBody('function leftArrivalRecorder() {')
+check('leaving Start\'s recorder without a video still asks (unrated, card showing), once',
+  ['if (!arrivalGuided.current) return', 'arrivalGuided.current = false', 'if (stayShows && !readOnly && !stay.saved) askStayAtArrival(false)'].map(x => has(leftFn, x)), [true, true, true])
+check('…wired to the recorder\'s back', has(recorderMount, 'loadVideosOwed(); leftArrivalRecorder() }} />'), true)
+const atArrFn = fnBody('function askStayAtArrival(videoSaved: boolean) {')
+check('the ask at arrival: arrival mode, says whether a video was saved, nothing waits on it',
+  ["setStayAskMode('arrival')", 'setStayAskVideoSaved(videoSaved)', 'setStayAskOpen(true)'].map(x => has(atArrFn, x)).concat(has(atArrFn, 'stayAnswer.current =')), [true, true, true, false])
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
