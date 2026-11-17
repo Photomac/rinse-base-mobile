@@ -558,6 +558,16 @@ export const stayPhotosTenantRead = (tenantId: string): CacheRead => ({
     .select('stay_rating_photos_required').eq('id', tenantId).maybeSingle(),
 })
 
+/** The company's switch (tenants.stay_rating_at_arrival, rinse-base-app CKS
+ *  2026-11-17): the stay rating is asked right after the Arrival walkthrough
+ *  video, and Start opens the recorder on Arrival (lib/stayAsk). Its own read,
+ *  so a database without the column fails this one alone, which means off. */
+export const stayAtArrivalTenantRead = (tenantId: string): CacheRead => ({
+  key: `sraten:${tenantId}`,
+  q: () => supabase.from('tenants')
+    .select('stay_rating_at_arrival').eq('id', tenantId).maybeSingle(),
+})
+
 /** The clean's photos that show how the guests left it (lib/stayPhotos
  *  STAY_PHOTO_TYPES), counted for a rating under 5 stars. Read only when the
  *  company asks for photos; photos still on the phone are counted apart. */
@@ -889,6 +899,8 @@ export function jobPackReads(job: any, user: any): PackRead[] {
   // The stay rating's photo rule (StayRatingCard, lib/stayPhotos): the
   // company's number, so a rating under 5 stars is held to it with no signal.
   if (!isTask) reads.push(stayPhotosTenantRead(user.tenant_id))
+  // ...and whether it rates at arrival, so Start opens the recorder with no signal.
+  if (!isTask) reads.push(stayAtArrivalTenantRead(user.tenant_id))
   // loadCheckFirst (cleans only): the clean's ticks, line photos and start are
   // read only at a property that has lines.
   if (!isTask && addrId) {

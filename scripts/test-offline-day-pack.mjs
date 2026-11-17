@@ -203,6 +203,8 @@ const SCENARIOS = [
   'carriedPhotoFailureNeverFailsThePack',
   'stayPhotosRuleRidesAlong',
   'stayPhotosRuleBeforeMigration',
+  'stayAtArrivalRidesAlong',
+  'stayAtArrivalBeforeMigration',
 ]
 
 try {
