@@ -120,7 +120,7 @@ function seedServer() {
   server.tables = {
     jobs,
     client_addresses: Object.values(ADDR).map(addressRow),
-    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true, crew_supply_counts: true, restock_two_choice: false, stay_rating_photos_required: 0, clock_in_location_required: false, lat: 34.87, lng: -111.76, home_base_precision: null, home_base_label: null }],
+    tenants: [{ id: T, video_walkthroughs_enabled: false, default_checkin_time: '16:00', default_checklist_seed: 'generated', checklist_execution_mode: 'detailed', crew_prep_linens: true, check_first_required: true, enforce_photo_requirements: true, crew_supply_counts: true, restock_two_choice: false, stay_rating_photos_required: 0, stay_rating_at_arrival: false, clock_in_location_required: false, lat: 34.87, lng: -111.76, home_base_precision: null, home_base_label: null }],
     job_assignments: jobs.flatMap(j => j.crew.map((c: any) => ({ job_id: j.id, user_id: c.user_id, is_lead: c.is_lead, users: { id: c.user_id, full_name: NAMES[c.user_id] } }))),
     address_checklist_templates: [
       { id: 'tp1', address_id: 'A2', room: 'Kitchen', title: 'Wipe counters', sort_order: 1, requires_photo: false },
@@ -1904,6 +1904,28 @@ const scenarios: Record<string, () => Promise<void>> = {
     const c = load()
     ok('a database without the column: the pack still saves', (await c.prefetchDays(CREW)).status === 'saved')
     ok('…and nothing saved for the refused read', !cached(`srpten:${T}`))
+  },
+
+  // Rating at arrival (tenants.stay_rating_at_arrival, CKS 2026-11-17): the
+  // pack saves the company's switch with the day, so Start opens the recorder
+  // on Arrival with no signal. A database before its migration refuses the
+  // read: the pack still saves, nothing is saved for it (the screen reads that
+  // as off), and the photo number beside it still saves.
+  async stayAtArrivalRidesAlong() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.tables.tenants[0].stay_rating_at_arrival = true
+    const c = load()
+    ok('the pack saves', (await c.prefetchDays(CREW)).status === 'saved')
+    ok('…with the company\'s rate-at-arrival switch', cachedVal(`sraten:${T}`)?.stay_rating_at_arrival === true, JSON.stringify(cachedVal(`sraten:${T}`)))
+  },
+  async stayAtArrivalBeforeMigration() {
+    setClock(EVENING); seedServer(); seedSession()
+    server.tables.tenants[0].stay_rating_photos_required = 1
+    server.missingColumns = { tenants: ['stay_rating_at_arrival'] }
+    const c = load()
+    ok('a database without the switch\'s column: the pack still saves', (await c.prefetchDays(CREW)).status === 'saved')
+    ok('…nothing saved for the refused read', !cached(`sraten:${T}`))
+    ok('…and the photo number still saves beside it', cachedVal(`srpten:${T}`)?.stay_rating_photos_required === 1, JSON.stringify(cachedVal(`srpten:${T}`)))
   },
 
   // Whatever goes wrong inside a load, Supplies' and the walkthrough's

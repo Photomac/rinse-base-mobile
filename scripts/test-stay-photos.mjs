@@ -89,7 +89,7 @@ check('the card: Save waits for the photos, and the row shows under the stars',
   cardFn.includes('if (!rating || stay.photosShort > 0) return') && cardFn.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos} onNoPhotos={saveNoPhotos} />'))
 const sheet = card.slice(card.indexOf('export function StayAskModal'))
 check('the ask: its ways out come from askExits with the photos still short',
-  sheet.includes("const exits = askExits(rating, stay.photosShort, { ratingRequired: mode === 'video' })") && sheet.includes('disabled={!exits.save || stay.saving}') &&
+  sheet.includes("const exits = askExits(rating, stay.photosShort, { ratingRequired: mode !== 'complete', photosOnly: mode === 'arrival' })") && sheet.includes('disabled={!exits.save || stay.saving}') &&
   /\{exits\.skip && \(\s*\n\s*<TouchableOpacity style=\{styles\.askSkipBtn\} onPress=\{onSkip\}/.test(sheet) &&
   sheet.includes('onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}') &&
   sheet.includes('<StayPhotosRow stay={stay} onTakePhotos={onTakePhotos}\n            onNoPhotos={exits.noPhotos && !stay.saving ? () => confirmNoPhotos(t, onSaveNoPhotos) : undefined} />'))

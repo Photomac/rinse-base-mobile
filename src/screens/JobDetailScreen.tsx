@@ -16,7 +16,7 @@ import { JobInspectionScreen } from './JobInspectionScreen'
 import { WalkthroughChecklist } from '../components/WalkthroughChecklist'
 import { MessagesScreen } from './MessagesScreen'
 import { StayRatingCard, StayAskModal, useStayRating } from '../components/StayRatingCard'
-import { asksAtComplete, asksAfterVideo, lowPickUnsaved } from '../lib/stayAsk'
+import { asksAtComplete, asksAfterVideo, lowPickUnsaved, arrivalStep } from '../lib/stayAsk'
 import { stayAskedBefore, rememberStayAsked } from '../lib/stayRating'
 import { PhotoViewer } from '../components/PhotoViewer'
 import { ShotThumb } from '../components/ShotThumb'
@@ -57,8 +57,8 @@ import { noteCachedJobs } from '../lib/cachePrune'
 import { mapsUrl, withPropertyLocation, type MapsAddress } from '../lib/mapsLink'
 // Every cached read here is built in lib/jobReads, shared with the offline day
 // pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
-import { crewClockRead, checkFirstStartRead, videosOwedRead } from '../lib/jobReads'
-import { videosInBlockers, videosInRefusal, videosFromOwedRows, videosStillOwed } from '../lib/videosOwed'
+import { crewClockRead, checkFirstStartRead, videosOwedRead, stayAtArrivalTenantRead } from '../lib/jobReads'
+import { videosInBlockers, videosInRefusal, videosFromOwedRows, videosStillOwed, arrivalOnClean } from '../lib/videosOwed'
 import { queuedJobVideos, announceVideos, flushVideoQueue, type WalkthroughType, type QueuedJobVideo } from '../lib/videoQueue'
 import {
   lineClipStates, lineClipOnPhone, videoLinesInBlockers, videoLinesInRefusal, videoLinesMissing,
@@ -210,6 +210,14 @@ const DEFAULT_CHECKLIST: { id: string; labelKey: 'chk_kitchen' | 'chk_bathrooms'
   { id: '8', labelKey: 'chk_walkthrough',   room: 'General',  title: 'Walkthrough' },
 ]
 
+/** `p`'s answer if it comes within `ms`, else undefined (a failure too). */
+function within<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(undefined), ms)
+    p.then(v => { clearTimeout(timer); resolve(v) }, () => { clearTimeout(timer); resolve(undefined) })
+  })
+}
+
 function fmtDuration(minutes: number) {
   const h = Math.floor(minutes / 60)
   const m = Math.round(minutes % 60)
@@ -252,6 +260,13 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // server's last answer, kept for no signal.
   const [videosOwed, setVideosOwed] = useState<WalkthroughType[]>([])
   const arrivalAsked = useRef(false)
+  // The company rates at arrival (tenants.stay_rating_at_arrival, CKS
+  // 2026-11-17, lib/stayAsk): Start opens the recorder on Arrival and the
+  // rating follows the Arrival video. Off until its read says on.
+  const [rateAtArrival, setRateAtArrival] = useState(false)
+  // Start opened the recorder on Arrival and no arrival video has been saved
+  // from it yet: leaving it still asks for the rating.
+  const arrivalGuided = useRef(false)
   const [showMessages, setShowMessages] = useState(false)
   const [showLaundry, setShowLaundry] = useState(false)
   const [showInspection, setShowInspection] = useState(false)
@@ -550,9 +565,15 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   const stayShows = isStarted && !isTask && !isResidential
   const stay = useStayRating(job, user, stayShows)
   // The ask is open: at Complete ('complete', completeJob waits on
-  // stayAnswer), or after a Finished video ('video', nothing waits).
+  // stayAnswer), after a Finished video ('video', nothing waits), or at
+  // arrival ('arrival', a company that rates at arrival; nothing waits).
   const [stayAskOpen, setStayAskOpen] = useState(false)
-  const [stayAskMode, setStayAskMode] = useState<'complete' | 'video'>('complete')
+  const [stayAskMode, setStayAskMode] = useState<'complete' | 'video' | 'arrival'>('complete')
+  // 'arrival': the Arrival video was saved (false: Start's recorder was left without one).
+  const [stayAskVideoSaved, setStayAskVideoSaved] = useState(true)
+  // Rates at arrival here: the company's switch, with videos on, on a clean
+  // that has the rating card (STR/PM, not a task).
+  const ratesAtArrival = rateAtArrival && videoEnabled && !isTask && !isResidential
   const stayAnswer = useRef<((go: boolean) => void) | null>(null)
   // What the crew answered, handed over once the sheet has gone (stayAskGone).
   const stayGo = useRef<boolean | null>(null)
@@ -574,6 +595,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     info.load(job, user).catch(() => {})
     loadCheckFirst({ soon: true }).catch(() => {})
     loadPhotoRequirements({ soon: true })
+    // Whether the company rates at arrival: a database without the column, or
+    // no answer and nothing saved, is off.
+    cachedRead(stayAtArrivalTenantRead(user.tenant_id))
+      .then(r => setRateAtArrival(!r.error && (r.data as any)?.stay_rating_at_arrival === true))
+      .catch(() => {})
   }, [])
 
   // Live mirror of teammates' phones + the owner dashboard: stream checklist
@@ -1420,12 +1446,57 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
    * missing. Once per screen mount, like the photos above.
    */
   function askArrivalVideo() {
+    // A company that rates at arrival: no question, the recorder opens
+    // (guideArrival), whether or not the company requires the video.
+    if (!arrivalAsked.current && !recordsForOthers && ratesAtArrival && !readOnly) {
+      arrivalAsked.current = true
+      void guideArrival()
+      return
+    }
     if (arrivalAsked.current || recordsForOthers || !videosOwed.includes('before')) return
     arrivalAsked.current = true
     Alert.alert(`🎥 ${t('walkthrough_arrival_title')}`, t('walkthrough_arrival_msg'), [
       { text: t('walkthrough_not_now'), style: 'cancel' },
       { text: t('walkthrough_record_arrival'), onPress: () => openWalkthrough('before') },
     ])
+  }
+
+  /**
+   * Start at a company that rates at arrival (CKS, Catherine 2026-11-17: start
+   * the clean, the arrival walk-through opens, then the rating, then the
+   * cleaning; lib/stayAsk arrivalStep). The recorder opens on Arrival while the
+   * clean has no arrival video; with one already (a teammate's) and no rating,
+   * the rating is asked straight away. What the clean has is read live, a few
+   * seconds at most: with no answer it counts as no video, so the crew records.
+   */
+  async function guideArrival() {
+    const [hasArrival, rated] = await Promise.all([arrivalVideoNow(), ratedNow()])
+    const step = arrivalStep({ hasArrival, rated: stay.saved || rated })
+    if (step === 'record') {
+      arrivalGuided.current = true
+      openWalkthrough('before')
+    } else if (step === 'ask') {
+      askStayAtArrival(false)
+    }
+  }
+
+  /** Does the clean have an arrival video (landed, announced by a phone, or on
+   *  this one)? null = couldn't tell within the wait. */
+  async function arrivalVideoNow(): Promise<boolean | null> {
+    const list = (q: PromiseLike<{ data: any; error: any }>) => Promise.resolve(q).then(r => (r.error ? null : (r.data as any[]) ?? []), () => null)
+    const lists = await within(Promise.all([
+      list(supabase.from('job_videos').select('video_type, duration_seconds').eq('job_id', job.id).eq('video_type', 'before')),
+      list(supabase.from('job_videos_on_the_way').select('video_type, duration_seconds').eq('job_id', job.id)),
+      queuedJobVideos(job.id).catch(() => null),
+    ]), 4000)
+    return lists ? arrivalOnClean(lists) : null
+  }
+
+  /** Is a rating on the clean already? null = couldn't tell within the wait. */
+  async function ratedNow(): Promise<boolean | null> {
+    const res = await within(Promise.resolve(supabase.from('jobs').select('stay_rating').eq('id', job.id).maybeSingle()), 4000)
+    if (!res || res.error) return null
+    return !!(res.data as any)?.stay_rating
   }
 
   function openWalkthrough(type: WalkthroughType | null) {
@@ -1818,13 +1889,32 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // shows the rating card and has no rating, the recorder closes and the ask
   // opens on this screen, with Save and no way out but a rating (no Skip, no
   // back button; Todd 2026-11-13). true = the recorder is closed.
+  // At a company that rates at arrival, an Arrival video asks the same way
+  // ('arrival': the photos are the only way under 5 stars, CKS 2026-11-17).
   function askStayAfterVideo(type: WalkthroughType): boolean {
-    if (stayAskOpen || !asksAfterVideo({ type, shows: stayShows && !readOnly, rated: stay.saved })) return false
+    arrivalGuided.current = false
+    if (stayAskOpen || !asksAfterVideo({ type, shows: stayShows && !readOnly, rated: stay.saved, atArrival: ratesAtArrival })) return false
     setShowWalkthrough(false)
     if (videoEnabled && !isTask) loadVideosOwed()
-    setStayAskMode('video')
+    setStayAskVideoSaved(true)
+    setStayAskMode(type === 'before' ? 'arrival' : 'video')
     setStayAskOpen(true)
     return true
+  }
+  // The ask at arrival without a saved Arrival video: the clean already had
+  // one at Start (a teammate's), or Start's recorder was left without one.
+  function askStayAtArrival(videoSaved: boolean) {
+    if (stayAskOpen) return
+    setStayAskVideoSaved(videoSaved)
+    setStayAskMode('arrival')
+    setStayAskOpen(true)
+  }
+  // Start's recorder left without a video saved from it: the rating still
+  // comes now, before the cleaning, on a clean that shows the card and has none.
+  function leftArrivalRecorder() {
+    if (!arrivalGuided.current) return
+    arrivalGuided.current = false
+    if (stayShows && !readOnly && !stay.saved) askStayAtArrival(false)
   }
   // The ask's three answers. Save: the rating through the outbox (a saved
   // rating is remembered); at Complete a refusal stops the Complete. Skip: the
@@ -2463,7 +2553,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     return <WalkthroughScreen job={job} user={user} defaultType={walkthroughFor ?? defaultType} asked={walkthroughFor != null}
       started={isStarted} startedAt={firstIn} owed={videosOwed}
       onSaved={askStayAfterVideo}
-      onBack={() => { setShowWalkthrough(false); if (videoEnabled && !isTask) loadVideosOwed() }} />
+      onBack={() => { setShowWalkthrough(false); if (videoEnabled && !isTask) loadVideosOwed(); leftArrivalRecorder() }} />
   }
 
   return (
@@ -3438,7 +3528,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       {/* "How did the guests leave it?" at Complete (askStayFirst) and after a
           Finished video (askStayAfterVideo). A refused save says why (at
           Complete it stops the Complete); the next Complete asks again. */}
-      <StayAskModal visible={stayAskOpen} stay={stay} mode={stayAskMode}
+      <StayAskModal visible={stayAskOpen} stay={stay} mode={stayAskMode} videoSaved={stayAskVideoSaved}
         onSave={() => saveStayAsk()}
         onSaveNoPhotos={() => saveStayAsk({ photosSkipped: true })}
         onSkip={skipStayAsk}
