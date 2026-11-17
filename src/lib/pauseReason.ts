@@ -38,6 +38,9 @@ const SYSTEM_NOTES: Record<string, TranslationKey> = {
   'Auto-closed: ended when they left the office': 'pr_auto_left_office',
   'Manual entry by owner': 'pr_manual_owner',
   'Clocked out by owner (left open)': 'pr_clocked_out_owner_open',
+  // "Can't finish today" closing a per-clean punch (lib/unfinishedReason
+  // CANT_FINISH_PAUSE_NOTE; the web crew view writes the same words)
+  "Can't finish today": 'pr_cant_finish',
 }
 
 // lib/endDay.ts endedNote / startedNote (and the web's), which name who did

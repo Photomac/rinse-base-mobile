@@ -12,6 +12,7 @@ import { useJobScope } from '../lib/useJobScope'
 import { isOfficeRole, isMyJob, jobsInScope, dayView, type JobScope } from '../lib/jobScope'
 import { crewGroups, listItems } from '../lib/crewGroups'
 import { ti, localeFor, capFirst } from '../lib/i18n'
+import { pausedText } from '../lib/unfinishedReason'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { currencySymbol } from '../lib/money'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
@@ -36,7 +37,7 @@ import { JobClock } from '../components/JobClock'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
 // src/lib/timezone.ts.
-import { fmtTime, fmtTimeAt, fmtTimeRangeAt, fmtDate, fmtDateTime, dayKey, todayKey, startOfDayInTz, startOfMonthInTz, noteDayCleans } from '../lib/timezone'
+import { clockOf, fmtTime, fmtTimeAt, fmtTimeRangeAt, fmtDate, fmtDateTime, dayKey, todayKey, startOfDayInTz, startOfMonthInTz, noteDayCleans } from '../lib/timezone'
 import { shiftYmd } from '../lib/nextArrival'
 import { useAwaitingAnswers } from '../lib/useCrewAnswers'
 
@@ -291,6 +292,27 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   // Still open after the offline overlay (load()), and narrowed like the day.
   const needsClosing = useMemo(() => jobsInScope(strandedRows, user.id, viewScope)
     .filter((j: any) => j.status === 'in_progress' || j.status === 'en_route'), [strandedRows, user.id, viewScope])
+
+  // Started cleans marked "Can't finish today" (jobs.unfinished_at, CKS 11/16,
+  // lib/unfinishedReason), read on its own: no signal, or a server without the
+  // column, leaves every clean unpaused, as before.
+  const [pausedJobs, setPausedJobs] = useState<Map<string, string>>(new Map())
+  const startedIds = useMemo(() => [...new Set([...todayJobs, ...needsClosing]
+    .filter((j: any) => j.status === 'in_progress').map((j: any) => j.id as string))].sort().join(','),
+    [todayJobs, needsClosing])
+  useEffect(() => {
+    if (!startedIds) { setPausedJobs(new Map()); return }
+    let live = true
+    Promise.resolve(supabase.from('jobs').select('id, unfinished_at').in('id', startedIds.split(',')).not('unfinished_at', 'is', null))
+      .then(({ data, error }: any) => {
+        if (!live || error) return
+        setPausedJobs(new Map((data ?? []).map((r: any) => [r.id as string, r.unfinished_at as string])))
+      })
+      .catch(() => {})
+    return () => { live = false }
+  }, [startedIds])
+  const pausedLine = (job: any) => pausedText(job, pausedJobs.get(job.id), clockOf(job.client_addresses),
+    { paused: t('paused'), finishing: t('paused_finishing') }, localeFor(lang))
   const monthStats = useMemo(() => {
     const rows = jobsInScope(monthRows, user.id, viewScope)
     const hours = rows.reduce((s: number, j: any) => {
@@ -450,6 +472,27 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   }
 
   async function handleEndDay() {
+    if (!activeShift) return
+    // A started clean of mine still open and not paused (CKS 11/16: Krystal
+    // ended her day with OLDTOWN open and nobody was told): ask first. "Can't
+    // finish today" opens the clean, where the button is; End my day goes on
+    // (the close-time sweep tells the office anyway).
+    const openClean = [...needsClosing, ...todayJobs].find((j: any) =>
+      j.status === 'in_progress' && (j.job_type ?? 'clean') === 'clean' && !pausedJobs.has(j.id)
+      && (j.job_assignments ?? []).some((a: any) => a.user_id === user.id))
+    if (openClean) {
+      const place = openClean.client_addresses?.nickname || openClean.client_addresses?.street || t('this_job')
+      Alert.alert(t('end_my_day'), ti(t('end_day_open_clean'), { place }), [
+        { text: t('cancel') || 'Cancel', style: 'cancel' },
+        { text: t('cant_finish'), onPress: () => onJobPress(openClean) },
+        { text: t('end_my_day'), style: 'destructive', onPress: () => confirmEndDay() },
+      ])
+      return
+    }
+    confirmEndDay()
+  }
+
+  function confirmEndDay() {
     if (!activeShift) return
     Alert.alert(t('end_my_day'), t('on_shift_since') + ' ' + shiftSince(activeShift.clocked_in_at), [
       { text: t('cancel') || 'Cancel', style: 'cancel' },
@@ -658,6 +701,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                     {placeLabel(activeJob, canSeeClientNames, hiddenAddressText(t))}
                   </Text>
                   <Text style={styles.activeTime}>{fmtTimeRangeAt(activeJob.scheduled_start, activeJob.scheduled_end, activeJob.client_addresses, localeFor(lang))}</Text>
+                  {!!pausedLine(activeJob) && <Text style={[styles.activeTime, { fontWeight: '700' }]}>⏸ {pausedLine(activeJob)}</Text>}
                 </View>
                 {/* Day shift: time on this job so far, from its Start (lib/jobTimer). */}
                 {dailyMode && <JobClock job={activeJob} prefix="⏱ " style={styles.activeClock} />}
@@ -735,6 +779,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
                         <Text style={styles.jobTime}>
                           {fmtDate(job.scheduled_start, localeFor(lang))} · {ti(t('open_for_days'), { days: String(days) })}
                         </Text>
+                        {!!pausedLine(job) && <Text style={[styles.jobTime, { color: '#92400E', fontWeight: '700' }]}>⏸ {pausedLine(job)}</Text>}
                         {/* No badge until the gate answers — an optimistic
                             "ready" that then refuses on Complete is worse. */}
                         {n !== undefined && (
