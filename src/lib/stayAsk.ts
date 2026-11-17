@@ -44,6 +44,24 @@
 // the clean shows the flag in the office, and the office's low-rating text
 // (owner-sms-events stay_rating_low) says the rating has no photos. Still no
 // Skip and no closing while short.
+//
+// At arrival (CKS, Catherine 2026-11-17: "the star rating is based on the
+// arrival video, not the finished video ... required right after the arrival
+// video and impossible to skip. If the rating is under 5 stars, photos should
+// be required right then, not later, and not saved without photos"). A
+// company switch, tenants.stay_rating_at_arrival (rinse-base-app), off for
+// everyone else. With it on, and walkthrough videos on:
+//   • Start opens the recorder on Arrival, when the clean has no arrival video
+//     yet (arrivalStep 'record'); with one already (a teammate's) and no
+//     rating, the ask opens straight away ('ask');
+//   • saving the Arrival video asks right then (asksAfterVideo atArrival), a
+//     rating REQUIRED as after a Finished video, and under 5 stars the photos
+//     are the only way: no "No photos to add" (askExits photosOnly). The
+//     guests' mess is still there to photograph;
+//   • leaving that recorder without saving a video still asks, the same way:
+//     the rating comes before the cleaning either way;
+//   • a clean still unrated by the Finished video asks there as before (No
+//     photos to add and all), and Complete as before, so nothing is missed.
 
 export const STAY_FLAGS = [
   { key: 'heavy_mess',  i18n: 'stay_flag_heavy_mess',  icon: '🧹' },
@@ -93,11 +111,24 @@ export function asksAtComplete(s: { shows: boolean; rated: boolean; askedBefore:
   return s.shows && (!!s.lowUnsaved || (!s.rated && !s.askedBefore))
 }
 
-/** Saving a walkthrough video asks right then only for a Finished one, on a
- *  clean that shows the rating card and has no rating. (A Skip earlier
- *  doesn't stop it: the video is the moment the company asked for.) */
-export function asksAfterVideo(s: { type: string; shows: boolean; rated: boolean }): boolean {
-  return s.type === 'after' && s.shows && !s.rated
+/** Saving a walkthrough video asks right then, on a clean that shows the
+ *  rating card and has no rating: a Finished one always, an Arrival one at a
+ *  company that rates at arrival (`atArrival`, tenants.stay_rating_at_arrival).
+ *  (A Skip earlier doesn't stop it: the video is the moment the company asked
+ *  for.) */
+export function asksAfterVideo(s: { type: string; shows: boolean; rated: boolean; atArrival?: boolean }): boolean {
+  if (!s.shows || s.rated) return false
+  return s.type === 'after' || (!!s.atArrival && s.type === 'before')
+}
+
+/** At Start, at a company that rates at arrival: open the recorder on Arrival
+ *  while the clean has no arrival video ('record'; not knowing, with no
+ *  signal at the door, counts as none); with one already, ask for the rating
+ *  straight away unless the clean has one ('ask'; not knowing asks, the same
+ *  stars come back filled in when the rating reads back); else nothing. */
+export function arrivalStep(s: { hasArrival: boolean | null; rated: boolean | null }): 'record' | 'ask' | null {
+  if (s.hasArrival !== true) return 'record'
+  return s.rated === true ? null : 'ask'
 }
 
 /** The ways out of the ask, for the stars picked and the photos still short
@@ -106,17 +137,19 @@ export function asksAfterVideo(s: { type: string; shows: boolean; rated: boolean
  *  the stars can still change, and Take photos opens the photo screen, the
  *  sheet still waiting. Skip only before a star or at 5 stars. Save once a
  *  star is picked and nothing is short. Closing (Android's back) whenever
- *  nothing is short. `ratingRequired` (the ask after a Finished video, Todd
+ *  nothing is short. `ratingRequired` (the ask after a walkthrough video, Todd
  *  2026-11-13): no Skip and no closing at all; a star and Save (or No photos
- *  to add) is the only way out. */
-export function askExits(rating: number, short: number, opts: { ratingRequired?: boolean } = {}): { save: boolean; skip: boolean; close: boolean; noPhotos: boolean } {
+ *  to add) is the only way out. `photosOnly` (the ask at arrival, CKS
+ *  2026-11-17): no No photos to add either, so under 5 stars and short the
+ *  photos (or 5 stars) are the only way out. */
+export function askExits(rating: number, short: number, opts: { ratingRequired?: boolean; photosOnly?: boolean } = {}): { save: boolean; skip: boolean; close: boolean; noPhotos: boolean } {
   const locked = short > 0
   const required = !!opts.ratingRequired
   return {
     save: rating > 0 && !locked,
     skip: !required && !locked && (rating === 0 || rating === 5),
     close: !required && !locked,
-    noPhotos: rating > 0 && locked,
+    noPhotos: rating > 0 && locked && !opts.photosOnly,
   }
 }
 

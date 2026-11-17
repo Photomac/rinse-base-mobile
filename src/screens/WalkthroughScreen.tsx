@@ -4,7 +4,9 @@
 //
 // Saving a Finished video on a clean with no stay rating hands back to the
 // clean's screen (onSaved), which asks "How did the guests leave it?" right
-// then (CKS 2026-11-13, lib/stayAsk asksAfterVideo).
+// then (CKS 2026-11-13, lib/stayAsk asksAfterVideo). At a company that rates
+// at arrival, an Arrival video does (CKS 2026-11-17), and Start opens this
+// screen on Arrival.
 //
 // Line mode (`line`): a clip for one checklist line that asks for a video
 // (lib/lineVideos). Same camera, sound off, same queue; no Arrival/Finished,
@@ -64,7 +66,8 @@ interface Props {
   onLineSaved?: (seconds: number) => void
   /** An Arrival or Finished video was saved (on the phone, its upload queued).
    *  true = the clean's screen takes over from here (it closes this one to ask
-   *  for the stay rating after a Finished video, lib/stayAsk asksAfterVideo). */
+   *  for the stay rating after a Finished video, or an Arrival one at a company
+   *  that rates at arrival, lib/stayAsk asksAfterVideo). */
   onSaved?: (type: WalkthroughType) => boolean
   onBack: () => void
 }

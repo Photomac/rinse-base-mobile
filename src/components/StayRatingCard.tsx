@@ -28,6 +28,10 @@
 // photo of. Under 5 stars and short, the photo row offers "No photos to add":
 // a confirm, then the rating saves with jobs.stay_photos_skipped = true, the
 // office's flag, and the office's low-rating text says it has no photos.
+//
+// At a company that rates at arrival (CKS 2026-11-17, lib/stayAsk), the ask
+// also comes right after the Arrival video ('arrival'), and there the photos
+// are the only way: no No photos to add.
 
 import React, { useEffect, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, TextInput, StyleSheet, Modal, ActivityIndicator, Alert } from 'react-native'
@@ -324,12 +328,21 @@ export function StayRatingCard({ stay, readOnly = false, onError, onTakePhotos }
  * Short of the photos under 5 stars, "No photos to add" (askExits noPhotos,
  * CKS 2026-11-16) is the other way out: a confirm, then onSaveNoPhotos saves
  * the rating with the office's flag, and the ask is answered like a Save.
+ *
+ * At arrival ('arrival', a company that rates at arrival, CKS 2026-11-17):
+ * after the Arrival video (or Start's recorder left without one), required
+ * like after a Finished video, and under 5 stars the photos are the only way
+ * out: no No photos to add (askExits photosOnly). It says the arrival video
+ * is saved, or, with none, that this comes before the cleaning.
  */
-export function StayAskModal({ visible, stay, mode = 'complete', onSave, onSaveNoPhotos, onSkip, onClose, onTakePhotos }: {
+export function StayAskModal({ visible, stay, mode = 'complete', videoSaved = true, onSave, onSaveNoPhotos, onSkip, onClose, onTakePhotos }: {
   visible: boolean
   stay: StayRating
-  /** 'complete': at Complete. 'video': right after a Finished video was saved. */
-  mode?: 'complete' | 'video'
+  /** 'complete': at Complete. 'video': right after a Finished video was saved.
+   *  'arrival': right after the Arrival video, at a company that rates at arrival. */
+  mode?: 'complete' | 'video' | 'arrival'
+  /** 'arrival': the Arrival video was saved (false: the recorder was left without one). */
+  videoSaved?: boolean
   onSave: () => void
   /** No photos to add, confirmed: save the rating flagged (stay.save({ photosSkipped: true })). */
   onSaveNoPhotos: () => void
@@ -342,13 +355,16 @@ export function StayAskModal({ visible, stay, mode = 'complete', onSave, onSaveN
   const rating = stay.value.rating
   const picked = rating > 0
   // Under 5 stars and short of the company's photos (lib/stayPhotos): no way
-  // out but 5 stars or the photos.
-  const exits = askExits(rating, stay.photosShort, { ratingRequired: mode === 'video' })
+  // out but 5 stars or the photos (or, except at arrival, No photos to add).
+  const exits = askExits(rating, stay.photosShort, { ratingRequired: mode !== 'complete', photosOnly: mode === 'arrival' })
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={() => { if (exits.close && !stay.saving) onClose() }}>
       <View style={styles.askOverlay}>
         <View style={styles.askCard}>
           {mode === 'video' && <Text style={styles.askVideoSaved}>✓ {t('stay_ask_after_video')}</Text>}
+          {mode === 'arrival' && (videoSaved
+            ? <Text style={styles.askVideoSaved}>✓ {t('stay_ask_after_arrival')}</Text>
+            : <Text style={styles.askBeforeCleaning}>{t('stay_ask_before_cleaning')}</Text>)}
           <Text style={styles.askTitle}>{t('stay_rating_title')}</Text>
           <Text style={styles.sub}>{t('stay_rating_sub')}</Text>
           <StayPicker stay={stay} />
@@ -357,7 +373,7 @@ export function StayAskModal({ visible, stay, mode = 'complete', onSave, onSaveN
           <TouchableOpacity style={[styles.askSaveBtn, (!exits.save || stay.saving) && styles.saveBtnDisabled]}
             onPress={onSave} disabled={!exits.save || stay.saving}>
             {stay.saving ? <ActivityIndicator color="#fff" size="small" />
-              : <Text style={styles.saveBtnText}>✓ {t(mode === 'video' ? 'stay_save' : 'stay_ask_save_complete')}</Text>}
+              : <Text style={styles.saveBtnText}>✓ {t(mode === 'complete' ? 'stay_ask_save_complete' : 'stay_save')}</Text>}
           </TouchableOpacity>
           {/* Kept in place once a star is picked: the sheet sits on the bottom
               edge, so a line going away would move the stars and flags up
@@ -395,6 +411,7 @@ const styles = StyleSheet.create({
   askCard: { backgroundColor: CARD, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
   askTitle: { fontSize: 18, fontWeight: '800', color: TEXT },
   askVideoSaved: { fontSize: 13, fontWeight: '800', color: '#065F46', marginBottom: 6 },
+  askBeforeCleaning: { fontSize: 13, fontWeight: '800', color: '#92400E', marginBottom: 6 },
   askSaveBtn: { backgroundColor: '#10B981', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 10 },
   askSkipBtn: { borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 8, backgroundColor: '#F3F4F6' },
   askSkipText: { color: TEXT_MUTED, fontSize: 14, fontWeight: '700' },
