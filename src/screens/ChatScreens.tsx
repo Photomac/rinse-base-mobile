@@ -103,6 +103,13 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
   }
 
   const teamChannels = channels.filter(c => c.channel_type === 'team')
+  // The Team channel tab only for a company that has one. Nothing in either
+  // app makes a team channel, and on 2026-11-18 one company (a demo) had any:
+  // everyone else opened Chat on an empty "No channels yet" tab, with their
+  // groups and DMs one tap away under the other tab (iClean: "it's not
+  // showing up"). Without one, Chat opens straight on the conversations.
+  const showTeamTab = teamChannels.length > 0
+  const shownTab: 'channels' | 'dms' = showTeamTab ? tab : 'dms'
   // Conversations newest first (DMs and groups), then everyone else A–Z.
   const dmRows = dmListRows(channels, crew, user.id)
 
@@ -172,19 +179,21 @@ export function ChatListScreen({ user, onOpenChannel, onNewDM }: { user: any; on
         </View>
       )}
 
-      <View style={styles.tabRow}>
-        {(['channels', 'dms'] as const).map(tabKey => (
-          <TouchableOpacity key={tabKey} style={[styles.tabBtn, tab === tabKey && styles.tabBtnActive]} onPress={() => setTab(tabKey)}>
-            <Text style={[styles.tabBtnText, tab === tabKey && styles.tabBtnTextActive]}>
-              {tabKey === 'channels' ? '# ' + t('team_channel') : '💬 ' + t('direct_message')}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {showTeamTab && (
+        <View style={styles.tabRow}>
+          {(['channels', 'dms'] as const).map(tabKey => (
+            <TouchableOpacity key={tabKey} style={[styles.tabBtn, shownTab === tabKey && styles.tabBtnActive]} onPress={() => setTab(tabKey)}>
+              <Text style={[styles.tabBtnText, shownTab === tabKey && styles.tabBtnTextActive]}>
+                {tabKey === 'channels' ? '# ' + t('team_channel') : '💬 ' + t('direct_message')}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
 
       {loading ? (
         <View style={styles.centered}><ActivityIndicator color={GOLD} /></View>
-      ) : tab === 'channels' ? (
+      ) : shownTab === 'channels' ? (
         <FlatList
           data={teamChannels}
           keyExtractor={item => item.id}
