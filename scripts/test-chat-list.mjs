@@ -11,9 +11,13 @@
 //   • everyone else follows A–Z as loaded, each person once, under a label
 //     shown only when both sections have rows;
 //   • a DM with no message yet leaves the person in the bottom section;
+//   • a group the viewer is in shows even with no message yet (iClean
+//     2026-11-18: groups made on the web never showed on a phone), after the
+//     chats with messages, A–Z by name;
 //   • a pair's two DMs show once, as the one openDM opens;
 // and, in the screen, that the tab renders these rows, a group opens itself and
-// a person opens through openDM, and the label goes through t().
+// a person opens through openDM, the label goes through t(), and the Team
+// channel tab shows only for a company that has a team channel.
 //
 // Usage: node scripts/test-chat-list.mjs
 import { readFileSync } from 'node:fs'
@@ -50,11 +54,18 @@ const channels = byServer([
   dm('dm-beto-old', 'beto', 8),                                // a pair's second DM
   dm('dm-carla', 'carla', null),                               // opened, never written in
   group('g-empty', 'Not yet', [ME, 'eli', 'dee'], null),
+  group('g-lost', 'Lost and found', [ME, 'ana'], null),
+  group('g-other-empty', 'Drivers', ['beto', 'dee'], null),    // empty, and the viewer is not in it
 ])
 
 const rows = dmListRows(channels, crew, ME)
-check('newest conversation on top, then a label, then everyone else A–Z', show(rows),
-  ['dm:dm-eli', 'group:g-weekend', 'dm:dm-beto', 'label', 'person:ana', 'person:carla', 'person:dee'])
+check('newest conversation on top, then groups not written in yet A–Z, a label, then everyone else A–Z', show(rows),
+  ['dm:dm-eli', 'group:g-weekend', 'dm:dm-beto', 'group:g-lost', 'group:g-empty', 'label', 'person:ana', 'person:carla', 'person:dee'])
+check('a group nobody has written in yet still shows (it has no other row)', show(rows).includes('group:g-empty'), true)
+check('an empty group the viewer is not in is not listed', show(rows).includes('group:g-other-empty'), false)
+check('only empty groups: they show, A–Z, then everyone else under the label',
+  show(dmListRows([group('g2', 'Supervisor', [ME, 'ana'], null), group('g1', 'Issues Report', [ME, 'ana'], null)], crew, ME)),
+  ['group:g1', 'group:g2', 'label', 'person:ana', 'person:beto', 'person:carla', 'person:dee', 'person:eli'])
 check('every teammate appears exactly once', crew.map(p => rows.filter(r => r.person?.id === p.id).length), [1, 1, 1, 1, 1])
 check('team channels stay on their own tab', show(rows).includes('dm:team') || show(rows).includes('group:team'), false)
 check('a group the viewer is not in is not listed', show(rows).includes('group:g-other'), false)
@@ -70,7 +81,9 @@ check('row keys are unique', new Set(rows.map(r => r.id)).size, rows.length)
 // Dee writes: her chat jumps to the top, out of the bottom section.
 const afterDee = byServer([...channels, dm('dm-dee', 'dee', 18)])
 check('a new message moves that chat to the top', show(dmListRows(afterDee, crew, ME)),
-  ['dm:dm-dee', 'dm:dm-eli', 'group:g-weekend', 'dm:dm-beto', 'label', 'person:ana', 'person:carla'])
+  ['dm:dm-dee', 'dm:dm-eli', 'group:g-weekend', 'dm:dm-beto', 'group:g-lost', 'group:g-empty', 'label', 'person:ana', 'person:carla'])
+const afterLost = byServer(channels.map(c => c.id === 'g-lost' ? { ...c, last_message: 'keys found', last_message_at: at(19) } : c))
+check('the first message in a group moves it to the top', show(dmListRows(afterLost, crew, ME)).slice(0, 2), ['group:g-lost', 'dm:dm-eli'])
 // Order comes from the times, not from the order the rows arrived in.
 check('sorted by last_message_at even if loaded out of order', show(dmListRows([...channels].reverse(), crew, ME)).slice(0, 3),
   ['dm:dm-eli', 'group:g-weekend', 'dm:dm-beto'])
@@ -89,6 +102,10 @@ check('the Direct message tab renders dmListRows', [/const dmRows = dmListRows\(
 check('a group row opens the group under its name', /onOpenChannel\(\{ \.\.\.item\.channel, displayName: getDMName\(item\.channel\) \}\)/.test(screen), true)
 check('a person row opens through openDM', /onPress=\{\(\) => openDM\(person\)\}/.test(screen), true)
 check('the label goes through t()', /t\('chat_start_a_conversation'\)/.test(screen), true)
+check('the Team channel tab shows only for a company with a team channel',
+  [/const showTeamTab = teamChannels\.length > 0/.test(screen), /\{showTeamTab && \(\n\s+<View style=\{styles\.tabRow\}>/.test(screen)], [true, true])
+check('without one, Chat opens on the conversations', /const shownTab: 'channels' \| 'dms' = showTeamTab \? tab : 'dms'/.test(screen), true)
+check('the list follows the tab shown, not the stored one', [/\) : shownTab === 'channels' \? \(/.test(screen), /\) : tab === 'channels' \? \(/.test(screen)], [true, false])
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
