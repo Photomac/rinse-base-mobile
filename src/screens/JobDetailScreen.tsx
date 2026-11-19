@@ -39,6 +39,7 @@ import { ti, localeFor } from '../lib/i18n'
 import { bagLine } from '../lib/laundryBags'
 import { PAUSE_REASONS, pauseReasonLabel } from '../lib/pauseReason'
 import { CANT_FINISH_PAUSE_NOTE, UNFINISHED_REASONS, canMarkUnfinished, finishingAt, isPausedClean, pausedText } from '../lib/unfinishedReason'
+import { groupRooms, leftToDo, roomState } from '../lib/leftToDo'
 import { captureRequiredPhoto, captureCheckFirstPhoto } from '../lib/requiredPhotoCapture'
 
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -351,6 +352,10 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
   // paused (jobs.unfinished_at, read on its own below: null with no signal or
   // before the server has the column), and the ask's answers.
   const [unfinishedAt, setUnfinishedAt] = useState<string | null>(job.unfinished_at ?? null)
+  // Why it was paused and the note left for whoever picks it back up
+  // (unfinished_clean_handover, CKS 11/18): null until read, or with no signal,
+  // or before the server has the function.
+  const [handover, setHandover] = useState<{ source?: string; reason?: string | null; note?: string | null; marked_by?: string | null } | null>(null)
   const [showCantFinish, setShowCantFinish] = useState(false)
   const [cantReason, setCantReason] = useState('')
   const [cantNote, setCantNote] = useState('')
@@ -527,6 +532,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     ...checklist.map((i: any) => i.title), ...checklist.map((i: any) => i.room),
     ...roomsMeta.map((r: any) => r.name),
     ...evidence.map((e: any) => e.area_name),
+    handover?.note,
     ...(checkFirst?.lines ?? []).map(l => l.body),
   ])
   const dailyMode = user._timeMode === 'daily'
@@ -829,6 +835,18 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       .catch(() => {})
     return () => { live = false }
   }, [job.id, job.status])
+
+  // Paused: who paused it, why, and their note, for the Left to do box. The
+  // marks table is the office's; this function hands the crew on the clean
+  // the latest mark only. An error leaves the box without it.
+  useEffect(() => {
+    if (job.status !== 'in_progress' || !unfinishedAt) { setHandover(null); return }
+    let live = true
+    Promise.resolve(supabase.rpc('unfinished_clean_handover', { p_job_id: job.id }))
+      .then(({ data, error }: any) => { if (live && !error) setHandover((data as any)?.mark ?? null) })
+      .catch(() => {})
+    return () => { live = false }
+  }, [job.id, job.status, unfinishedAt])
 
   // Day shift: a row from Home carries started_at. Otherwise read it (the saved
   // copy with no signal), with a Start still queued on this phone laid over it.
@@ -3082,6 +3100,49 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
                     <Text style={[styles.timeEntryText, { color: '#92400E', marginTop: 2 }]}>{t('paused_clean_banner')}</Text>
                   )}
                 </View>
+                {/* Left to do (CKS 11/18): why it was paused, the note left
+                    for whoever picks it up, and what the checklist still has,
+                    room by room, before they tap Continue. */}
+                {(() => {
+                  const left = leftToDo(
+                    groupRooms(roomsMeta, roomChecklist, evidence, defaultMode, EXTRA_TASKS_ROOM),
+                    { checked, evidence, signoffs, notOwed, questionType })
+                  const reasonKey = handover?.reason ? UNFINISHED_REASONS.find(r => r.value === handover.reason)?.key : undefined
+                  const why = [reasonKey ? t(reasonKey) : null, handover?.marked_by || null].filter(Boolean).join(' · ')
+                  const hasChecklist = left.roomsTotal > 0
+                  if (!why && !handover?.note && !hasChecklist) return null
+                  return (
+                    <View style={[styles.timeEntry, { backgroundColor: '#FFFBEB', borderColor: '#FDE68A', marginTop: 8, marginBottom: 0 }]}>
+                      {!!why && (
+                        <Text style={[styles.timeEntryText, { color: '#92400E' }]}>
+                          <Text style={{ fontWeight: '700' }}>{t('left_why')} </Text>{why}
+                        </Text>
+                      )}
+                      {!!handover?.note && (
+                        <Text style={[styles.timeEntryText, { color: '#92400E', marginTop: 2, fontStyle: 'italic' }]}>“{tx(handover.note)}”</Text>
+                      )}
+                      {hasChecklist && (
+                        <>
+                          <Text style={[styles.timeEntryText, { color: '#92400E', fontWeight: '700', marginTop: why || handover?.note ? 8 : 0 }]}>
+                            {t('left_to_do')}{left.rooms.length > 0 ? ` · ${ti(t('left_rooms_done'), { done: String(left.roomsDone), total: String(left.roomsTotal) })}` : ''}
+                          </Text>
+                          {left.rooms.length === 0 ? (
+                            <Text style={[styles.timeEntryText, { color: '#92400E', marginTop: 2 }]}>{t('left_to_do_none')}</Text>
+                          ) : left.rooms.map(r => (
+                            <Text key={r.key} style={[styles.timeEntryText, { color: '#92400E', marginTop: 2 }]}>
+                              • {tx(r.name)}: {[
+                                r.itemsLeft > 0 ? ti(t('left_items'), { n: String(r.itemsLeft) }) : null,
+                                r.needsSignoff ? t('left_signoff') : null,
+                                r.questionsLeft > 0 ? ti(t('left_questions'), { n: String(r.questionsLeft) }) : null,
+                                r.photosLeft > 0 ? ti(t('left_photos'), { n: String(r.photosLeft) }) : null,
+                              ].filter(Boolean).join(', ')}
+                            </Text>
+                          ))}
+                        </>
+                      )}
+                    </View>
+                  )
+                })()}
                 {dailyMode && !completeNotOnClean && (
                   <TouchableOpacity style={[styles.clockBtn, { backgroundColor: TEAL, marginTop: 8 }]} onPress={handleContinueDaily} disabled={saving}>
                     {saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.clockBtnText}>▶ {t('continue_clean')}</Text>}
@@ -3136,51 +3197,11 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
         {isStarted && !isTask && (roomChecklist.length > 0 || evidence.length > 0 || (loadingChecklist && !walkthroughJob)) && (
           <View style={styles.card}>
             {(() => {
-              const groups: any[] = []
-              const byId = new Map<string, any>()
-              for (const rm of roomsMeta) {
-                const name = (rm.name || '').trim() || (
-                  rm.room_type === 'bedroom' ? (rm.instance_no === 1 ? 'Primary Bedroom' : `Bedroom ${rm.instance_no}`)
-                  : rm.room_type === 'bathroom' ? `Bathroom ${rm.instance_no}`
-                  : rm.room_type === 'final' ? 'Final Guest-Ready Check'
-                  : rm.room_type === 'living' ? 'Living Room'
-                  : rm.room_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) + (rm.instance_no > 1 ? ` ${rm.instance_no}` : ''))
-                const g = { key: rm.id, name, mode: rm.execution_mode || defaultMode, items: [] as any[] }
-                byId.set(rm.id, g); groups.push(g)
-              }
-              const other = { key: '__other__', name: 'Other', mode: 'detailed', items: [] as any[] }
-              // Extra tasks the office added to this clean only (rinse-base-app
-              // src/lib/extraTasks.ts: no room, room text EXTRA_TASKS_ROOM). Their
-              // own section, first, so one-off work isn't lost at the bottom
-              // under "Other" (Five Star 11/12).
-              const extra = { key: '__extra__', name: EXTRA_TASKS_ROOM, mode: 'detailed', items: [] as any[] }
-              for (const item of roomChecklist) {
-                const g = item.room_uid ? byId.get(item.room_uid) : null
-                if (!g && item.room === EXTRA_TASKS_ROOM) { extra.items.push(item); continue }
-                ;(g || other).items.push(item)
-              }
-              if (extra.items.length > 0) groups.unshift(extra)
-              if (other.items.length > 0) groups.push(other)
-              const shown = groups.filter(g => g.items.length > 0 || evidence.some((e: any) => (e.room_id || '__other__') === g.key))
-
-              const stateOf = (g: any) => {
-                const tasks = g.items.filter((i: any) => i.item_kind !== 'verify')
-                const verifies = g.items.filter((i: any) => i.item_kind === 'verify')
-                const doneTasks = tasks.filter((i: any) => checked[i.id]).length
-                const answered = verifies.filter((i: any) => i.result != null || checked[i.id]).length
-                const issues = verifies.filter((i: any) => i.result === 'issue').length
-                const evRows = evidence.filter((e: any) => (e.room_id || '__other__') === g.key)
-                const evReq = evRows.filter((e: any) => e.required && !notOwed(e.id, e.required))
-                const req = { total: evReq.length, done: evReq.filter((e: any) => e.photo_url).length }
-                const signed = !!signoffs[g.key]
-                // A question isn't answered by the room's sign-off (lib/lineAnswers).
-                const questionsLeft = g.items.filter((i: any) => questionType(i) && i.answer == null).length
-                const workDone = g.mode === 'room_complete'
-                  ? signed && questionsLeft === 0
-                  : doneTasks === tasks.length && answered === verifies.length
-                return { tasks, verifies, doneTasks, answered, issues, req, signed,
-                  complete: g.items.length > 0 && workDone && req.done >= req.total }
-              }
+              // Rooms and the "is this room done" rule live in lib/leftToDo, so
+              // the paused card's Left to do list reads exactly what this card
+              // ticks green (CKS 11/18).
+              const shown = groupRooms(roomsMeta, roomChecklist, evidence, defaultMode, EXTRA_TASKS_ROOM)
+              const stateOf = (g: any) => roomState(g, { checked, evidence, signoffs, notOwed, questionType })
 
               const firstOpen = (shown.find(g => !stateOf(g).complete) || shown[0])?.key
               const roomsDone = shown.filter(g => stateOf(g).complete).length
