@@ -74,7 +74,7 @@ const detail = src('screens/JobDetailScreen.tsx')
 const card = src('lib/checklistCard.ts')
 ok('a clean is a walkthrough clean when every row is in the band',
   card.includes('walkthrough: isWalkthroughJob(rows)') && detail.includes('setWalkthroughJob(v.walkthrough)'))
-ok('the room accordion drops walkthrough lines, keeps the shots', detail.includes('const roomChecklist = walkthroughJob ? [] : checklist') && detail.includes('for (const item of roomChecklist)'))
+ok('the room accordion drops walkthrough lines, keeps the shots', detail.includes('const roomChecklist = walkthroughJob ? [] : checklist') && detail.includes('groupRooms(roomsMeta, roomChecklist, evidence, defaultMode, EXTRA_TASKS_ROOM)'))
 ok('the clean screen renders the walkthrough card', detail.includes('<WalkthroughChecklist job={job} user={user}'))
 
 // ── strings ──
