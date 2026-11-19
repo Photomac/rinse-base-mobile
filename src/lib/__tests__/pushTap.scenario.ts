@@ -58,7 +58,13 @@ async function main() {
   ok('…and not another company\'s', tappedJobId({ type: 'guest_left', jobId: 'j5', tenantId: 'ten-other' }, TENANT) === null)
   ok('a "clean moved" push opens that clean at its new time', tappedJobId({ type: 'job_rescheduled', jobId: 'j6', tenantId: TENANT }, TENANT) === 'j6')
   ok('…and not another company\'s', tappedJobId({ type: 'job_rescheduled', jobId: 'j6', tenantId: 'ten-other' }, TENANT) === null)
-  ok('exactly those six types', JOB_PUSH_TYPES.slice().sort().join() === 'guest_left,home_prepped,inspection_result,job_assigned,job_reminder,job_rescheduled')
+  ok('an "inspection still to file" push opens the inspection visit (jobId), not the clean (cleanId)',
+    tappedJobId({ type: 'inspection_owed', jobId: 'v7', cleanId: 'j7', inspectionId: 'r7', tenantId: TENANT }, TENANT) === 'v7')
+  ok('…and not another company\'s', tappedJobId({ type: 'inspection_owed', jobId: 'v7', tenantId: 'ten-other' }, TENANT) === null)
+  ok('…a visit the inspector is on opens for them; an office phone opens any of the company\'s',
+    openable(job('v7', ['u-mia'], { job_type: 'inspection' }), MIA) && !openable(job('v7', ['u-other'], { job_type: 'inspection' }), MIA) &&
+    openable(job('v7', ['u-other'], { job_type: 'inspection' }), OWNER))
+  ok('exactly those seven types', JOB_PUSH_TYPES.slice().sort().join() === 'guest_left,home_prepped,inspection_owed,inspection_result,job_assigned,job_reminder,job_rescheduled')
   ok('any other type keeps doing nothing',
     tappedJobId({ type: 'chat_message', jobId: 'j1' }, TENANT) === null && tappedJobId({ type: 'sos', jobId: 'j1' }, TENANT) === null &&
     tappedJobId({ jobId: 'j1' }, TENANT) === null)
