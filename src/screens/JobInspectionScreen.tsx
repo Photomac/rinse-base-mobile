@@ -44,9 +44,18 @@
 //     form stays open, the inspector stays clocked in.
 // A server that can't answer (before the hold migration, no signal) falls
 // back to the status read: not completed waits, a failed read files.
+//
+// OPENED WHILE THE CREW ARE STILL CLEANING (CKS 2026-11-15, BOCCE; lib/inspectionLeave):
+// a banner at the top says what filing does now, from that same answer
+// ('hold': Complete inspection holds it and guest ready goes out when they
+// complete the clean; 'wait': an inspector files it, Save progress keeps the
+// notes). And back (the header's or Android's) asks "Leave without filing?"
+// when a result, the notes or a walkthrough answer changed since it was
+// loaded or saved: Stay, Save progress, Leave. This screen is an overlay of
+// the job screen, not a navigator route, so there is no swipe-back to catch.
 
 import React, { useState, useEffect, useRef } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image, Modal } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert, Image, Modal, BackHandler } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { fetchJobTaskPay } from '../lib/jobTaskPay'
@@ -61,6 +70,7 @@ import type { StagingPhotoRow } from '../lib/stagingRooms'
 import { localeFor, ti, type TranslationKey } from '../lib/i18n'
 import { filingGaps, hasFilingGaps } from '../lib/inspectionFiling'
 import { checkFilingMode, isHeld, type FilingMode } from '../lib/inspectionCleanGate'
+import { formChanged, formKey, leaveChoices, leaveDecision, openCleanBanner } from '../lib/inspectionLeave'
 import type { LineClipState } from '../lib/lineVideos'
 import type { WalkthroughLine } from '../lib/walkthrough'
 import { SLATE_DARK, GOLD } from '../lib/theme'
@@ -150,7 +160,31 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   const [minutes, setMinutes] = useState('')
   const [notes, setNotes] = useState('')
 
+  // The form as loaded or last saved (lib/inspectionLeave formKey), and whether
+  // a walkthrough line was answered since: what "Leave without filing?" asks about.
+  const savedForm = useRef<string | null>(null)
+  const walkTouched = useRef(false)
+  // The clean's status and what filing does now (filingModeNow, the form's own
+  // answer), for the banner over an inspection opened while the crew clean.
+  const [cleanStatus, setCleanStatus] = useState<string | null>(null)
+  const [bannerMode, setBannerMode] = useState<FilingMode | null>(null)
+  // Android's hardware back goes where the header's does (requestLeave), with
+  // this render's state; a photo screen or viewer open over the form (a Modal)
+  // takes the back press itself.
+  const leaveRef = useRef<() => void>(() => onBack())
+  leaveRef.current = requestLeave
+
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { leaveRef.current(); return true })
+    return () => sub.remove()
+  }, [])
+  useEffect(() => {
+    if (!rec?.parent_job_id || rec.completed_at || isHeld(rec)) { setBannerMode(null); return }
+    let live = true
+    filingModeNow().then(m => { if (live) setBannerMode(m) }).catch(() => {})
+    return () => { live = false }
+  }, [rec?.id, rec?.parent_job_id, rec?.completed_at, rec?.held_at])
 
   async function load() {
     setLoading(true)
@@ -178,14 +212,19 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
       setCorrections(!!data.corrections_made)
       setMinutes(data.correction_minutes != null ? String(data.correction_minutes) : '')
       setNotes(data.notes ?? '')
+      savedForm.current = formKey({
+        layer: data.layer ?? 'supervisor', result: data.result ?? '', corrections: !!data.corrections_made,
+        minutes: data.correction_minutes != null ? String(data.correction_minutes) : '', notes: data.notes ?? '',
+      })
       if (data.parent_job_id) {
         // Best-effort — the form works without it (old cleans have no rooms).
         const [{ data: std }, { data: parent }] = await Promise.all([
           supabase.rpc('job_turnover_checklist', { p_job_id: data.parent_job_id }),
-          supabase.from('jobs').select('completed_at, scheduled_start').eq('id', data.parent_job_id).maybeSingle(),
+          supabase.from('jobs').select('completed_at, scheduled_start, status').eq('id', data.parent_job_id).maybeSingle(),
         ])
         setStandard(std ?? [])
         setParentJob(parent ?? null)
+        setCleanStatus((parent as any)?.status ?? null)
       }
     }
     // Reference shots hang off the ADDRESS, so they load whether or not this
@@ -224,15 +263,33 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
     }
   }
 
-  async function saveProgress() {
+  // True when it saved: the form is then what was saved, and leaving asks nothing.
+  async function saveProgress(): Promise<boolean> {
     setSaving(true)
     const patch: any = fields()
     if (!rec?.started_at) patch.started_at = new Date().toISOString()
     const { error } = await supabase.from('job_inspections')
       .update(patch).eq('id', rec.id).eq('tenant_id', tenantId)
     setSaving(false)
-    if (error) { Alert.alert(t('could_not_save'), error.message); return }
+    if (error) { Alert.alert(t('could_not_save'), error.message); return false }
+    savedForm.current = formKey({ layer, result, corrections, minutes, notes })
+    walkTouched.current = false
     load()
+    return true
+  }
+
+  // Back, from the header or Android's hardware back (lib/inspectionLeave):
+  // leaves at once when nothing changed since it was loaded or saved (or it's
+  // filed or held); otherwise asks: Stay, Save progress, Leave.
+  function requestLeave() {
+    const done = !rec || !!rec.completed_at || isHeld(rec)
+    const changed = formChanged(savedForm.current, { layer, result, corrections, minutes, notes })
+    if (leaveDecision({ done, formChanged: changed, walkTouched: walkTouched.current }) === 'leave') { onBack(); return }
+    Alert.alert(`📝 ${t('insp_leave_title')}`, bannerMode === 'wait' ? t('insp_leave_msg_wait') : t('insp_leave_msg'),
+      leaveChoices({ canSave: !saving }).map(c =>
+        c === 'stay' ? { text: t('insp_leave_stay'), style: 'cancel' as const }
+        : c === 'save' ? { text: t('insp_save'), onPress: () => { saveProgress().then(ok => { if (ok) onBack() }) } }
+        : { text: t('insp_leave_go'), style: 'destructive' as const, onPress: () => onBack() }))
   }
 
   // Mirror the DB CHECK constraints client-side so the inspector gets a sentence
@@ -350,11 +407,21 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
   const held = isHeld(rec)
   const done = !!rec.completed_at || held
   const triggerKey = TRIGGER_KEY[rec.trigger_reason]
+  // The crew are still cleaning (lib/inspectionLeave): what filing does now.
+  const banner = openCleanBanner({ done, cleanStatus, mode: bannerMode })
 
   return (
     <SafeAreaView style={styles.screen}>
-      <Header onBack={onBack} title={t('inspection')} />
+      <Header onBack={requestLeave} title={t('inspection')} />
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+
+        {banner && (
+          <View style={styles.openCleanBanner}>
+            <Text style={styles.openCleanBannerText}>
+              🧹 {banner === 'hold' ? t('insp_open_clean_hold') : t('insp_open_clean_wait')}
+            </Text>
+          </View>
+        )}
 
         {/* WHY this clean was inspected. §7.14: a pass rate without its sample is
             worse than no pass rate, so the reason is shown, never buried. */}
@@ -388,7 +455,7 @@ export function JobInspectionScreen({ job, user, onBack, clockOut, onFiled }: Pr
         {/* The walkthrough: what this inspector checks, section by section.
             Renders nothing when the visit has none. */}
         <WalkthroughChecklist job={job} user={user} readOnly={done} onAddPhoto={setPhotoLine} refreshKey={walkKey}
-          onState={s => { walkState.current = s }} />
+          onState={s => { walkState.current = s }} onChanged={() => { walkTouched.current = true }} />
 
         {/* The parent clean's executed standard — what the crew signed off,
             room by room (§7.9: a score is only fair against the standard).
@@ -624,6 +691,8 @@ const styles = StyleSheet.create({
   whySub: { fontSize: 12, color: '#64748B', marginTop: 3, lineHeight: 17 },
   heldBanner: { backgroundColor: '#FEF3C7', borderColor: '#F59E0B', borderWidth: 1, borderRadius: 10, padding: 10, marginBottom: 14 },
   heldBannerText: { fontSize: 13, fontWeight: '700', color: '#92400E', lineHeight: 18 },
+  openCleanBanner: { backgroundColor: '#EFF6FF', borderColor: '#3B82F6', borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 14 },
+  openCleanBannerText: { fontSize: 13, fontWeight: '700', color: '#1E3A8A', lineHeight: 19 },
 
   label: { fontSize: 14, fontWeight: '800', color: NAVY, marginBottom: 3 },
   hint: { fontSize: 12, color: '#64748B', lineHeight: 17, marginBottom: 8 },
