@@ -13,6 +13,7 @@ import { isOfficeRole, isMyJob, jobsInScope, dayView, type JobScope } from '../l
 import { crewGroups, listItems } from '../lib/crewGroups'
 import { ti, localeFor, capFirst } from '../lib/i18n'
 import { pausedText } from '../lib/unfinishedReason'
+import { closingBlockerCounts } from '../lib/closingBlockers'
 import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { currencySymbol } from '../lib/money'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
@@ -326,20 +327,16 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   // Resolve "ready to close" vs "still short of photos" per stranded clean,
   // using the SAME job_completion_blockers() gate JobDetailScreen enforces on
   // Complete — so the badge can never promise something the gate then refuses.
-  // Kept out of load() so the day paints first; badges fill in after. Offline
-  // it simply stays unresolved and no badge renders.
+  // One request for all of them (lib/closingBlockers: an office phone used to
+  // fire one request per open clean, 42-55 at once). Kept out of load() so the
+  // day paints first; badges fill in after. Offline it simply stays unresolved
+  // and no badge renders.
   useEffect(() => {
     if (needsClosing.length === 0) { setClosingBlockers({}); return }
     let cancelled = false
-    ;(async () => {
-      const entries = await Promise.all(needsClosing.map(async (j: any) => {
-        const { data, error } = await supabase.rpc('job_completion_blockers', { p_job_id: j.id })
-        if (error) return null
-        return [j.id, (data ?? []).length] as const
-      }))
-      if (cancelled) return
-      setClosingBlockers(Object.fromEntries(entries.filter(Boolean) as (readonly [string, number])[]))
-    })()
+    closingBlockerCounts((fn, args) => supabase.rpc(fn, args), needsClosing.map((j: any) => j.id as string))
+      .then(counts => { if (!cancelled) setClosingBlockers(counts) })
+      .catch(() => {})
     return () => { cancelled = true }
   }, [needsClosing])
 
