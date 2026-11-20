@@ -2,7 +2,7 @@
 // request.
 //
 // crew_pay_through_days(start, ends[], user) (rinse-base-app
-// 20261120163437_crew_pay_through_days) answers, for each day end and numbered
+// 20261120165023_crew_pay_through_days) answers, for each day end and numbered
 // from 1, exactly the rows crew_pay_for_period(start, that end, user) returns,
 // asked as the person: the same pay the Payroll page pays, the same checks.
 // My Week used to send one crew_pay_for_period request per day, all at once:

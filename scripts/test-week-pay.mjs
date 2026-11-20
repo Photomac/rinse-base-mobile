@@ -4,7 +4,7 @@
 // My Week used to ask crew_pay_for_period for the running pay through each day
 // of the week so far in its own request, all at once (up to 7 per load, 118 ms
 // each on average where the whole week takes 6-35 ms in one go). lib/weekPay
-// asks crew_pay_through_days (rinse-base-app 20261120163437) once and hands
+// asks crew_pay_through_days (rinse-base-app 20261120165023_crew_pay_through_days) once and hands
 // myWeekRead the same per-day answers.
 //
 // Runs the REAL src/lib/weekPay.ts (with closingBlockers.ts) under Node's type
