@@ -29,8 +29,8 @@
         "NSPhotoLibraryUsageDescription": "Rinsebase accesses your photo library to upload cleaning job photos.",
         "NSPhotoLibraryAddUsageDescription": "Rinsebase saves cleaning job photos to your photo library.",
         "NSMicrophoneUsageDescription": "Rinsebase uses the microphone for SOS emergency audio alerts.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property and to send clock-out reminders when you leave a job site.",
-        "NSLocationWhenInUseUsageDescription": "Rinsebase uses your location to verify you're at the correct property.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Rinsebase uses your location while you're working to verify you're at the correct property, remind you to clock out when you leave a job site and, if your company turns it on, record your route for your office.",
+        "NSLocationWhenInUseUsageDescription": "Rinsebase uses your location while you're working to verify you're at the correct property and, if your company turns it on, record your route for your office.",
         "UIBackgroundModes": [
           "location",
           "fetch"
@@ -67,8 +67,8 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Rinsebase uses your location to verify you're at the correct property and to remind you to clock out when you leave a job site.",
-          "locationWhenInUsePermission": "Rinsebase uses your location to verify you're at the correct cleaning property.",
+          "locationAlwaysAndWhenInUsePermission": "Rinsebase uses your location while you're working to verify you're at the correct property, remind you to clock out when you leave a job site and, if your company turns it on, record your route for your office.",
+          "locationWhenInUsePermission": "Rinsebase uses your location while you're working to verify you're at the correct property and, if your company turns it on, record your route for your office.",
           "isAndroidBackgroundLocationEnabled": true,
           "isIosBackgroundLocationEnabled": true
         }
