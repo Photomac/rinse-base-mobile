@@ -92,8 +92,11 @@ check('open flags: needs_restock, through the property\'s catalog (!inner), newe
   /\.eq\('needs_restock', true\)/.test(openRead), /\.eq\('address_inventory\.address_id', addrId\)/.test(openRead),
   /\.order\('created_at', \{ ascending: false \}\)/.test(openRead), /\.limit\(100\)/.test(openRead), /key: `inv:open:\$\{addrId\}`/.test(openRead),
 ], [true, true, true, true, true, true, true])
-check('the switch: its own read of the one column', /key: `scten:\$\{tenantId\}`[\s\S]{0,120}\.select\('crew_supply_counts'\)\.eq\('id', tenantId\)\.maybeSingle\(\)/.test(reads), true)
-check('the two-choice switch: its own read of the one column', /key: `rtcten:\$\{tenantId\}`[\s\S]{0,120}\.select\('restock_two_choice'\)\.eq\('id', tenantId\)\.maybeSingle\(\)/.test(reads), true)
+// Each its own key and its own column, through the company's shared settings
+// read (lib/tenantColumnsCore): a database without the column still fails that
+// read alone (scripts/test-tenant-settings.mjs).
+check('the switch: its own read of the one column', /key: `scten:\$\{tenantId\}`,\n  q: \(\) => tenantColumns\(tenantId, \['crew_supply_counts'\]\),/.test(reads), true)
+check('the two-choice switch: its own read of the one column', /key: `rtcten:\$\{tenantId\}`,\n  q: \(\) => tenantColumns\(tenantId, \['restock_two_choice'\]\),/.test(reads), true)
 check('the clean\'s lines and the prep card\'s open flags read the kind of low', [
   /key: `inv:log:\$\{jobId\}`[\s\S]{0,400}\.select\('[^']*\bneeds_restock, restock_level\b[^']*'\)/.test(reads),
   // Since crew read scope stage 1: prep_restock_flags() (every open flag at the

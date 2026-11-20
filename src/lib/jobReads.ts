@@ -12,6 +12,7 @@
 // Each builder returns { key, q }; q() builds the query when it runs, so
 // calling a builder sends nothing.
 import { supabase } from './supabase'
+import { tenantColumns } from './tenantSettings'
 import type { CacheRead } from './dataCache'
 import { dayKey, startOfDayInTz, endOfTomorrowInTz } from './timezone'
 import { shiftYmd } from './nextArrival'
@@ -184,8 +185,7 @@ export async function sameDayInspections(user: any, list: string, jobs: any[]): 
 
 export const tenantVideoRead = (tenantId: string): CacheRead => ({
   key: `tenvideo:${tenantId}`,
-  q: () => supabase.from('tenants')
-    .select('video_walkthroughs_enabled').eq('id', tenantId).maybeSingle(),
+  q: () => tenantColumns(tenantId, ['video_walkthroughs_enabled']),
 })
 
 /** What this clean still owes in walkthrough videos (lib/videosOwed). */
@@ -232,8 +232,7 @@ export function nextArrivalReads(job: any, addrId: string, tenantId: string) {
     } as CacheRead,
     company: {
       key: `nextarr:ten:${tenantId}`,
-      q: () => supabase.from('tenants')
-        .select('default_checkin_time').eq('id', tenantId).maybeSingle(),
+      q: () => tenantColumns(tenantId, ['default_checkin_time']),
     } as CacheRead,
   }
 }
@@ -355,8 +354,7 @@ export const lineVideosRead = (jobId: string): CacheRead => ({
 
 export const tenantSeedRead = (tenantId: string): CacheRead => ({
   key: `tenseed:${tenantId}`,
-  q: () => supabase.from('tenants')
-    .select('default_checklist_seed').eq('id', tenantId).maybeSingle(),
+  q: () => tenantColumns(tenantId, ['default_checklist_seed']),
 })
 
 export const roomsRead = (addressId: string): CacheRead => ({
@@ -380,8 +378,7 @@ export const addressModeRead = (addressId: string): CacheRead => ({
 
 export const tenantModeRead = (tenantId: string): CacheRead => ({
   key: `tenmode:${tenantId}`,
-  q: () => supabase.from('tenants')
-    .select('checklist_execution_mode').eq('id', tenantId),
+  q: () => tenantColumns(tenantId, ['checklist_execution_mode'], 'list'),
 })
 
 export const photoRequirementsRead = (addressId: string): CacheRead => ({
@@ -395,8 +392,7 @@ export const photoRequirementsRead = (addressId: string): CacheRead => ({
  *  (tenants.enforce_photo_requirements)? The shot counter shows only when on. */
 export const photoEnforceRead = (tenantId: string): CacheRead => ({
   key: `tenphotoreq:${tenantId}`,
-  q: () => supabase.from('tenants')
-    .select('enforce_photo_requirements').eq('id', tenantId).maybeSingle(),
+  q: () => tenantColumns(tenantId, ['enforce_photo_requirements']),
 })
 
 /** The latest shot per required photo (URLs only — no image is downloaded). */
@@ -451,19 +447,17 @@ export const checkFirstStartRead = (jobId: string): CacheRead => ({
 /** The company's switch (tenants.check_first_required): lines block Complete only when on. */
 export const checkFirstTenantRead = (tenantId: string): CacheRead => ({
   key: `cften:${tenantId}`,
-  q: () => supabase.from('tenants')
-    .select('check_first_required').eq('id', tenantId).maybeSingle(),
+  q: () => tenantColumns(tenantId, ['check_first_required']),
 })
 
 /** The company's clock-in location switch and office pin (lib/clockInLocation).
  *  On its own: before its migration this read errors, which means off. */
 export const clockInRuleRead = (tenantId: string): CacheRead => ({
   key: `cilrule:${tenantId}`,
-  q: () => supabase.from('tenants')
-    // home_base_*: the company location, exact only when the office placed it
-    // (lib/dayClock companyLocationSite). Before that migration the read fails
-    // and clockInRule reads it as off with no location: a punch as before.
-    .select('clock_in_location_required, lat, lng, home_base_precision, home_base_label').eq('id', tenantId).maybeSingle(),
+  // home_base_*: the company location, exact only when the office placed it
+  // (lib/dayClock companyLocationSite). Before that migration the read fails
+  // and clockInRule reads it as off with no location: a punch as before.
+  q: () => tenantColumns(tenantId, ['clock_in_location_required', 'lat', 'lng', 'home_base_precision', 'home_base_label']),
 })
 
 /** The clean's property and how far its pin can be trusted. */
@@ -534,8 +528,7 @@ export const openRestockRead = (addrId: string): CacheRead => ({
  *  fails this one alone and the screen keeps its counts. */
 export const supplyCountsTenantRead = (tenantId: string): CacheRead => ({
   key: `scten:${tenantId}`,
-  q: () => supabase.from('tenants')
-    .select('crew_supply_counts').eq('id', tenantId).maybeSingle(),
+  q: () => tenantColumns(tenantId, ['crew_supply_counts']),
 })
 
 /** The company's switch (tenants.restock_two_choice, web migration
@@ -544,8 +537,7 @@ export const supplyCountsTenantRead = (tenantId: string): CacheRead => ({
  *  database without the column fails this one alone, which means off. */
 export const restockTwoChoiceTenantRead = (tenantId: string): CacheRead => ({
   key: `rtcten:${tenantId}`,
-  q: () => supabase.from('tenants')
-    .select('restock_two_choice').eq('id', tenantId).maybeSingle(),
+  q: () => tenantColumns(tenantId, ['restock_two_choice']),
 })
 
 /** The company's number (tenants.stay_rating_photos_required, rinse-base-app
@@ -554,8 +546,7 @@ export const restockTwoChoiceTenantRead = (tenantId: string): CacheRead => ({
  *  column fails this one alone, which means off. */
 export const stayPhotosTenantRead = (tenantId: string): CacheRead => ({
   key: `srpten:${tenantId}`,
-  q: () => supabase.from('tenants')
-    .select('stay_rating_photos_required').eq('id', tenantId).maybeSingle(),
+  q: () => tenantColumns(tenantId, ['stay_rating_photos_required']),
 })
 
 /** The company's switch (tenants.stay_rating_at_arrival, rinse-base-app CKS
@@ -564,8 +555,7 @@ export const stayPhotosTenantRead = (tenantId: string): CacheRead => ({
  *  so a database without the column fails this one alone, which means off. */
 export const stayAtArrivalTenantRead = (tenantId: string): CacheRead => ({
   key: `sraten:${tenantId}`,
-  q: () => supabase.from('tenants')
-    .select('stay_rating_at_arrival').eq('id', tenantId).maybeSingle(),
+  q: () => tenantColumns(tenantId, ['stay_rating_at_arrival']),
 })
 
 /** The clean's photos that show how the guests left it (lib/stayPhotos
@@ -657,8 +647,7 @@ export function prepReads(user: any, cleans: any[], ymd: string) {
   return {
     tenant: {
       key: `prep:ten:${user.tenant_id}`,
-      q: () => supabase.from('tenants')
-        .select('crew_prep_linens, default_checkin_time').eq('id', user.tenant_id).maybeSingle(),
+      q: () => tenantColumns(user.tenant_id, ['crew_prep_linens', 'default_checkin_time']),
     } as CacheRead,
     addresses: {
       key: `prep:addr:${user.id}:${ymd}`,
