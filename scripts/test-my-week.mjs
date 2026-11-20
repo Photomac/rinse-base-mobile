@@ -184,9 +184,12 @@ check('any other pay type, or no rate: no amount',
 // ── The reads ───────────────────────────────────────────────────────────────
 const reads = read('src/lib/myWeekReads.ts')
 const code = s => s.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
-check('pay only from crew_pay_for_period', [...code(reads).matchAll(/\.rpc\('([a-z_]+)'/g)].map(m => m[1]), ['crew_pay_for_period'])
-check('…for the person themselves', /p_user_id: user\.id/.test(reads), true)
-check('…as running totals from the week\'s start to each day\'s last millisecond', /p_start: fromIso, p_end: lastMsOf\(b\)/.test(reads) && /new Date\(b\.endMs - 1\)\.toISOString\(\)/.test(reads), true)
+const weekPay = read('src/lib/weekPay.ts')
+check('pay only from crew_pay_for_period: every day in one request (crew_pay_through_days asks it per day), the per-day calls only as the fallback',
+  [...code(reads + weekPay).matchAll(/\brpc\('([a-z_]+)'/g)].map(m => m[1]), ['crew_pay_through_days', 'crew_pay_for_period'])
+check('…for the person themselves', /weekPayThrough\(\(fn, args\) => supabase\.rpc\(fn, args\), fromIso, days\.slice\(0, payDays\)\.map\(lastMsOf\), user\.id\)/.test(reads)
+  && (weekPay.match(/p_user_id: userId/g) ?? []).length === 2, true)
+check('…as running totals from the week\'s start to each day\'s last millisecond', /p_start: start, p_ends: ends/.test(weekPay) && /p_start: start, p_end: end/.test(weekPay) && /new Date\(b\.endMs - 1\)\.toISOString\(\)/.test(reads), true)
 check('…only for the days up to today', /days\.slice\(0, payDays\)\.map/.test(reads), true)
 check('their own clock entries only', /\.eq\('user_id', user\.id\)/.test(reads), true)
 check('jobs they\'re assigned, confirmed ones only', /job_assignments!inner\(user_id\)/.test(reads) && /\.eq\('job_assignments\.user_id', user\.id\)/.test(reads) && /\.in\('status', SCHEDULED_STATUSES\)/.test(reads), true)
