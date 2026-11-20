@@ -4,13 +4,16 @@
 // person's own clock entries, the jobs they're assigned (for the time on the
 // schedule), and the pay resolver's running totals through each day so far.
 // Pay comes only from crew_pay_for_period, which answers a crew member about
-// themselves: no rate or price column is read here.
+// themselves: no rate or price column is read here. All the days' totals come
+// in one request (lib/weekPay: crew_pay_through_days asks crew_pay_for_period
+// for each day), not one request per day.
 //
 // Only the CURRENT week is kept for offline, under one key per person, so the
 // cache doesn't grow a copy per week looked at. An earlier week is read live.
 // The saved copy names its week; a copy from another week is never shown.
 import { supabase } from './supabase'
 import type { CacheRead } from './dataCache'
+import { weekPayThrough, type DayPay } from './weekPay'
 import { SCHEDULED_STATUSES, payTotals, type DayBounds, type PaySoFar, type PaySchedule, type WeekJob } from './myWeek'
 import type { TeamEntry } from './teamDay'
 
@@ -72,7 +75,7 @@ export function myWeekRead(user: { id: string; tenant_id: string }, days: DayBou
   return {
     key: `myweek:week:${user.id}`,
     q: () => (async () => {
-      const [e, j, ...pays]: any[] = await Promise.all([
+      const [e, j, pays]: any[] = await Promise.all([
         supabase.from('job_time_entries')
           .select(WEEK_ENTRY_COLUMNS)
           .eq('tenant_id', user.tenant_id)
@@ -90,9 +93,8 @@ export function myWeekRead(user: { id: string; tenant_id: string }, days: DayBou
           .lt('scheduled_start', toIso)
           .order('scheduled_start')
           .limit(300),
-        ...days.slice(0, payDays).map(b => supabase.rpc('crew_pay_for_period', {
-          p_start: fromIso, p_end: lastMsOf(b), p_user_id: user.id,
-        })),
+        // One answer per day asked, as the per-day calls answered.
+        weekPayThrough((fn, args) => supabase.rpc(fn, args), fromIso, days.slice(0, payDays).map(lastMsOf), user.id),
       ])
       // `offline: true` marks it for the screen: with nothing saved, cachedRead
       // hands this error back as is, and "not saved on this phone" is the answer.
@@ -100,7 +102,7 @@ export function myWeekRead(user: { id: string; tenant_id: string }, days: DayBou
       if (offline) return { data: null, error: { ...offline.error, message: offline.error?.message, offline: true }, status: 0 }
       const failed = [e, j].find(r => r.error)
       if (failed) return { data: null, error: failed.error, status: failed.status }
-      const payFailed = pays.find(r => r.error)
+      const payFailed = (pays as DayPay[]).find(r => r.error)
       const data: WeekData = {
         weekStart,
         entries: (e.data ?? []) as TeamEntry[],
