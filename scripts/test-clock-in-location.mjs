@@ -97,7 +97,10 @@ has('the office card uses the audited RPC', loc, "supabase.rpc('allow_clock_in_h
 // office placed it (tenants.home_base_precision).
 has('the switch fails to off', loc, /if \(error \|\| !data\) return \{ required: false, office: null \}[\s\S]{0,40}return \{ required: !!data\.clock_in_location_required, office: companyLocationSite\(data\) \}/)
 has('the day pack saves the switch and the property', fn(reads, 'export function jobPackReads(', '\n}\n'), /clockInRuleRead\(user\.tenant_id\),\s+clockInSiteRead\(job\.id\)/)
-has('the switch is read on its own', fn(reads, 'export const clockInRuleRead', '})'), "select('clock_in_location_required, lat, lng, home_base_precision, home_base_label')")
+// Its own key and its own columns, through the company's shared settings read
+// (lib/tenantColumnsCore): a database without a column still fails this read
+// alone (scripts/test-tenant-settings.mjs).
+has('the switch is read on its own (its key, its columns)', fn(reads, 'export const clockInRuleRead', '})'), "tenantColumns(tenantId, ['clock_in_location_required', 'lat', 'lng', 'home_base_precision', 'home_base_label'])")
 // Home's select is HOME_DAY_SELECT since crew read scope stage 1 (crew send it through lib/crewScope).
 has('Home\'s rows carry the pin precision', fn(reads, 'export const HOME_DAY_SELECT', '\n'), 'lat, lng, geocode_precision')
 for (const key of ['clock_in_refused_title', 'clock_in_refused_body', 'day_start_refused_body', 'clock_in_try_again', 'clock_in_call_office', 'clock_in_location_off', 'clock_in_office_title', 'clock_in_office_refused', 'clock_in_office_allow', 'clock_in_office_let_in', 'clock_in_office_allowed', 'clock_in_office_failed']) {
