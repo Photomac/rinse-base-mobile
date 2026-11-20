@@ -292,7 +292,10 @@ check('the new strings in English, Spanish and Portuguese',
 
 // ── at arrival: Start opens the recorder (CKS 2026-11-17) ──────────────────
 const reads = readFileSync(join(repo, 'src/lib/jobReads.ts'), 'utf8')
-check('the switch: its own read of its own column, cached', has(reads, "export const stayAtArrivalTenantRead = (tenantId: string): CacheRead => ({\n  key: `sraten:${tenantId}`,\n  q: () => supabase.from('tenants')\n    .select('stay_rating_at_arrival').eq('id', tenantId).maybeSingle(),"), true)
+// Its own key and its own column, through the company's shared settings read
+// (lib/tenantColumnsCore): a database without the column still fails this read
+// alone (scripts/test-tenant-settings.mjs).
+check('the switch: its own read of its own column, cached', has(reads, "export const stayAtArrivalTenantRead = (tenantId: string): CacheRead => ({\n  key: `sraten:${tenantId}`,\n  q: () => tenantColumns(tenantId, ['stay_rating_at_arrival']),"), true)
 check('…in the day pack (Start opens the recorder with no signal)', has(reads, 'if (!isTask) reads.push(stayAtArrivalTenantRead(user.tenant_id))'), true)
 check('…read on open; an error or no column is off', has(detail, "cachedRead(stayAtArrivalTenantRead(user.tenant_id))\n      .then(r => setRateAtArrival(!r.error && (r.data as any)?.stay_rating_at_arrival === true))"), true)
 check('…only with videos on, on a clean with the rating card', has(detail, 'const ratesAtArrival = rateAtArrival && videoEnabled && !isTask && !isResidential'), true)

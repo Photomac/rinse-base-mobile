@@ -70,7 +70,9 @@ check('short by what\'s missing, never below 0',
 const reads = read('src/lib/jobReads.ts')
 check('the company\'s number: its own read, its own key, the one column',
   reads.includes('export const stayPhotosTenantRead = (tenantId: string): CacheRead => ({\n  key: `srpten:${tenantId}`,') &&
-  reads.includes(".select('stay_rating_photos_required').eq('id', tenantId).maybeSingle(),"))
+  // its own column, through the company's shared settings read (lib/tenantColumnsCore:
+  // a database without the column still fails this read alone, scripts/test-tenant-settings.mjs)
+  reads.includes("q: () => tenantColumns(tenantId, ['stay_rating_photos_required']),"))
 check('the photos read: this clean, the three types lib/stayPhotos counts',
   reads.includes("key: `srphotos:${jobId}`") && reads.includes(".select('id, photo_type').eq('job_id', jobId).in('photo_type', ['before', 'issue', 'damage']),") &&
   JSON.stringify([...P.STAY_PHOTO_TYPES]) === JSON.stringify(['before', 'issue', 'damage']))
