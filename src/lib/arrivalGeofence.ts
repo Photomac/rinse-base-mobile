@@ -24,6 +24,7 @@ import { tStatic, ti, localeStatic } from './i18n'
 import { siteVisitsOn, officeLocation, markSiteFences, siteFenceKind, onSiteCrossing, flushSiteEvents, noteFencesRegistered } from './siteVisits'
 import { SITE_FENCE_STATUSES, OFFICE_FENCE } from './siteVisitRules'
 import { effectiveTimeMode } from './dayClock'
+import { accuracyMOf, type Stamp } from './punchStamp'
 
 const ARRIVAL_TASK = 'arrival-geofence-task'
 const RADIUS_M = 150
@@ -325,6 +326,7 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
             clocked_in_at: arrival.at, entry_type: 'work',
             source: 'auto', arrived_at: arrival.at,
             clock_in_lat: fix.coords.latitude, clock_in_lng: fix.coords.longitude,
+            clock_in_accuracy_m: accuracyMOf(fix.coords.accuracy),
           }
           const { data: entry, error: insErr } = await supabase.from('job_time_entries')
             .upsert(auto, { onConflict: 'id' }).select('id').single()
@@ -381,15 +383,15 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
 // Best-effort quick GPS fix for stamping a crew member's own punches (manual,
 // and after the arrival prompt: lib/punchStamp) — must never block or fail the
 // punch itself (the entry IS the crew member's pay).
-export async function quickGpsStamp(timeoutMs = 2500): Promise<{ lat: number; lng: number } | null> {
+export async function quickGpsStamp(timeoutMs = 2500): Promise<Stamp | null> {
   try {
     const fix = await Promise.race([
       Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
       new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs)),
     ])
     if (fix && (fix as Location.LocationObject).coords) {
-      const { latitude, longitude } = (fix as Location.LocationObject).coords
-      return { lat: latitude, lng: longitude }
+      const { latitude, longitude, accuracy } = (fix as Location.LocationObject).coords
+      return { lat: latitude, lng: longitude, accuracyM: accuracyMOf(accuracy) }
     }
   } catch { /* no stamp — punch proceeds unstamped */ }
   return null

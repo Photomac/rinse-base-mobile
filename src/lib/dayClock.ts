@@ -93,6 +93,8 @@ export interface DayEndDecision {
   distanceM: number | null
   /** Where the phone was, when it had a usable fix: the shift's clock_out_lat/lng. */
   stamp: { lat: number; lng: number } | null
+  /** How exact that fix was, in metres as the device reported it: clock_out_accuracy_m. */
+  accuracyM?: number | null
 }
 
 /**
@@ -110,11 +112,11 @@ export const DAY_END_GATE = { online: () => true, overridden: () => false } as c
 
 /** The gate's answer for an end of day. A "refusal" is only `away`: the end is never refused. */
 export function dayEndDecision(d: ClockInDecision): DayEndDecision {
-  if (!d.allow) return { away: true, check: 'away', distanceM: d.distanceM, stamp: d.stamp }
+  if (!d.allow) return { away: true, check: 'away', distanceM: d.distanceM, stamp: d.stamp, accuracyM: d.accuracyM }
   // The gate only passes 'override', 'office' or 'offline' when its deps say
   // so, and DAY_END_GATE never does; read anything else as not checked.
   const check: DayEndCheck = d.check === 'override' || d.check === 'office' || d.check === 'offline' ? 'no_fix' : d.check
-  return { away: false, check, distanceM: d.distanceM, stamp: d.stamp }
+  return { away: false, check, distanceM: d.distanceM, stamp: d.stamp, accuracyM: d.accuracyM }
 }
 
 /** The audit columns for the end of the shift, or nothing when it wasn't judged. */
