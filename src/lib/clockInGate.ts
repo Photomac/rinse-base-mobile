@@ -165,26 +165,32 @@ export async function runClockInGate(deps: ClockInGateDeps): Promise<ClockInDeci
  * move_property_pin_here() refuses it.
  */
 export const PIN_MOVE_MAX_M = 5_000
+/** A refusal older than this can't move a pin (the RPC refuses it too). */
+export const PIN_MOVE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 export interface PinMoveEvent {
   kind: string
   lat?: number | string | null
   lng?: number | string | null
   accuracy_m?: number | null
+  created_at?: string | null
 }
 
 /**
  * The refusal the office could move the property's pin to, events newest first:
  * the newest refusal with a fix the gate trusts. Nothing when that fix is
- * already inside the pin's fence (the pin was moved there) or too far away.
+ * already inside the pin's fence (the pin was moved there), too far away, or
+ * more than a day old.
  */
-export function pinMoveOffer<E extends PinMoveEvent>(events: E[], pin: { lat: number; lng: number } | null): { event: E; distanceM: number } | null {
+export function pinMoveOffer<E extends PinMoveEvent>(events: E[], pin: { lat: number; lng: number } | null, now: number = Date.now()): { event: E; distanceM: number } | null {
   if (!pin) return null
   for (const e of events) {
     if (e.kind !== 'refused' || e.lat == null || e.lng == null) continue
     const lat = Number(e.lat), lng = Number(e.lng)
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue
     if (e.accuracy_m == null || e.accuracy_m > CLOCK_IN_MAX_ACCURACY_M) continue
+    const at = e.created_at ? Date.parse(e.created_at) : NaN
+    if (!Number.isFinite(at) || now - at > PIN_MOVE_MAX_AGE_MS) return null
     const d = distanceBetweenM(lat, lng, pin.lat, pin.lng)
     if (d <= CLOCK_IN_FENCE_M || d > PIN_MOVE_MAX_M) return null
     return { event: e, distanceM: Math.round(d) }
