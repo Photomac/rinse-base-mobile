@@ -47,6 +47,7 @@ import { currencySymbol } from '../lib/money'
 import { startLocationTracking, maybeStopLocationTracking } from '../lib/locationTracker'
 import { linkAnswering } from '../lib/netFetch'
 import { getPendingArrival, clearPendingArrival, quickGpsStamp } from '../lib/arrivalGeofence'
+import { punchStamp } from '../lib/punchStamp'
 import { clockInFields, fmtClockInDistance, notCheckedRole, type ClockInDecision } from '../lib/clockInGate'
 import { checkClockIn, clockInRule, clockInSite, recordRefusal } from '../lib/clockInLocation'
 import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueueActive, photosOnPhone, photosOnTheWay, queuedShots } from '../lib/photoQueue'
@@ -1340,23 +1341,20 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     // GPS-verified time tracking: if the arrival geofence recorded a fence
     // entry for this job, backdate the punch to that instant (QB Time
     // pattern — human confirms, no minutes lost), floored at 30min before the
-    // scheduled start so early sitting-in-the-car isn't billable. Otherwise a
-    // best-effort quick GPS fix stamps the manual punch. Neither may block or
-    // fail the punch itself.
+    // scheduled start so early sitting-in-the-car isn't billable.
     const arrival = proxy ? null : await getPendingArrival(job.id)
     let clockedInAt = new Date()
-    let stamp: { lat: number; lng: number } | null = null
     if (arrival) {
       const floor = new Date(new Date(job.scheduled_start).getTime() - 30 * 60000)
       const arrivedAt = new Date(arrival.at)
       clockedInAt = arrivedAt > floor ? arrivedAt : floor
       if (clockedInAt > new Date()) clockedInAt = new Date() // never in the future
-      stamp = { lat: arrival.lat, lng: arrival.lng }
-    } else if (!proxy) {
-      // The check's fix when it got one, so no second wait. It doesn't ask the
-      // phone at a property with no pin, and those punches still get their stamp.
-      stamp = (gate?.allow ? gate.stamp : null) ?? await quickGpsStamp()
     }
+    // Where: a fix the phone takes at this tap, arrival or not (lib/punchStamp).
+    // The check's fix when it got one, so no second wait; it doesn't ask the
+    // phone at a property with no pin, and those punches still get their stamp.
+    // Never blocks or fails the punch: no fix = no stamp.
+    const stamp = await punchStamp({ proxy, gate, fix: () => quickGpsStamp() })
 
     // Create time entry — this row IS the crew member's pay. The id is minted
     // client-side so the write is an idempotent upsert: offline it queues in
