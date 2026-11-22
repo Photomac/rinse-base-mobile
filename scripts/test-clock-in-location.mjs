@@ -92,6 +92,14 @@ has('Start my day: checked, refused without writing', fn(home, 'async function h
   /checkClockIn[\s\S]*!gate\.allow\)[\s\S]*return\n[\s\S]*\.\.\.clockInFields\(gate\)[\s\S]*writeThrough/)
 has('the office card is on the stop\'s screen', job, '<ClockInOfficeCard')
 has('the office card uses the audited RPC', loc, "supabase.rpc('allow_clock_in_here'")
+// Move pin here (Celebrity Clean 11/22): the pin on the road, the cabins up the drive.
+const card = read('src/components/ClockInOfficeCard.tsx')
+has('moving the pin calls its audited RPC with the refusal', loc, "supabase.rpc('move_property_pin_here', { p_event_id: eventId })")
+has('the events read asks for the fix, and falls back before the migration', loc, /\$\{EVENT_COLUMNS\}, pin_moved_from_lat[\s\S]{0,80}if \(error\) \(\{ data, error \} = await read\(EVENT_COLUMNS\)\)/)
+has('the card reads the clean\'s own pin, exact only', card, 'setPin(pinOf(site))')
+has('the offer is the shared rule from clockInGate', card, 'const offer = pinMoveOffer(events, pin)')
+has('the card asks before moving', fn(card, 'function movePin(', 'return ('), /Alert\.alert\(t\('clock_in_office_move_pin_title'\)[\s\S]*style: 'cancel'[\s\S]*await movePinHere\(eventId\)/)
+has('the offer sits under the person it belongs to', card, 'offer && offer.event.user_id === person.id ? offer : null')
 // Since the per-person day clock (test-day-clock-per-person.mjs) the read also
 // hands back the company location with the switch off, exact only when the
 // office placed it (tenants.home_base_precision).
@@ -103,7 +111,7 @@ has('the day pack saves the switch and the property', fn(reads, 'export function
 has('the switch is read on its own (its key, its columns)', fn(reads, 'export const clockInRuleRead', '})'), "tenantColumns(tenantId, ['clock_in_location_required', 'lat', 'lng', 'home_base_precision', 'home_base_label'])")
 // Home's select is HOME_DAY_SELECT since crew read scope stage 1 (crew send it through lib/crewScope).
 has('Home\'s rows carry the pin precision', fn(reads, 'export const HOME_DAY_SELECT', '\n'), 'lat, lng, geocode_precision')
-for (const key of ['clock_in_refused_title', 'clock_in_refused_body', 'day_start_refused_body', 'clock_in_try_again', 'clock_in_call_office', 'clock_in_location_off', 'clock_in_office_title', 'clock_in_office_refused', 'clock_in_office_allow', 'clock_in_office_let_in', 'clock_in_office_allowed', 'clock_in_office_failed']) {
+for (const key of ['clock_in_refused_title', 'clock_in_refused_body', 'day_start_refused_body', 'clock_in_try_again', 'clock_in_call_office', 'clock_in_location_off', 'clock_in_office_title', 'clock_in_office_refused', 'clock_in_office_allow', 'clock_in_office_let_in', 'clock_in_office_allowed', 'clock_in_office_failed', 'clock_in_office_move_pin', 'clock_in_office_move_pin_title', 'clock_in_office_move_pin_hint', 'clock_in_office_move_pin_confirm', 'clock_in_office_move_pin_done', 'clock_in_office_pin_moved']) {
   check(`${key} is in en, es and pt`, (i18n.match(new RegExp(`\\b${key}:`, 'g')) ?? []).length, 3)
 }
 
