@@ -429,6 +429,15 @@ const ids = (rows: any[]) => rows.map((r: any) => r.id).join(',')
 const isDayRead = (r: { table: string; params: URLSearchParams }) =>
   r.table === 'jobs' && (r.params.get('select') || '').includes('job_number')
 
+/** Nichole's own open stops tonight and tomorrow (the pack's stops). */
+const OWN = ['J-late', 'J-red', 'J-chapel', 'J-night']
+/** A stop's own reads: REST reads that name exactly that stop (job_id=eq.<id>,
+ *  p_job_id=<id>). The prep card's per-day reads list the day's stops in an
+ *  in.(…) and are not a stop's own. */
+const stopReadCount = (jobIds: string[]) => server.rest.filter(r =>
+  [...r.params.values()].some(v => jobIds.some(id => v === `eq.${id}` || v === id))).length
+const minutesAfter = (iso: string, m: number) => new RealDate(RealDate.parse(iso) + m * 60_000).toISOString()
+
 function load() {
   const c = require(process.env.CLIENT_BUNDLE as string)
   c.setCurrentTz(TZ)  // App.tsx sets the company zone from the profile on launch
@@ -777,6 +786,131 @@ const scenarios: Record<string, () => Promise<void>> = {
     setClock(new RealDate(RealDate.parse(EVENING) + 11 * 60_000).toISOString())
     const later = await c.prefetchDays(CREW)
     ok('11 minutes later: runs', later.status === 'saved', later.status)
+  },
+
+  // 2026-11-22: Home starts a run every time it loads live, and each run read
+  // every stop again, a median 15 minutes after the last (~80% of the crew
+  // app's per-clean reads). A stop packed in the last hour, from exactly what
+  // it would be read from now, is skipped; the pack still covers it.
+  async freshStopsAreNotReadAgain() {
+    setClock(EVENING); seedServer(); seedSession()
+    const c = load()
+    const first = await c.prefetchDays(CREW)
+    ok('the first run reads her 4 stops (none fresh yet)', first.status === 'saved' && first.fresh === 0, `${first.status} fresh=${first.fresh}`)
+    ok('…each stop\'s own reads went out', OWN.every(id => stopReadCount([id]) > 0), OWN.map(id => `${id}:${stopReadCount([id])}`).join(' '))
+    const firstTotal = server.rest.length
+    server.rest = []
+    setClock(minutesAfter(EVENING, 11))
+    const again = await c.prefetchDays(CREW)
+    ok('11 minutes later: the run saves, all 4 stops fresh', again.status === 'saved' && again.fresh === 4, `${again.status} fresh=${again.fresh}`)
+    ok('…not one stop read went out', stopReadCount(OWN) === 0, String(stopReadCount(OWN)))
+    ok('…a fraction of the first run\'s requests (the day and the prep card)', server.rest.length * 4 < firstTotal, `${server.rest.length} vs ${firstTotal}`)
+    ok('…and the pack still covers all 4 stops: door codes, checklists, notes saved',
+      again.pack?.stops?.[D0] === 1 && again.pack?.stops?.[D1] === 3 && cached('chkrows:J-red') && cached('propmeta:A2') && cached('crewnote:J-red'),
+      JSON.stringify(again.pack?.stops))
+    server.rest = []
+    setClock(minutesAfter(EVENING, 61))
+    const hour = await c.prefetchDays(CREW)
+    ok('an hour after the first: every stop is read again', hour.fresh === 0 && OWN.every(id => stopReadCount([id]) > 0), `fresh=${hour.fresh}`)
+  },
+
+  // A forced run (a pull-to-refresh, a day-change push) skips only what was
+  // packed in the last 5 minutes.
+  async forcedRunSkipsOnlyTheLastFiveMinutes() {
+    setClock(EVENING); seedServer(); seedSession()
+    const c = load()
+    await c.prefetchDays(CREW)
+    server.rest = []
+    setClock(minutesAfter(EVENING, 3))
+    const soon = await c.prefetchDays(CREW, { force: true })
+    ok('forced 3 minutes later: nothing re-read', soon.status === 'saved' && soon.fresh === 4 && stopReadCount(OWN) === 0, `fresh=${soon.fresh} reads=${stopReadCount(OWN)}`)
+    server.rest = []
+    setClock(minutesAfter(EVENING, 6))
+    const later = await c.prefetchDays(CREW, { force: true })
+    ok('forced 6 minutes after the first: every stop read again', later.fresh === 0 && OWN.every(id => stopReadCount([id]) > 0), `fresh=${later.fresh}`)
+    ok('the constants: an hour, and 5 minutes when forced', c.STOP_FRESH_MS === 3600_000 && c.STOP_FRESH_FORCED_MS === 300_000)
+  },
+
+  // What a stop's pack hangs on moved: read again at once, even inside the hour.
+  async newOrMovedStopIsReadAtOnce() {
+    setClock(EVENING); seedServer(); seedSession()
+    const c = load()
+    await c.prefetchDays(CREW)
+    // The office puts a new stop on Oct 14 and moves Uptown's clean tonight
+    // half an hour later. No push reached her: Home just loads 20 minutes on,
+    // inside the hour every stop would otherwise be fresh for.
+    const fresh = jobRow('J-new', '2026-10-14T23:00:00Z', 'scheduled', [U], 'A1')
+    server.tables.jobs.push(fresh)
+    server.tables.job_assignments.push({ job_id: 'J-new', user_id: U, is_lead: true, users: { id: U, full_name: NAMES[U] } })
+    const late = server.tables.jobs.find((j: any) => j.id === 'J-late')
+    late.scheduled_start = at('2026-10-14T05:00:00Z')
+    server.rest = []
+    setClock(minutesAfter(EVENING, 20))
+    await c.prefetchDays(CREW)
+    ok('the new stop is read', stopReadCount(['J-new']) > 0, String(stopReadCount(['J-new'])))
+    ok('the moved stop is read again', stopReadCount(['J-late']) > 0, String(stopReadCount(['J-late'])))
+    ok('the day the new stop joined (Oct 14) is read again: Stop k of M changed for each', ['J-red', 'J-chapel', 'J-night'].every(id => stopReadCount([id]) > 0),
+      ['J-red', 'J-chapel', 'J-night'].map(id => `${id}:${stopReadCount([id])}`).join(' '))
+    server.rest = []
+    setClock(minutesAfter(EVENING, 31))
+    const quiet = await c.prefetchDays(CREW)
+    ok('…and the next quiet run reads none of them', quiet.fresh === 5 && stopReadCount([...OWN, 'J-new']) === 0, `fresh=${quiet.fresh} reads=${stopReadCount([...OWN, 'J-new'])}`)
+    // Her clean goes en route: its status changed, so it alone is read.
+    server.tables.jobs.find((j: any) => j.id === 'J-late').status = 'en_route'
+    server.rest = []
+    setClock(minutesAfter(EVENING, 42))
+    await c.prefetchDays(CREW)
+    ok('a stop whose status changed is read again, the others aren\'t', stopReadCount(['J-late']) > 0 && stopReadCount(['J-red', 'J-chapel', 'J-night', 'J-new']) === 0,
+      `late=${stopReadCount(['J-late'])} others=${stopReadCount(['J-red', 'J-chapel', 'J-night', 'J-new'])}`)
+  },
+
+  // Kept on the phone: a relaunch doesn't re-read the day; a sign-out forgets it.
+  async freshnessSurvivesRelaunchNotSignOut() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(minutesAfter(EVENING, 12))
+    c = relaunch()
+    server.rest = []
+    const after = await c.prefetchDays(CREW)
+    ok('killed and reopened 12 minutes later: nothing re-read', after.status === 'saved' && after.fresh === 4 && stopReadCount(OWN) === 0, `fresh=${after.fresh}`)
+    await c.clearDataCache()
+    ok('signing out clears what was packed when', !store.has(`dataCache:daypack-stops:${U}`))
+    seedSession()
+    server.rest = []
+    setClock(minutesAfter(EVENING, 25))
+    const back = await c.prefetchDays(CREW)
+    ok('signed back in: every stop read again', back.fresh === 0 && OWN.every(id => stopReadCount([id]) > 0), `fresh=${back.fresh}`)
+  },
+
+  // A run the signal cut short marks nothing: the next one reads every stop.
+  async offlineRunMarksNothingFresh() {
+    setClock(EVENING); seedServer(); seedSession()
+    const c = load()
+    server.failAfter = 8
+    const cut = await c.prefetchDays(CREW)
+    ok('cut short: offline', cut.status === 'offline', cut.status)
+    ok('…nothing recorded as packed', !store.has(`dataCache:daypack-stops:${U}`))
+    server.failAfter = null; server.mode = 'online'; server.rest = []
+    setClock(minutesAfter(EVENING, 2))
+    const next = await c.prefetchDays(CREW)
+    ok('signal back: every stop read', next.status === 'saved' && next.fresh === 0 && OWN.every(id => stopReadCount([id]) > 0), `fresh=${next.fresh}`)
+  },
+
+  // A clock set back (or a damaged record) never counts as fresh.
+  async clockSetBackOrDamagedRecordRereads() {
+    setClock(EVENING); seedServer(); seedSession()
+    const c = load()
+    await c.prefetchDays(CREW)
+    server.rest = []
+    setClock(minutesAfter(EVENING, -90))
+    const back = await c.prefetchDays(CREW, { force: true })
+    ok('the phone\'s clock set back 90 minutes: every stop read again', back.fresh === 0 && OWN.every(id => stopReadCount([id]) > 0), `fresh=${back.fresh}`)
+    store.set(`dataCache:daypack-stops:${U}`, JSON.stringify({ 'J-red': { at: 'soon', sig: 1 }, 'J-late': null }))
+    server.rest = []
+    setClock(minutesAfter(EVENING, 30))
+    const junk = await c.prefetchDays(CREW, { force: true })
+    ok('a damaged record: read again, never a crash', junk.status === 'saved' && OWN.every(id => stopReadCount([id]) > 0), `${junk.status} fresh=${junk.fresh}`)
   },
 
   // Signing out mid-run must not leave the account's rows on the phone.
