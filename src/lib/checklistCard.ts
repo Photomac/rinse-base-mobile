@@ -29,6 +29,16 @@
 //
 // The reads are the shared builders in lib/jobReads, the ones the day pack
 // saves (scripts/test-offline-day-pack.mjs checks this file too).
+//
+// A quiet reload keeps what describes the PROPERTY (2026-11-22): a teammate's
+// tick, a photo landing or a sign-off can't change the home's template, rooms,
+// photo requirements or checklist mode, but every such reload read all ten
+// parts again. Production logs: the checklist group read ~600-730 times an
+// hour against ~420 opens of the stop. So a quiet load reuses those five from
+// the card's last load that read them all live, for STATIC_KEEP_MS, and reads
+// only the clean's own five (rows, sign-offs, shots, item photos, line
+// answers). Opening the stop and coming back from Photos read everything, as
+// before, so an office edit shows the next time the crew opens it.
 import { cachedRead, readSoon, type SoonRead } from './dataCache'
 import {
   checklistTemplateRead, checklistRowsRead, tenantSeedRead, roomsRead, roomSignoffsRead,
@@ -43,6 +53,12 @@ import { reportClientError } from './errorReporter'
 
 /** How long a read with a saved copy waits for the live answer. */
 export const CHECKLIST_WAIT = { ms: 3_000 }
+
+/** How long a quiet reload reuses the property's parts from the last full live load. */
+export const STATIC_KEEP_MS = 10 * 60_000
+
+/** The parts that describe the property, not the clean: what a quiet reload may keep. */
+export type StaticParts = { tmpl: any; rooms: any; addrMode: any; tenMode: any; reqs: any }
 
 export interface ChecklistView {
   items: any[]
@@ -164,22 +180,25 @@ async function viewOf(p: Parts, job: any, hasProperty: boolean, defaults: any[],
  * for `first` come in, or to null when there is nothing newer (none were
  * late, or the late ones failed too and fell back to the same saved copy).
  */
-export async function readChecklist(job: any, user: any, addressId: string | null, defaults: any[]):
-  Promise<{ first: ChecklistView; saved: boolean; fresh: Promise<ChecklistView | null> }> {
+export async function readChecklist(job: any, user: any, addressId: string | null, defaults: any[], kept: StaticParts | null = null):
+  Promise<{ first: ChecklistView; saved: boolean; fresh: Promise<ChecklistView | null>; staticLive: StaticParts | null }> {
   // Asked again before the seed read: by then the round may have failed.
   const waitNow = () => (lastTripFailed() ? 0 : CHECKLIST_WAIT.ms)
   const wait = waitNow()
   const a = addressId
   // The shots on the phone as the reads go out (lib/roomShots).
   const queuedBefore: QueuedList = a ? await queuedListNow(job.id) : []
+  // A kept part stands in for its read: a live answer, already in hand.
+  const k = (data: any): SoonRead => ({ data, error: null, fromCache: false, late: null })
+  const keep = a ? kept : null
   const reads = await Promise.all([
-    a ? readSoon(checklistTemplateRead(a), wait) : NONE,
+    a ? (keep ? k(keep.tmpl) : readSoon(checklistTemplateRead(a), wait)) : NONE,
     readSoon(checklistRowsRead(job.id), wait),
-    a ? readSoon(roomsRead(a), wait) : NONE,
+    a ? (keep ? k(keep.rooms) : readSoon(roomsRead(a), wait)) : NONE,
     a ? readSoon(roomSignoffsRead(job.id), wait) : NONE,
-    a ? readSoon(addressModeRead(a), wait) : NONE,
-    a ? readSoon(tenantModeRead(user.tenant_id), wait) : NONE,
-    a ? readSoon(photoRequirementsRead(a), wait) : NONE,
+    a ? (keep ? k(keep.addrMode) : readSoon(addressModeRead(a), wait)) : NONE,
+    a ? (keep ? k(keep.tenMode) : readSoon(tenantModeRead(user.tenant_id), wait)) : NONE,
+    a ? (keep ? k(keep.reqs) : readSoon(photoRequirementsRead(a), wait)) : NONE,
     a ? readSoon(requirementShotsRead(job.id), wait) : NONE,
     readSoon(itemPhotosRead(job.id), wait),
     readSoon(lineVideosRead(job.id), wait),
@@ -199,7 +218,13 @@ export async function readChecklist(job: any, user: any, addressId: string | nul
         } catch { return null }
       })()
     : Promise.resolve(null)
-  return { first, saved: reads.some(r => r.fromCache), fresh }
+  // The property's parts, when this load read all five live in time (not a
+  // saved copy, not late, no error): what a quiet reload may reuse.
+  const STATIC = [0, 2, 4, 5, 6]
+  const staticLive = a && !keep && STATIC.every(i => !reads[i].fromCache && !reads[i].late && !reads[i].error)
+    ? { tmpl: reads[0].data, rooms: reads[2].data, addrMode: reads[4].data, tenMode: reads[5].data, reqs: reads[6].data }
+    : null
+  return { first, saved: reads.some(r => r.fromCache), fresh, staticLive }
 }
 
 /**
@@ -211,6 +236,8 @@ export function checklistCard(ui: { show: (v: ChecklistView) => void; setLoading
   let loads = 0
   let edits = 0
   let shown = false
+  // The property's parts from the last load that read them all live (STATIC_KEEP_MS).
+  let kept: { key: string; at: number; parts: StaticParts } | null = null
   const show = (v: ChecklistView) => { shown = true; ui.show(v) }
   return {
     /** The crew ticked, answered or signed off something on the card. */
@@ -221,8 +248,14 @@ export function checklistCard(ui: { show: (v: ChecklistView) => void; setLoading
       const editsAtStart = edits
       const current = () => seq === loads && edits === editsAtStart
       if (!quiet) ui.setLoading(true)
+      // Only a quiet load reuses them, only for this clean at this property, and
+      // only while they're fresh: opening and Photos read everything again.
+      const key = `${job?.id ?? ''}|${addressId ?? ''}`
+      const reuse = quiet && kept && kept.key === key && Date.now() - kept.at < STATIC_KEEP_MS ? kept.parts : null
+      if (!quiet) kept = null
       try {
-        const { first, saved, fresh } = await readChecklist(job, user, addressId, defaults)
+        const { first, saved, fresh, staticLive } = await readChecklist(job, user, addressId, defaults, reuse)
+        if (staticLive) kept = { key, at: Date.now(), parts: staticLive }
         if (!current()) return
         if (!(shown && saved)) show(first)
         ui.setLoading(false)
