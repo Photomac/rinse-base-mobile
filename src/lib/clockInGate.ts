@@ -159,6 +159,39 @@ export async function runClockInGate(deps: ClockInGateDeps): Promise<ClockInDeci
   }
 }
 
+/**
+ * How far the office may move a pin to a refusal's fix. Further than this is the
+ * wrong house or the wrong address, not a pin at the end of the drive, and
+ * move_property_pin_here() refuses it.
+ */
+export const PIN_MOVE_MAX_M = 5_000
+
+export interface PinMoveEvent {
+  kind: string
+  lat?: number | string | null
+  lng?: number | string | null
+  accuracy_m?: number | null
+}
+
+/**
+ * The refusal the office could move the property's pin to, events newest first:
+ * the newest refusal with a fix the gate trusts. Nothing when that fix is
+ * already inside the pin's fence (the pin was moved there) or too far away.
+ */
+export function pinMoveOffer<E extends PinMoveEvent>(events: E[], pin: { lat: number; lng: number } | null): { event: E; distanceM: number } | null {
+  if (!pin) return null
+  for (const e of events) {
+    if (e.kind !== 'refused' || e.lat == null || e.lng == null) continue
+    const lat = Number(e.lat), lng = Number(e.lng)
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue
+    if (e.accuracy_m == null || e.accuracy_m > CLOCK_IN_MAX_ACCURACY_M) continue
+    const d = distanceBetweenM(lat, lng, pin.lat, pin.lng)
+    if (d <= CLOCK_IN_FENCE_M || d > PIN_MOVE_MAX_M) return null
+    return { event: e, distanceM: Math.round(d) }
+  }
+  return null
+}
+
 /** The audit columns for the time entry, or nothing when the switch is off. */
 export function clockInFields(d: ClockInDecision | null | undefined): { clock_in_check?: ClockInCheck; clock_in_distance_m?: number | null } {
   if (!d || !d.allow) return {}
