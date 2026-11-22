@@ -102,7 +102,7 @@ const fnBody = (src, name) => {
   return i < 0 ? '' : src.slice(i, j < 0 ? undefined : j)
 }
 const start = fnBody(dash, 'handleStartDay'), end = fnBody(dash, 'handleEndDay')
-check('Start my day takes a quick GPS fix', /await quickGpsStamp\(\)/.test(start), true)
+check('Start my day takes a quick GPS fix (the check\'s own when it had one: lib/punchStamp)', /await punchStamp\(\{ proxy: false, gate, fix: \(\) => quickGpsStamp\(\) \}\)/.test(start), true)
 check('…written as the shift\'s clock-in stamp', /clock_in_lat: stamp\?\.lat \?\? null, clock_in_lng: stamp\?\.lng \?\? null/.test(start), true)
 check('…keeping the tap (or the arrival they picked, test-site-visits) as the start, not when the fix came back',
   start.indexOf('const tappedAt = new Date().toISOString()') > -1

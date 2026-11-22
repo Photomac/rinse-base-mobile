@@ -1370,6 +1370,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       arrived_at: arrival?.at ?? null,
       clock_in_lat: stamp?.lat ?? null,
       clock_in_lng: stamp?.lng ?? null,
+      clock_in_accuracy_m: stamp?.accuracyM ?? null,
       ...clockInFields(gate),
       ...officeMark,
     }
@@ -2436,6 +2437,7 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
       duration_minutes: Math.round(mins),
       clock_out_lat: outStamp?.lat ?? null,
       clock_out_lng: outStamp?.lng ?? null,
+      clock_out_accuracy_m: outStamp?.accuracyM ?? null,
     }
     const { error: outErr, queued: outQueued } = await writeThrough({
       table: 'job_time_entries', op: 'update', match: { id: activeEntry.id }, values: out,

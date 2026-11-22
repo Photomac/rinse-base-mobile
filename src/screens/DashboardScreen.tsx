@@ -18,6 +18,7 @@ import { SLATE, SLATE_DARK, GOLD } from '../lib/theme'
 import { currencySymbol } from '../lib/money'
 import { startLocationTracking, stopLocationTracking } from '../lib/locationTracker'
 import { refreshArrivalGeofences, quickGpsStamp } from '../lib/arrivalGeofence'
+import { decisionStamp, punchStamp } from '../lib/punchStamp'
 import { clockInFields, daySites, fmtClockInDistance, notCheckedRole } from '../lib/clockInGate'
 import { checkClockIn, checkDayEnd, clockInRule, recordRefusal } from '../lib/clockInLocation'
 import { dayEndChecked, dayEndFields, dayStartSites, type DayEndDecision } from '../lib/dayClock'
@@ -420,7 +421,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       const arrival = await arrivalForStart()
       const fromArrival = arrival ? await askStartFrom(arrival, tappedAt) : null
       const startedAt = fromArrival ?? tappedAt
-      const stamp = (gate?.allow ? gate.stamp : null) ?? await quickGpsStamp()
+      const stamp = await punchStamp({ proxy: false, gate, fix: () => quickGpsStamp() })
       // Client-minted id: offline the punch queues in the outbox (a shift IS the
       // day's pay) and replays idempotently when signal returns. The server
       // allows one open shift per person (job_time_entries_one_open_shift), so
@@ -430,7 +431,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
         id: uuid4(),
         tenant_id: user.tenant_id, user_id: user.id, job_id: null,
         entry_type: 'shift', clocked_in_at: startedAt,
-        clock_in_lat: stamp?.lat ?? null, clock_in_lng: stamp?.lng ?? null,
+        clock_in_lat: stamp?.lat ?? null, clock_in_lng: stamp?.lng ?? null, clock_in_accuracy_m: stamp?.accuracyM ?? null,
         ...(fromArrival ? { source: 'prompted', arrived_at: fromArrival } : {}),
         ...clockInFields(gate),
       }
@@ -544,13 +545,13 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           }
           // No answer = no signal: end the one on screen. The outbox replays it,
           // pointed at the right row if its start lost to another.
-          const stamp = end?.stamp ?? await stampP
+          const stamp = decisionStamp(end) ?? await stampP
           const { error } = await writeThrough({
             table: 'job_time_entries', op: 'update', match: { id: target.id },
             values: {
               clocked_out_at: out.toISOString(),
               duration_minutes: Math.max(0, Math.round((out.getTime() - new Date(target.clocked_in_at).getTime()) / 60000)),
-              clock_out_lat: stamp?.lat ?? null, clock_out_lng: stamp?.lng ?? null,
+              clock_out_lat: stamp?.lat ?? null, clock_out_lng: stamp?.lng ?? null, clock_out_accuracy_m: stamp?.accuracyM ?? null,
               ...dayEndFields(end),
             },
           })
