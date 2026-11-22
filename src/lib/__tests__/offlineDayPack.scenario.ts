@@ -1116,6 +1116,100 @@ const scenarios: Record<string, () => Promise<void>> = {
     ok('...and the spinner is down within the wait', !o.spinnerOn() && down - up < CARD_WAIT + 200, fmt(down - up))
   },
 
+  // 2026-11-22: a quiet reload (a teammate's tick, a photo landing, a
+  // sign-off) read all ten parts again, the property's five included. It now
+  // reuses the property's template, rooms, modes and photo requirements from
+  // the card's last load that read them live, for 10 minutes.
+  async checklistQuietReloadKeepsTheProperty() {
+    setClock(EVENING); seedServer(); seedSession()
+    const c = load(); scaleDeadlines(c)
+    const o = open(c, JOBS.red, 'A2')
+    await o.done
+    const opened = o.log.shows.at(-1)!.v
+    ok('opened: every part read, Make beds not ticked', STATIC_TABLES.every(t => readsOf(t) > 0) && opened.checked.ci3 !== true, STATIC_TABLES.map(t => `${t}:${readsOf(t)}`).join(' '))
+    server.rest = []
+    server.tables.job_checklist_items.find((r: any) => r.id === 'ci3').completed = true
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('a teammate ticks: the quiet reload reads none of the property\'s parts', STATIC_TABLES.every(t => readsOf(t) === 0), STATIC_TABLES.map(t => `${t}:${readsOf(t)}`).join(' '))
+    ok('…and reads the clean\'s own: rows, sign-offs, shots and item photos', readsOf('job_checklist_items') > 0 && readsOf('job_room_signoffs') === 1 && readsOf('job_photos') === 2,
+      `rows ${readsOf('job_checklist_items')} signoffs ${readsOf('job_room_signoffs')} photos ${readsOf('job_photos')}`)
+    const after = o.log.shows.at(-1)!.v
+    ok('…and shows her teammate\'s tick', after.checked.ci3 === true)
+    ok('…with the same rooms, mode and photo shots as the open', JSON.stringify([after.rooms?.meta, after.rooms?.mode, after.rooms?.evidence?.map((e: any) => e.id)]) === JSON.stringify([opened.rooms?.meta, opened.rooms?.mode, opened.rooms?.evidence?.map((e: any) => e.id)]),
+      JSON.stringify(after.rooms?.evidence?.map((e: any) => e.id)))
+    ok('…and the same template lines', JSON.stringify(after.items.map((i: any) => i.id)) === JSON.stringify(opened.items.map((i: any) => i.id)))
+  },
+
+  // Ten minutes on, a quiet reload reads everything again.
+  async checklistQuietReloadAfterTenMinutesReadsAll() {
+    setClock(EVENING); seedServer(); seedSession()
+    const c = load(); scaleDeadlines(c)
+    const o = open(c, JOBS.red, 'A2')
+    await o.done
+    ok('the keep is 10 minutes', c.STATIC_KEEP_MS === 600_000, String(c.STATIC_KEEP_MS))
+    server.rest = []
+    setClock(new RealDate(RealDate.parse(EVENING) + 11 * 60_000).toISOString())
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('11 minutes after the open: a quiet reload reads the property\'s parts again', STATIC_TABLES.every(t => readsOf(t) > 0), STATIC_TABLES.map(t => `${t}:${readsOf(t)}`).join(' '))
+    server.rest = []
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('…and the next quiet reload keeps them again', STATIC_TABLES.every(t => readsOf(t) === 0), STATIC_TABLES.map(t => `${t}:${readsOf(t)}`).join(' '))
+  },
+
+  // Back from Photos (a full load) reads everything, so an office edit shows;
+  // the quiet reloads after it keep the new copy.
+  async checklistFullLoadPicksUpOfficeEdits() {
+    setClock(EVENING); seedServer(); seedSession()
+    const c = load(); scaleDeadlines(c)
+    const o = open(c, JOBS.red, 'A2')
+    await o.done
+    const before = o.log.shows.at(-1)!.v.rooms?.evidence?.length ?? 0
+    server.tables.property_photo_requirements.push({ id: 'pr-new', address_id: 'A2', room_id: null, required: true, area_name: 'Hot tub', sort_order: 99, created_at: '2026-10-13T00:00:00Z' })
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('a quiet reload right after the office adds a shot keeps the copy it had', (o.log.shows.at(-1)!.v.rooms?.evidence?.length ?? 0) === before, String(o.log.shows.at(-1)!.v.rooms?.evidence?.length))
+    server.rest = []
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS)
+    ok('back from Photos (a full load): the property\'s parts are read again', STATIC_TABLES.every(t => readsOf(t) > 0))
+    ok('…and the new shot shows', (o.log.shows.at(-1)!.v.rooms?.evidence ?? []).some((e: any) => e.id === 'pr-new'))
+    server.rest = []
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('…and the quiet reload after it keeps the new copy', STATIC_TABLES.every(t => readsOf(t) === 0) && (o.log.shows.at(-1)!.v.rooms?.evidence ?? []).some((e: any) => e.id === 'pr-new'))
+    // Back from Photos with no signal: that full load had nothing live, so
+    // nothing older is kept either; the next quiet reload reads it all.
+    server.mode = 'offline'
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS)
+    server.mode = 'online'; server.rest = []
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('a full load with no signal drops what was kept: the next quiet reload reads the property\'s parts', STATIC_TABLES.every(t => readsOf(t) > 0), STATIC_TABLES.map(t => `${t}:${readsOf(t)}`).join(' '))
+  },
+
+  // Nothing is kept from a saved copy or a read that came too late.
+  async checklistKeepsOnlyLiveAnswers() {
+    setClock(EVENING); seedServer(); seedSession()
+    let c = load()
+    await c.prefetchDays(CREW)
+    setClock(MORNING); seedSession()
+    server.mode = 'offline'
+    c = relaunch(); scaleDeadlines(c)
+    const o = open(c, JOBS.red, 'A2')
+    await o.done
+    ok('opened with no signal: the saved copy shows', o.log.shows.length >= 1 && o.log.shows[0].v.items.length > 0)
+    server.mode = 'online'; server.rest = []
+    await o.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('signal back: a quiet reload reads the property\'s parts (the open\'s were a saved copy)', STATIC_TABLES.every(t => readsOf(t) > 0), STATIC_TABLES.map(t => `${t}:${readsOf(t)}`).join(' '))
+
+    setClock(EVENING); seedServer(); seedSession()
+    const c2 = load(); scaleDeadlines(c2)
+    server.slow.property_rooms = CARD_WAIT * 4
+    const o2 = open(c2, JOBS.red, 'A2')
+    await o2.done
+    await sleep(CARD_WAIT * 5)
+    delete server.slow.property_rooms
+    server.rest = []
+    await o2.card.load(JOBS.red, CREW, 'A2', DEFAULTS, true)
+    ok('rooms timed out at the open (an error, not a live answer): nothing kept, the quiet reload reads them all', STATIC_TABLES.every(t => readsOf(t) > 0), STATIC_TABLES.map(t => `${t}:${readsOf(t)}`).join(' '))
+  },
+
   // The rest of the stop's screen on the same dead link: the job's extras,
   // who is on it, and the property's notes (lib/stopDetails). These were read
   // one after another, a read deadline each: the arrival instructions came
@@ -2169,6 +2263,11 @@ function scaleDeadlines(c: any) {
 
 /** Open the stop's screen: a new card, its first load, every show and every
  *  spinner change timed from the open. */
+/** The tables the checklist card's property parts come from (template, rooms,
+ *  the property's mode, the company's settings, photo requirements). */
+const STATIC_TABLES = ['address_checklist_templates', 'property_rooms', 'client_addresses', 'tenants', 'property_photo_requirements']
+const readsOf = (table: string) => server.rest.filter(r => r.table === table && (r.method ?? 'GET') === 'GET').length
+
 function open(c: any, job: any, addressId: string | null) {
   const t0 = performance.now()
   const log = { shows: [] as { at: number; v: any }[], spinner: [] as { at: number; on: boolean }[] }
