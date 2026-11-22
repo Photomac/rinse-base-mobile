@@ -117,16 +117,26 @@ export interface ClockInEvent {
   user_id: string
   kind: 'refused' | 'allowed'
   distance_m: number | null
+  accuracy_m: number | null
+  lat: number | string | null
+  lng: number | string | null
+  /** Set on an 'allowed' row when the office moved the pin to this person (move_property_pin_here). */
+  pin_moved_from_lat?: number | string | null
   created_at: string
 }
 
+const EVENT_COLUMNS = 'id, user_id, kind, distance_m, accuracy_m, lat, lng, created_at'
+
 /** This clean's refusals and overrides, for the office's card. Soft: none on any failure. */
 export async function clockInEvents(jobId: string): Promise<ClockInEvent[]> {
+  const read = (cols: string) => timesOut(supabase.from('clock_in_location_events')
+    .select(cols).eq('job_id', jobId)
+    .order('created_at', { ascending: false }).limit(50), OVERRIDE_WAIT_MS)
   try {
-    const { data, error } = await timesOut(supabase.from('clock_in_location_events')
-      .select('id, user_id, kind, distance_m, created_at').eq('job_id', jobId)
-      .order('created_at', { ascending: false }).limit(50), OVERRIDE_WAIT_MS)
-    return error ? [] : ((data as ClockInEvent[]) ?? [])
+    // pin_moved_from_lat arrived with rinsebase-app 20261122155411; without it, the list as before.
+    let { data, error } = await read(`${EVENT_COLUMNS}, pin_moved_from_lat`)
+    if (error) ({ data, error } = await read(EVENT_COLUMNS))
+    return error ? [] : ((data as unknown as ClockInEvent[]) ?? [])
   } catch {
     return []
   }
@@ -136,6 +146,20 @@ export async function clockInEvents(jobId: string): Promise<ClockInEvent[]> {
 export async function allowClockInHere(jobId: string, userId: string): Promise<{ error: string | null }> {
   try {
     const { error } = await timesOut(supabase.rpc('allow_clock_in_here', { p_job_id: jobId, p_user_id: userId }), OVERRIDE_WAIT_MS)
+    return { error: error?.message ?? null }
+  } catch (e: any) {
+    return { error: e?.message ?? 'failed' }
+  }
+}
+
+/**
+ * The office moves the clean's property pin to where a refused crew member's
+ * phone put them, and lets them in (rinsebase-app move_property_pin_here). For a
+ * pin on the road's address point with the house up the drive.
+ */
+export async function movePinHere(eventId: string): Promise<{ error: string | null }> {
+  try {
+    const { error } = await timesOut(supabase.rpc('move_property_pin_here', { p_event_id: eventId }), OVERRIDE_WAIT_MS)
     return { error: error?.message ?? null }
   } catch (e: any) {
     return { error: e?.message ?? 'failed' }
