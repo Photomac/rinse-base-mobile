@@ -33,10 +33,14 @@ const ARRIVAL_FRESH_MS = 12 * 60 * 60 * 1000
 const ARRIVAL_KEY = (jobId: string) => `arrival:${jobId}`
 const PROMPTED_KEY = (jobId: string) => `arrival_prompted:${jobId}`
 
+// When, not where. It used to carry the region's latitude/longitude too, and
+// the clock-in after the prompt stamped that as where the person clocked in:
+// the fence's centre is the property's pin, so every such stamp sat 0 m from
+// it (Celebrity Clean, 141 entries by 2026-11-22). Where comes from a fix at
+// the tap (lib/punchStamp). Arrivals a phone saved before still hold the two
+// fields; nothing reads them.
 export interface PendingArrival {
   at: string   // ISO instant the fence was crossed
-  lat: number
-  lng: number
 }
 
 // Is this address accurate enough to hang a 150m fence on?
@@ -168,7 +172,7 @@ export async function stopArrivalGeofences() {
 }
 
 // The recorded fence-entry for a job, if fresh — read at clock-in to backdate
-// the entry and stamp coordinates. Cleared after use (clearPendingArrival).
+// the entry (its time only). Cleared after use (clearPendingArrival).
 export async function getPendingArrival(jobId: string): Promise<PendingArrival | null> {
   try {
     const raw = await AsyncStorage.getItem(ARRIVAL_KEY(jobId))
@@ -262,11 +266,7 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
 
     // Record the arrival FIRST — even if the notification is missed, the next
     // manual clock-in on this job backdates to this instant.
-    const arrival: PendingArrival = {
-      at: new Date().toISOString(),
-      lat: (region as any).latitude ?? 0,
-      lng: (region as any).longitude ?? 0,
-    }
+    const arrival: PendingArrival = { at: new Date().toISOString() }
     await AsyncStorage.setItem(ARRIVAL_KEY(jobId), JSON.stringify(arrival))
     await AsyncStorage.setItem(PROMPTED_KEY(jobId), String(Date.now()))
 
@@ -378,8 +378,9 @@ TaskManager.defineTask(ARRIVAL_TASK, async ({ data, error }: any) => {
   finally { inFlight.delete(jobId) }
 })
 
-// Best-effort quick GPS fix for stamping manual punches — must never block or
-// fail the punch itself (the entry IS the crew member's pay).
+// Best-effort quick GPS fix for stamping a crew member's own punches (manual,
+// and after the arrival prompt: lib/punchStamp) — must never block or fail the
+// punch itself (the entry IS the crew member's pay).
 export async function quickGpsStamp(timeoutMs = 2500): Promise<{ lat: number; lng: number } | null> {
   try {
     const fix = await Promise.race([
