@@ -3,7 +3,7 @@
 export { supabase } from '../supabase'
 export { cachedRead, clearDataCache } from '../dataCache'
 export * as reads from '../jobReads'
-export { prefetchDays, loadDayPack, stopsAhead, DAY_PACK_THROTTLE_MS } from '../offlinePrefetch'
+export { prefetchDays, loadDayPack, stopsAhead, DAY_PACK_THROTTLE_MS, STOP_FRESH_MS, STOP_FRESH_FORCED_MS } from '../offlinePrefetch'
 export { dayView, isMyJob } from '../jobScope'
 export { setCurrentTz, todayKey, tomorrowKey, dayKey } from '../timezone'
 export { writeThrough, flushOutbox, onOutboxDrained } from '../outbox'

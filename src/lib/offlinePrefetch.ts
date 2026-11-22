@@ -20,6 +20,16 @@
 // - Starts at most every 10 minutes unless forced (an assignment push, a
 //   pull-to-refresh). Overlapping calls join the run in progress; a forced call
 //   during one runs once more after it.
+// - A stop packed in the last hour (5 minutes on a forced run) is not read
+//   again, as long as nothing it was read from has moved: the same reads, the
+//   same time, home, route place, status and type, and the same set of own
+//   stops that day (Stop k of M, the next arrival). Home starts a run every time it loads
+//   live, and the pack used to re-read every stop each time: on 2026-11-22 it
+//   was about 80% of the crew app's per-clean reads, re-reading the same stops
+//   a median 15 minutes apart, ~30 requests per stop. A new stop, a moved one
+//   and one packed over an hour ago are read as before. Kept on the phone
+//   (STOPS_KEY), so a relaunch doesn't re-read the day either; a sign-out
+//   clears it with the rest of the cache.
 // - About 4 reads at a time, and the run stops at the first network failure:
 //   on one bar it must not queue a hundred requests that will each time out.
 // - No images: photo URLs come along inside rows, the files do not. One
@@ -41,6 +51,10 @@ import { carriedFromRpc, photosToSave } from './carriedLines'
 import { saveCarriedPhotos, pruneCarriedPhotos } from './carriedPhotoFiles'
 
 export const DAY_PACK_THROTTLE_MS = 10 * 60_000
+/** A stop packed this recently, with the same reads, is not read again... */
+export const STOP_FRESH_MS = 60 * 60_000
+/** ...nor this recently on a forced run (a pull-to-refresh, a day-change push). */
+export const STOP_FRESH_FORCED_MS = 5 * 60_000
 const WIDTH = 4
 
 /** Stops whose details are worth carrying: not finished, not called off. */
@@ -61,13 +75,39 @@ export interface DayPack {
 }
 
 export type DayPackResult =
-  | { status: 'saved'; pack: DayPack; reads: number }
+  | { status: 'saved'; pack: DayPack; reads: number; fresh: number }
   | { status: 'offline'; reads: number }
   | { status: 'failed'; reads: number }
   | { status: 'throttled' }
   | { status: 'skipped' }
 
 const packKey = (userId: string) => `daypack:${userId}`
+/** When each of the viewer's stops was last packed, and with which reads. */
+const stopsKey = (userId: string) => `daypack-stops:${userId}`
+type PackedStop = { at: number; sig: string }
+type PackedStops = Record<string, PackedStop>
+
+function asPackedStops(v: unknown): PackedStops {
+  const out: PackedStops = {}
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out
+  for (const [id, e] of Object.entries(v as Record<string, any>)) {
+    if (e && typeof e.at === 'number' && Number.isFinite(e.at) && typeof e.sig === 'string') out[id] = { at: e.at, sig: e.sig }
+  }
+  return out
+}
+
+/** Packed within freshMs (and not in the future: a clock set back), with the same signature. */
+export function stopIsFresh(entry: PackedStop | undefined, sig: string, now: number, freshMs: number): boolean {
+  return !!entry && entry.sig === sig && entry.at <= now && now - entry.at < freshMs
+}
+
+/** What a stop's pack was read from: its reads, the fields those reads' answers
+ *  hang on, and the day's own stops (route place and next arrival look at the
+ *  others). Any change and the stop is read again. */
+export function stopSignature(job: any, readKeys: string[], dayStops: string): string {
+  return JSON.stringify([readKeys, job.scheduled_start ?? null, job.scheduled_end ?? null, job.route_order ?? null,
+    job.status ?? null, job.job_type ?? null, job.address_id ?? job.client_addresses?.id ?? null, dayStops])
+}
 
 export function loadDayPack(userId: string): Promise<DayPack | null> {
   return readCacheEntry<DayPack>(packKey(userId))
@@ -108,11 +148,11 @@ export function prefetchDays(user: any, opts: { force?: boolean; rows?: any[] | 
   }
   running = (async () => {
     try {
-      let res = await runPack(user, opts.rows ?? null)
+      let res = await runPack(user, opts.rows ?? null, !!opts.force)
       while (again) {
         const next = again
         again = null
-        res = await runPack(next, null)
+        res = await runPack(next, null, true)
       }
       return res
     } finally { running = null }
@@ -120,7 +160,7 @@ export function prefetchDays(user: any, opts: { force?: boolean; rows?: any[] | 
   return running
 }
 
-async function runPack(user: any, given: any[] | null): Promise<DayPackResult> {
+async function runPack(user: any, given: any[] | null, force: boolean): Promise<DayPackResult> {
   const epoch = cacheEpoch()
   const now = new Date()
   const today = todayKey()
@@ -148,7 +188,23 @@ async function runPack(user: any, given: any[] | null): Promise<DayPackResult> {
   // The viewer's own stops, today and tomorrow.
   const mine = rows.filter(j => isMyJob(j, user.id) &&
     days.includes(dayKey(j.scheduled_start)) && PACKED_STATUSES.includes(j.status))
-  for (const job of mine) jobPackReads(job, user).forEach(add)
+  // Each stop's reads, and whether it was packed recently from exactly what it
+  // would be read from now (STOP_FRESH_MS, stopSignature): one that was isn't
+  // read again this run.
+  const packed = asPackedStops(await readCacheEntry(stopsKey(user.id)))
+  const startedAt = Date.now()
+  const freshMs = force ? STOP_FRESH_FORCED_MS : STOP_FRESH_MS
+  const dayStops = new Map<string, string>()
+  for (const d of days) {
+    dayStops.set(d, mine.filter(j => dayKey(j.scheduled_start) === d)
+      .map(j => `${j.id}@${j.scheduled_start}#${j.route_order ?? ''}`).sort().join(','))
+  }
+  const plan = mine.map(job => {
+    const stopReads = jobPackReads(job, user)
+    return { job, stopReads, sig: stopSignature(job, stopReads.map(r => r.key), dayStops.get(dayKey(job.scheduled_start)) ?? '') }
+  })
+  const due = plan.filter(p => !stopIsFresh(packed[p.job.id], p.sig, startedAt, freshMs))
+  for (const p of due) p.stopReads.forEach(add)
   noteCachedJobs(mine).catch(() => {})
 
   // The prep card Home will show each day, in the viewer's Mine / Everyone.
@@ -173,6 +229,16 @@ async function runPack(user: any, given: any[] | null): Promise<DayPackResult> {
   // Signed out mid-run: the reads stopped and nothing was kept.
   if (epoch !== cacheEpoch()) return { status: 'skipped' }
 
+  // The stops read this run are fresh from when it started; the rest keep
+  // their time. Only today's and tomorrow's own stops are kept in the list.
+  const nextPacked: PackedStops = {}
+  const dueIds = new Set(due.map(p => p.job.id))
+  for (const p of plan) {
+    if (dueIds.has(p.job.id)) nextPacked[p.job.id] = { at: startedAt, sig: p.sig }
+    else if (packed[p.job.id]) nextPacked[p.job.id] = packed[p.job.id]
+  }
+  await writeCacheEntry(stopsKey(user.id), nextPacked, epoch)
+
   // Prep copies from days gone by (and the old un-dated keys) are dead weight.
   await pruneDataCache(k => {
     const m = PREP_DAY_KEY.exec(k)
@@ -189,7 +255,7 @@ async function runPack(user: any, given: any[] | null): Promise<DayPackResult> {
   lastSaved.set(user.id, Date.now())
   listeners.forEach(fn => { try { fn(user.id, pack) } catch { /* a listener's problem */ } })
   await saveStopPhotos(mine, epoch).catch(() => {})
-  return { status: 'saved', pack, reads }
+  return { status: 'saved', pack, reads, fresh: plan.length - due.length }
 }
 
 /** The photos of lines missed at the last inspection of each packed stop's
