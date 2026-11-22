@@ -83,7 +83,7 @@ const fn = (src, start, end) => src.slice(src.indexOf(start), src.indexOf(end, s
 has('Clock in: the check comes before the note and the punch', fn(job, 'async function handleClockIn()', 'function handleStartDaily'),
   /recordsForOthers[\s\S]*passClockInLocation\(handleClockIn\)[\s\S]*crewNoteNeedsAck/)
 has('Clock in: the punch carries the check, and the office mark', fn(job, 'async function clockInAs(', 'function clockInRefused'), /\.\.\.clockInFields\(gate\),\s+\.\.\.officeMark/)
-has('a punch the check got no fix for still takes its usual stamp', job, '(gate?.allow ? gate.stamp : null) ?? await quickGpsStamp()')
+has('a punch the check got no fix for still takes its usual stamp (lib/punchStamp, test-punch-stamp.mjs)', job, 'const stamp = await punchStamp({ proxy, gate, fix: () => quickGpsStamp() })')
 has('Clock in: desk staff recording for someone aren\'t checked', job, 'const gate = proxy ? null : clockInGate.current')
 has('Resume is checked too', fn(job, 'async function handleResume()', 'async function canSignOffAsViewer'), /passClockInLocation\(handleResume\)[\s\S]*\.\.\.clockInFields\(gate\)/)
 has('a refusal returns false before any write', fn(job, 'async function passClockInLocation(', '// Daily mode\'s "start"'), /!decision\.allow\)[\s\S]*return false/)
