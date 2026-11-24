@@ -101,7 +101,8 @@ const fnBody = (src, name) => {
   const j = src.indexOf('\n  async function ', i + 10)
   return i < 0 ? '' : src.slice(i, j < 0 ? undefined : j)
 }
-const start = fnBody(dash, 'handleStartDay'), end = fnBody(dash, 'handleEndDay')
+// End my day's write lives in endDayNow since "End and fix times" (lib/timeFix) ends the day too.
+const start = fnBody(dash, 'handleStartDay'), end = fnBody(dash, 'endDayNow')
 check('Start my day takes a quick GPS fix (the check\'s own when it had one: lib/punchStamp)', /await punchStamp\(\{ proxy: false, gate, fix: \(\) => quickGpsStamp\(\) \}\)/.test(start), true)
 check('…written as the shift\'s clock-in stamp', /clock_in_lat: stamp\?\.lat \?\? null, clock_in_lng: stamp\?\.lng \?\? null/.test(start), true)
 check('…keeping the tap (or the arrival they picked, test-site-visits) as the start, not when the fix came back',

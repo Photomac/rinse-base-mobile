@@ -450,6 +450,15 @@ export const checkFirstTenantRead = (tenantId: string): CacheRead => ({
   q: () => tenantColumns(tenantId, ['check_first_required']),
 })
 
+/** The company's "Start my day before a clean" switch (tenants.clean_start_needs_day,
+ *  rinsebase-app 20261123220000; lib/timeFix dayNeededFirst). Its own request,
+ *  read only when Start is tapped on a day-shift clean, so a clean's screen
+ *  asks for nothing more. Before that migration it fails, which means off. */
+export const cleanStartNeedsDayRead = (tenantId: string): CacheRead => ({
+  key: `csnd:${tenantId}`,
+  q: () => supabase.from('tenants').select('clean_start_needs_day').eq('id', tenantId).maybeSingle(),
+})
+
 /** The company's clock-in location switch and office pin (lib/clockInLocation).
  *  On its own: before its migration this read errors, which means off. */
 export const clockInRuleRead = (tenantId: string): CacheRead => ({

@@ -143,7 +143,9 @@ const keyOf = name => (code.match(new RegExp(`${name}[^]*?key: \`([a-z:]+)\\$`))
 check('…each keeps its own offline key', ['tenantVideoRead', 'tenantSeedRead', 'tenantModeRead', 'photoEnforceRead', 'checkFirstTenantRead', 'clockInRuleRead', 'supplyCountsTenantRead', 'restockTwoChoiceTenantRead', 'stayPhotosTenantRead', 'stayAtArrivalTenantRead'].map(keyOf),
   ['tenvideo:', 'tenseed:', 'tenmode:', 'tenphotoreq:', 'cften:', 'cilrule:', 'scten:', 'rtcten:', 'srpten:', 'sraten:'])
 const ownTenantReads = [...code.matchAll(/from\('tenants'\)\s*\.select\('([^']+)'\)/g)].map(m => m[1])
-check('no read in jobReads sends a listed column on its own any more (the driver pickup time stays its own)', ownTenantReads, ['default_checkout_time'])
+// clean_start_needs_day (lib/timeFix) is read only when Start is tapped on a
+// day-shift clean, so it stays off every clean's shared request.
+check('no read in jobReads sends a listed column on its own any more (the driver pickup time and the Start-my-day switch stay their own)', ownTenantReads, ['clean_start_needs_day', 'default_checkout_time'])
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
