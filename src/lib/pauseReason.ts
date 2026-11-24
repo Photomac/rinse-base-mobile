@@ -52,7 +52,7 @@ const BY_NOTES: [RegExp, TranslationKey, TranslationKey][] = [
   [/^Day started by (.+)$/, 'pr_day_started_by', 'pr_day_started_office'],
 ]
 
-// A time fix the office approved (rinsebase-app 20261123220100_time_fix_requests
+// A time fix the office approved (rinsebase-app 20261124132253_time_fix_requests
 // review_time_fix): the crew member's own reason after the fixed words.
 const PREFIX_NOTES: [string, TranslationKey][] = [
   ['Time fix approved: ', 'pr_time_fix_approved'],

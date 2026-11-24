@@ -8,7 +8,7 @@
 // with an AM/PM switch, on the day's own date in the company clock. The end
 // can be on the next day, for a day that ran past midnight.
 //
-// The ask is request_time_fix (rinsebase-app 20261123220100), sent live: it
+// The ask is request_time_fix (rinsebase-app 20261124132253), sent live: it
 // can't be queued, because the server checks it against the day as it is.
 // Its id is made when the sheet opens, so sending again after a lost answer
 // finds the same ask instead of making a second one.

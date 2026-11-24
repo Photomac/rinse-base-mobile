@@ -4,13 +4,13 @@
 // allowing them to adjust their time directly—and having that change sent to an
 // admin for approval—would make the process much easier").
 //
-// The ask goes to the server (rinsebase-app 20261123220100_time_fix_requests:
+// The ask goes to the server (rinsebase-app 20261124132253_time_fix_requests:
 // request_time_fix), which checks it again and keeps it until the office
 // approves or declines it on the web (Team → Time logs). Nothing about the day
 // changes until then: the hours on My week stay what the phone recorded.
 //
 // Also "Start my day before a clean" (tenants.clean_start_needs_day,
-// 20261123220000_clean_start_needs_day): at a company that turned it on, Start
+// 20261124132236_clean_start_needs_day): at a company that turned it on, Start
 // on a clean asks a crew member with no day running to start their day first.
 //
 // Pure: the screens (components/TimeFixSheet, screens/DashboardScreen,

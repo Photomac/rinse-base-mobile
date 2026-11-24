@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // "Fix my times" and "Start my day before a clean" (True Shine Cleaning
-// Services, Elle, 2026-11-23; web repo 20261123220100_time_fix_requests and
-// 20261123220000_clean_start_needs_day).
+// Services, Elle, 2026-11-23; web repo 20261124132253_time_fix_requests and
+// 20261124132236_clean_start_needs_day).
 //
 // Runs the REAL src/lib/timeFix.ts and src/lib/pauseReason.ts under Node's type
 // stripping (both pure), and checks:
@@ -75,7 +75,11 @@ check('not found', e('That day could not be found.'), 'fix_e_not_found')
 check('the database before its migration', e('Could not find the function public.request_time_fix(p_entry_id, p_id, p_in, p_out, p_reason) in the schema cache'), 'fix_e_not_ready')
 check('a per-clean company', e('Fixing a day\'s times is for day-shift companies.'), 'fix_e_not_ready')
 check('anything else shows as the server wrote it', e('Sign in again to do this.'), null)
-const SERVER = read('../rinsebase-app/.claude/worktrees/mobile-app-features-efc219/supabase/migrations/20261123220100_time_fix_requests.sql') || ''
+// The web repo's migration, when that repo is on this machine (as test-i18n:
+// RINSEBASE_WEB_REPO, else a sibling checkout).
+const WEB = process.env.RINSEBASE_WEB_REPO || join(repo, '..', 'rinsebase-app')
+let SERVER = ''
+try { SERVER = readFileSync(join(WEB, 'supabase/migrations/20261124132253_time_fix_requests.sql'), 'utf8') } catch { /* not here: skipped */ }
 if (SERVER) {
   const raised = [...SERVER.matchAll(/raise exception '([^']*(?:''[^']*)*)' using errcode = '(?:22023|55000|23P01|P0002)'/g)].map(m => m[1].replace(/''/g, "'"))
   const crewSide = raised.filter(m => !/office can answer|Approve or decline|time fix could not|now run into|deleted|running again|Change it on Payroll|Fix it on Payroll|changed after they asked|Missing the ask/.test(m))

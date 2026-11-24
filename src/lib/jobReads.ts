@@ -451,7 +451,7 @@ export const checkFirstTenantRead = (tenantId: string): CacheRead => ({
 })
 
 /** The company's "Start my day before a clean" switch (tenants.clean_start_needs_day,
- *  rinsebase-app 20261123220000; lib/timeFix dayNeededFirst). Its own request,
+ *  rinsebase-app 20261124132236; lib/timeFix dayNeededFirst). Its own request,
  *  read only when Start is tapped on a day-shift clean, so a clean's screen
  *  asks for nothing more. Before that migration it fails, which means off. */
 export const cleanStartNeedsDayRead = (tenantId: string): CacheRead => ({
