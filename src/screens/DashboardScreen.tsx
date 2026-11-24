@@ -36,6 +36,7 @@ import { DriverStopsCard } from '../components/DriverStopsCard'
 import { SentBackCard } from '../components/SentBackCard'
 import { InspectionsToReviewCard } from '../components/InspectionsToReviewCard'
 import { JobClock } from '../components/JobClock'
+import { TimeFixSheet, type TimeFixTarget } from '../components/TimeFixSheet'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
 // src/lib/timezone.ts.
@@ -81,6 +82,8 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   // Day-long shift clock-in (only when tenant uses 'daily' time tracking)
   const dailyMode = user._timeMode === 'daily'
   const [activeShift, setActiveShift] = useState<any>(null)
+  // Fix my times, opened on the day End and fix times just ended (lib/timeFix).
+  const [fixFor, setFixFor] = useState<TimeFixTarget | null>(null)
   // False until this screen has read whether a shift is open. Until then the
   // card offers neither Start nor End: a Dashboard that just mounted (app
   // opened, back from a job) used to show "Start my day" over a running shift
@@ -490,82 +493,103 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
     confirmEndDay()
   }
 
+  // End my day asks first. "End and fix times" (lib/timeFix, True Shine 11/23:
+  // "employees frequently forget to clock in or out"): the day ends at the tap
+  // as always, then Fix my times opens on it, so they can ask the office for
+  // the times they really worked. Nothing changes until the office approves.
   function confirmEndDay() {
     if (!activeShift) return
     Alert.alert(t('end_my_day'), t('on_shift_since') + ' ' + shiftSince(activeShift.clocked_in_at), [
       { text: t('cancel') || 'Cancel', style: 'cancel' },
-      { text: t('end_my_day'), style: 'destructive', onPress: async () => {
-        shiftOps.current++
-        setShiftBusy(true)
-        const epoch = cacheEpoch()
-        // The end is the tap; the GPS fix that stamps it comes back while the
-        // open shift is read, and is left off if it doesn't come in 2.5 s.
-        const out = new Date()
-        const stampP = quickGpsStamp()
-        try {
-          // A day that starts and ends at the company location: where it ended
-          // is judged and kept for the office (clock_out_check). Never refused:
-          // that would keep their paid day running. Away from it, they're asked
-          // first, so someone who forgot can go back and end it there.
-          let end: DayEndDecision | null = null
-          if (dayEndChecked(user._dayClockAtOffice) && !notCheckedRole(user.role)) {
-            const rule = await clockInRule(user.tenant_id)
-            end = await checkDayEnd(rule.office)
-            if (end.away && end.distanceM != null) {
-              const place = rule.office?.name || t('company_location')
-              const distance = fmtClockInDistance(end.distanceM)
-              const endHere = await new Promise<boolean>(resolve => Alert.alert(
-                t('day_end_away_title'), ti(t('day_end_away_body'), { distance, place }),
-                [
-                  { text: t('cancel') || 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-                  { text: t('day_end_here'), style: 'destructive', onPress: () => resolve(true) },
-                ],
-                { cancelable: false },
-              ))
-              if (!endHere) return
-            }
-          }
-          // End the shift the server has open NOW. The one on screen can be
-          // stale (ended or restarted on the web, or a start that lost to one
-          // already running); ending its id changed nothing and left the real
-          // shift open into the 16 h auto-close.
-          let target = activeShift
-          const live = await readOpenShift()
-          if (!live.error) {
-            if (live.data?.length) target = live.data[0]
-            else if (!(await isQueued('job_time_entries', activeShift.id))) {
-              // Nothing open on the server and no start of ours still queued:
-              // the day was already ended elsewhere.
-              setActiveShift(null)
-              saveShift(null, epoch)
-              stopLocationTracking().catch(() => {})
-              Alert.alert('✓', t('day_already_ended'))
-              return
-            }
-          }
-          // No answer = no signal: end the one on screen. The outbox replays it,
-          // pointed at the right row if its start lost to another.
-          const stamp = decisionStamp(end) ?? await stampP
-          const { error } = await writeThrough({
-            table: 'job_time_entries', op: 'update', match: { id: target.id },
-            values: {
-              clocked_out_at: out.toISOString(),
-              duration_minutes: Math.max(0, Math.round((out.getTime() - new Date(target.clocked_in_at).getTime()) / 60000)),
-              clock_out_lat: stamp?.lat ?? null, clock_out_lng: stamp?.lng ?? null, clock_out_accuracy_m: stamp?.accuracyM ?? null,
-              ...dayEndFields(end),
-            },
+      { text: t('fix_end_and_fix'), onPress: async () => {
+        const ended = await endDayNow()
+        if (ended === 'queued') { Alert.alert('📡', t('fix_day_ended_offline')); return }
+        if (ended) {
+          setFixFor({
+            entry: ended, ymd: dayKey(ended.clocked_in_at),
+            inMs: Date.parse(ended.clocked_in_at), outMs: Date.parse(ended.clocked_out_at),
           })
-          if (error) { Alert.alert(t('error'), error.message); return }
-          setActiveShift(null)
-          saveShift(null, epoch)
-          // Stop broadcasting once the shift ends.
-          stopLocationTracking().catch(() => {})
-        } finally {
-          shiftOps.current++
-          setShiftBusy(false)
         }
       } },
+      { text: t('end_my_day'), style: 'destructive', onPress: () => { void endDayNow() } },
     ])
+  }
+
+  /** Ends the running day at the tap. The day as ended (for Fix my times),
+   *  'queued' when no signal kept it on this phone, null when nothing was
+   *  ended here (refused, already ended elsewhere, or cancelled). */
+  async function endDayNow(): Promise<{ id: string; clocked_in_at: string; clocked_out_at: string } | 'queued' | null> {
+    if (!activeShift) return null
+    shiftOps.current++
+    setShiftBusy(true)
+    const epoch = cacheEpoch()
+    // The end is the tap; the GPS fix that stamps it comes back while the
+    // open shift is read, and is left off if it doesn't come in 2.5 s.
+    const out = new Date()
+    const stampP = quickGpsStamp()
+    try {
+      // A day that starts and ends at the company location: where it ended
+      // is judged and kept for the office (clock_out_check). Never refused:
+      // that would keep their paid day running. Away from it, they're asked
+      // first, so someone who forgot can go back and end it there.
+      let end: DayEndDecision | null = null
+      if (dayEndChecked(user._dayClockAtOffice) && !notCheckedRole(user.role)) {
+        const rule = await clockInRule(user.tenant_id)
+        end = await checkDayEnd(rule.office)
+        if (end.away && end.distanceM != null) {
+          const place = rule.office?.name || t('company_location')
+          const distance = fmtClockInDistance(end.distanceM)
+          const endHere = await new Promise<boolean>(resolve => Alert.alert(
+            t('day_end_away_title'), ti(t('day_end_away_body'), { distance, place }),
+            [
+              { text: t('cancel') || 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: t('day_end_here'), style: 'destructive', onPress: () => resolve(true) },
+            ],
+            { cancelable: false },
+          ))
+          if (!endHere) return null
+        }
+      }
+      // End the shift the server has open NOW. The one on screen can be
+      // stale (ended or restarted on the web, or a start that lost to one
+      // already running); ending its id changed nothing and left the real
+      // shift open into the 16 h auto-close.
+      let target = activeShift
+      const live = await readOpenShift()
+      if (!live.error) {
+        if (live.data?.length) target = live.data[0]
+        else if (!(await isQueued('job_time_entries', activeShift.id))) {
+          // Nothing open on the server and no start of ours still queued:
+          // the day was already ended elsewhere.
+          setActiveShift(null)
+          saveShift(null, epoch)
+          stopLocationTracking().catch(() => {})
+          Alert.alert('✓', t('day_already_ended'))
+          return null
+        }
+      }
+      // No answer = no signal: end the one on screen. The outbox replays it,
+      // pointed at the right row if its start lost to another.
+      const stamp = decisionStamp(end) ?? await stampP
+      const { error, queued } = await writeThrough({
+        table: 'job_time_entries', op: 'update', match: { id: target.id },
+        values: {
+          clocked_out_at: out.toISOString(),
+          duration_minutes: Math.max(0, Math.round((out.getTime() - new Date(target.clocked_in_at).getTime()) / 60000)),
+          clock_out_lat: stamp?.lat ?? null, clock_out_lng: stamp?.lng ?? null, clock_out_accuracy_m: stamp?.accuracyM ?? null,
+          ...dayEndFields(end),
+        },
+      })
+      if (error) { Alert.alert(t('error'), error.message); return null }
+      setActiveShift(null)
+      saveShift(null, epoch)
+      // Stop broadcasting once the shift ends.
+      stopLocationTracking().catch(() => {})
+      return queued ? 'queued' : { id: target.id, clocked_in_at: target.clocked_in_at, clocked_out_at: out.toISOString() }
+    } finally {
+      shiftOps.current++
+      setShiftBusy(false)
+    }
   }
 
   const now = new Date()
@@ -877,6 +901,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
           </>
         )}
       </ScrollView>
+      <TimeFixSheet target={fixFor} onClose={() => setFixFor(null)} />
     </SafeAreaView>
   )
 }

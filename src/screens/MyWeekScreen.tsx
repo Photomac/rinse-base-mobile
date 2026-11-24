@@ -10,7 +10,11 @@
 // ends, so today shows its time so far and its pay once they clock out.
 //
 // Arrows step back through earlier weeks. Only the current week is kept for
-// offline. Nothing here writes.
+// offline. Nothing here writes, except "Fix my times" (lib/timeFix, True Shine
+// 11/23): at a day-shift company each day of the last 14 offers "Fix times"
+// on its closed day, or "Forgot to start my day?" when it has none, and shows
+// what the office answered. The ask goes to the office; the day's hours here
+// change only when the office approves it.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator, AppState } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
@@ -27,6 +31,9 @@ import {
   type DayBounds, type PaySchedule, type WeekDay,
 } from '../lib/myWeek'
 import { myWeekPaydayRead, myWeekRead, myWeekScheduleRead, scheduleOf, type WeekData } from '../lib/myWeekReads'
+import { supabase } from '../lib/supabase'
+import { dayFixLine, fixableShift, withinFixWindow, type FixAsk } from '../lib/timeFix'
+import { TimeFixSheet, type TimeFixTarget } from '../components/TimeFixSheet'
 
 function boundsOf(start: string): DayBounds[] {
   return weekDays(start).map(ymd => ({
@@ -52,6 +59,11 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
   const [nothingSaved, setNothingSaved] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // This week's time fix asks (day-shift companies only). null = can't offer
+  // it here: per-clean clock, no signal, or a database without the table.
+  const [asks, setAsks] = useState<FixAsk[] | null>(null)
+  const [fixFor, setFixFor] = useState<TimeFixTarget | null>(null)
+  const dailyMode = user._timeMode === 'daily'
   // Bumped per load: an older load's late answer must not replace a newer week.
   const loadGen = useRef(0)
   // The load reads the strings through a ref: a new t() must not re-run it.
@@ -83,6 +95,7 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
       if (gen !== loadGen.current) return
       setWeek({ start, bounds })
       setPayInfo({ schedule, paydayOffset })
+      if (dailyMode) loadAsks(start, gen)
       if (res.error?.offline) {
         // No signal and no saved copy of this week (only this week is kept).
         setData(null)
@@ -117,7 +130,26 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
     }
   }, [offset, user])
 
-  useEffect(() => { setLoading(true); setData(null); load() }, [load])
+  // The person's own asks for the week (time_fix_requests: they read only
+  // their own). Live only: an ask is sent live, so with no signal there is
+  // nothing to offer, and a failed read hides the links rather than offering
+  // something that can't be sent.
+  async function loadAsks(start: string, gen: number) {
+    try {
+      const { data: rows, error } = await supabase.from('time_fix_requests')
+        .select('id, time_entry_id, work_date, asked_in, asked_out, status, review_note, created_at')
+        .eq('user_id', user.id)
+        .gte('work_date', start).lte('work_date', addDays(start, 6))
+        .order('created_at', { ascending: false })
+        .limit(100)
+      if (gen !== loadGen.current) return
+      setAsks(error ? null : ((rows ?? []) as FixAsk[]))
+    } catch {
+      if (gen === loadGen.current) setAsks(null)
+    }
+  }
+
+  useEffect(() => { setLoading(true); setData(null); setAsks(null); load() }, [load])
   // Back in the app, or queued punches just went out: re-read.
   useEffect(() => {
     const sub = AppState.addEventListener('change', st => { if (st === 'active') load() })
@@ -215,6 +247,43 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
       hours: dur(d.pay ? d.pay.minutes : d.workedMs / 60_000),
       sub: '',
     }
+  }
+
+  /** A day's time fix: what the office answered, and the links to ask. */
+  function fixLines(d: WeekDay) {
+    if (!dailyMode || asks === null) return null
+    // An approved fix already shows as the day's note ("Time fix approved: …").
+    const noted = d.notes.some(n => /(^|· )(Time fix approved|Added from a time fix): /.test(n))
+    const found = dayFixLine(asks, d.ymd)
+    const line = found && !(found.status === 'approved' && noted) ? found : null
+    const canAsk = withinFixWindow(d.ymd, todayKey()) && d.state !== 'upcoming' && !d.open
+    const closed = d.entries.filter(e => fixableShift(e))
+    const span = (e: { clocked_in_at: string; clocked_out_at?: string | null }) =>
+      ti(t('team_in_to_out'), { in: timeOf(Date.parse(e.clocked_in_at)), out: timeOn(Date.parse(e.clocked_out_at as string), d.ymd) })
+    return (
+      <>
+        {line && (
+          <Text style={[styles.fixLine, line.status === 'approved' && styles.fixOk, line.status === 'declined' && styles.fixNo]}>
+            {line.status === 'pending' ? t('week_fix_pending')
+              : line.status === 'approved' ? t('week_fix_approved')
+              : line.note ? ti(t('week_fix_declined_note'), { note: line.note }) : t('week_fix_declined')}
+          </Text>
+        )}
+        {canAsk && closed.map(e => (
+          <TouchableOpacity key={e.id} onPress={() => setFixFor({
+            entry: { id: e.id, clocked_in_at: e.clocked_in_at, clocked_out_at: e.clocked_out_at as string },
+            ymd: d.ymd, inMs: Date.parse(e.clocked_in_at), outMs: Date.parse(e.clocked_out_at as string),
+          })} accessibilityRole="button" hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}>
+            <Text style={styles.fixLink}>{closed.length > 1 ? ti(t('week_fix_link_span'), { span: span(e) }) : t('week_fix_link')} ›</Text>
+          </TouchableOpacity>
+        ))}
+        {canAsk && closed.length === 0 && !d.entries.some(e => (e.entry_type ?? 'work') === 'shift') && (
+          <TouchableOpacity onPress={() => setFixFor({ entry: null, ymd: d.ymd })} accessibilityRole="button" hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}>
+            <Text style={styles.fixLink}>{t('week_forgot_link')} ›</Text>
+          </TouchableOpacity>
+        )}
+      </>
+    )
   }
 
   const totals = view?.totals
@@ -329,6 +398,7 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
                         {d.notes.map(n => <Text key={n} style={styles.warn}>{pauseReasonLabel(n, t)}</Text>)}
                         {d.state === 'on_clock' && <Text style={styles.meta}>{t('week_pay_later')}</Text>}
                         {!!d.pay && d.pay.amount < 0 && <Text style={styles.meta}>{t('week_adjusted')}</Text>}
+                        {fixLines(d)}
                       </View>
                       {right && (
                         <View style={styles.moneyCol}>
@@ -346,6 +416,7 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
           </>
         )}
       </ScrollView>
+      <TimeFixSheet target={fixFor} onClose={() => setFixFor(null)} onSent={() => { if (week) loadAsks(week.start, loadGen.current) }} />
     </SafeAreaView>
   )
 }
@@ -389,6 +460,10 @@ const styles = StyleSheet.create({
   meta: { fontSize: 12, color: '#64748B', marginTop: 3, lineHeight: 16 },
   metaFirst: { marginTop: 0, fontSize: 13 },
   warn: { fontSize: 12, color: '#B45309', marginTop: 3, fontWeight: '600' },
+  fixLine: { fontSize: 12, color: '#92750F', marginTop: 4, fontWeight: '700' },
+  fixOk: { color: '#047857' },
+  fixNo: { color: '#B91C1C' },
+  fixLink: { fontSize: 13, color: '#8A6810', marginTop: 6, fontWeight: '800' },
   moneyCol: { alignItems: 'flex-end', maxWidth: 110, paddingTop: 1 },
   amount: { fontSize: 15, fontWeight: '800', color: '#0F172A', fontVariant: ['tabular-nums'], textAlign: 'right' },
   amountOn: { color: '#047857' },
