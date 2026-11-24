@@ -52,6 +52,13 @@ const BY_NOTES: [RegExp, TranslationKey, TranslationKey][] = [
   [/^Day started by (.+)$/, 'pr_day_started_by', 'pr_day_started_office'],
 ]
 
+// A time fix the office approved (rinsebase-app 20261124132253_time_fix_requests
+// review_time_fix): the crew member's own reason after the fixed words.
+const PREFIX_NOTES: [string, TranslationKey][] = [
+  ['Time fix approved: ', 'pr_time_fix_approved'],
+  ['Added from a time fix: ', 'pr_time_fix_added'],
+]
+
 const KNOWN: Record<string, TranslationKey> = {
   ...Object.fromEntries(PAUSE_REASONS.map(r => [r.value, r.key])),
   ...SYSTEM_NOTES,
@@ -60,6 +67,9 @@ const KNOWN: Record<string, TranslationKey> = {
 function part(p: string, t: (k: TranslationKey) => string): string {
   const key = KNOWN[p]
   if (key) return t(key)
+  for (const [prefix, key] of PREFIX_NOTES) {
+    if (p.startsWith(prefix)) return t(key).split('{why}').join(p.slice(prefix.length))
+  }
   for (const [re, byName, byOffice] of BY_NOTES) {
     const m = p.match(re)
     if (m) return m[1] === 'the office' ? t(byOffice) : t(byName).split('{who}').join(m[1])
