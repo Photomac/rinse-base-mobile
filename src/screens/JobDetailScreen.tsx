@@ -54,12 +54,13 @@ import { flushQueue, pendingStatus, PendingStatus, onPhotoQueueChange, photoQueu
 import { shotsShown, withoutShot, withShotStates, type RoomShot, type ShotState } from '../lib/roomShots'
 import { completeWhileUploading, type WhileUploading } from '../lib/photoBlockers'
 import { readHoldAnswer, whoHasThePhotos, type HoldAnswer } from '../lib/photosOnTheWay'
-import { cachedRead } from '../lib/dataCache'
+import { cachedRead, readSoon } from '../lib/dataCache'
 import { noteCachedJobs } from '../lib/cachePrune'
 import { mapsUrl, withPropertyLocation, type MapsAddress } from '../lib/mapsLink'
 // Every cached read here is built in lib/jobReads, shared with the offline day
 // pack (lib/offlinePrefetch) so what it saves is exactly what this screen reads.
-import { crewClockRead, checkFirstStartRead, videosOwedRead, stayAtArrivalTenantRead } from '../lib/jobReads'
+import { crewClockRead, checkFirstStartRead, videosOwedRead, stayAtArrivalTenantRead, cleanStartNeedsDayRead, dashShiftRead } from '../lib/jobReads'
+import { dayNeededFirst, dayRunningFrom } from '../lib/timeFix'
 import { videosInBlockers, videosInRefusal, videosFromOwedRows, videosStillOwed, arrivalOnClean } from '../lib/videosOwed'
 import { queuedJobVideos, announceVideos, flushVideoQueue, type WalkthroughType, type QueuedJobVideo } from '../lib/videoQueue'
 import {
@@ -1267,10 +1268,48 @@ export function JobDetailScreen({ job, user, onBack, onStatusChange, onJobEdited
     }
   }
 
-  // Daily mode's "start" is its clock-in: same windows.
-  function handleStartDaily() {
+  // Daily mode's "start" is its clock-in: same windows. First, at a company
+  // that turned on "Start my day before a clean" (lib/timeFix dayNeededFirst),
+  // someone with no day running is asked to start it, and the clean isn't
+  // started: a clean started with no day running is time nobody is paid for
+  // (True Shine 11/23). Ahead of the note and Check first, so nobody reads
+  // them and is then turned away.
+  async function handleStartDaily() {
+    if (await dayNotStarted()) return
     if (crewNoteNeedsAck && !recordsForOthers) { setNotePrompt({ then: () => askCheckFirst(startJobDaily) }); return }
     askCheckFirst(startJobDaily)
+  }
+
+  // True = asked to start the day first (and nothing was started). The switch
+  // and the open day are read at the tap, each waiting at most 2.5 s for the
+  // server before the copy saved on this phone; a Start my day still queued on
+  // this phone counts as running. Anything the phone can't tell lets the start
+  // go ahead, as before the switch.
+  async function dayNotStarted(): Promise<boolean> {
+    if (!dailyMode || recordsForOthers || notCheckedRole(user.role)) return false
+    setSaving(true)
+    try {
+      const rule = await readSoon<any>(cleanStartNeedsDayRead(user.tenant_id), 2_500)
+      const switchOn = !rule.error && rule.data?.clean_start_needs_day === true
+      if (!switchOn) return false
+      const shift = await readSoon<any>(dashShiftRead(user), 2_500)
+      let dayRunning: boolean | null = null
+      if (!shift.error) {
+        const rows = await overlayPending('job_time_entries', shift.data ? [{ ...shift.data, entry_type: 'shift' }] : [],
+          v => v.user_id === user.id && v.entry_type === 'shift' && !v.job_id)
+        dayRunning = dayRunningFrom(rows)
+      }
+      if (!dayNeededFirst({ dailyMode, switchOn, officeExempt: false, recordsForOthers, dayRunning })) return false
+      Alert.alert(t('day_first_title'), t('day_first_body'), [
+        { text: t('ok'), style: 'cancel' },
+        { text: t('day_first_back'), onPress: onBack },
+      ])
+      return true
+    } catch {
+      return false
+    } finally {
+      setSaving(false)
+    }
   }
 
   // The Check first window, after the note's and before the start it holds.
