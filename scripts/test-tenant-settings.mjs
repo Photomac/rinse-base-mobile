@@ -144,8 +144,9 @@ check('…each keeps its own offline key', ['tenantVideoRead', 'tenantSeedRead',
   ['tenvideo:', 'tenseed:', 'tenmode:', 'tenphotoreq:', 'cften:', 'cilrule:', 'scten:', 'rtcten:', 'srpten:', 'sraten:'])
 const ownTenantReads = [...code.matchAll(/from\('tenants'\)\s*\.select\('([^']+)'\)/g)].map(m => m[1])
 // clean_start_needs_day (lib/timeFix) is read only when Start is tapped on a
-// day-shift clean, so it stays off every clean's shared request.
-check('no read in jobReads sends a listed column on its own any more (the driver pickup time and the Start-my-day switch stay their own)', ownTenantReads, ['clean_start_needs_day', 'default_checkout_time'])
+// day-shift clean, and crew_time_fixes (lib/timeFix timeFixesOn) only at End
+// my day and with My week's asks, so both stay off every clean's shared request.
+check('no read in jobReads sends a listed column on its own any more (the driver pickup time and the two Fix my times / Start-my-day switches stay their own)', ownTenantReads, ['clean_start_needs_day', 'crew_time_fixes', 'default_checkout_time'])
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exit(1)
