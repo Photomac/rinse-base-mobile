@@ -13,6 +13,11 @@
 // 20261124132236_clean_start_needs_day): at a company that turned it on, Start
 // on a clean asks a crew member with no day running to start their day first.
 //
+// A company can turn Fix my times off (tenants.crew_time_fixes, CKS
+// Perfections 2026-11-25: "when times can be changed or corrected I can't tell
+// whether someone actually clocked in right or wrong"): the app then offers no
+// "End and fix times" and no My week links, and request_time_fix refuses.
+//
 // Pure: the screens (components/TimeFixSheet, screens/DashboardScreen,
 // screens/MyWeekScreen, screens/JobDetailScreen) do the reading and sending.
 import type { TranslationKey } from './i18n'
@@ -87,6 +92,8 @@ export function fixErrorKey(error: any): TranslationKey | null {
   if (/say what happened/i.test(m)) return 'fix_p_reason'
   if (/pick both times/i.test(m)) return 'fix_p_no_end'
   if (/only a day/i.test(m)) return 'fix_e_only_day'
+  // the company turned Fix my times off (tenants.crew_time_fixes)
+  if (/doesn.t take time fixes/i.test(m)) return 'fix_e_off'
   // a per-clean company (the app only offers it at day-shift ones), or the
   // database before its migration: the feature isn't there yet
   if (/day-shift companies/i.test(m)) return 'fix_e_not_ready'
@@ -115,6 +122,17 @@ export function dayFixLine(asks: FixAsk[], ymd: string): { status: 'pending' | '
   const top = mine[0]
   if (!top) return null
   return { status: top.status as 'pending' | 'approved' | 'declined', note: top.review_note }
+}
+
+/**
+ * Fix my times at this company (tenants.crew_time_fixes, read by lib/jobReads
+ * crewTimeFixesRead). Off only when the company's answer says false; anything
+ * the phone can't tell (no answer, nothing saved, a database without the
+ * column) leaves it on, as before the switch. The server refuses an ask at a
+ * company that turned it off either way.
+ */
+export function timeFixesOn(read: { data?: any; error?: any } | null | undefined): boolean {
+  return !(read && !read.error && read.data?.crew_time_fixes === false)
 }
 
 /** A day shift whose times can be fixed: closed, the person's own, no clean. */

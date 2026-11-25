@@ -25,7 +25,7 @@ import { dayEndChecked, dayEndFields, dayStartSites, type DayEndDecision } from 
 import { arrivalForStart } from '../lib/siteVisits'
 import { cachedQuery, cachedRead, readSoon, writeCacheEntry, cacheEpoch } from '../lib/dataCache'
 import { lastTripFailed } from '../lib/netFetch'
-import { dashTodayRead, dashShiftRead, dashStrandedRead, homeDayRows, sameDayInspections } from '../lib/jobReads'
+import { dashTodayRead, dashShiftRead, dashStrandedRead, homeDayRows, sameDayInspections, crewTimeFixesRead } from '../lib/jobReads'
 import { placeLabel, hiddenAddressText } from '../lib/crewScope'
 import { markSameDay } from '../lib/sameDayCheckin'
 import { prefetchDays, loadDayPack, onDayPackChange, stopsAhead, type DayPack } from '../lib/offlinePrefetch'
@@ -37,6 +37,7 @@ import { SentBackCard } from '../components/SentBackCard'
 import { InspectionsToReviewCard } from '../components/InspectionsToReviewCard'
 import { JobClock } from '../components/JobClock'
 import { TimeFixSheet, type TimeFixTarget } from '../components/TimeFixSheet'
+import { timeFixesOn } from '../lib/timeFix'
 // Job times and the day bucket render in the TENANT's zone, not the phone's,
 // so the crew and the owner read the same clock for the same clean. See
 // src/lib/timezone.ts.
@@ -84,6 +85,9 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
   const [activeShift, setActiveShift] = useState<any>(null)
   // Fix my times, opened on the day End and fix times just ended (lib/timeFix).
   const [fixFor, setFixFor] = useState<TimeFixTarget | null>(null)
+  // Set while End my day reads the company's Fix my times switch, so a second
+  // tap in that moment doesn't stack a second dialog.
+  const askingEnd = useRef(false)
   // False until this screen has read whether a shift is open. Until then the
   // card offers neither Start nor End: a Dashboard that just mounted (app
   // opened, back from a job) used to show "Start my day" over a running shift
@@ -486,22 +490,40 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
       Alert.alert(t('end_my_day'), ti(t('end_day_open_clean'), { place }), [
         { text: t('cancel') || 'Cancel', style: 'cancel' },
         { text: t('cant_finish'), onPress: () => onJobPress(openClean) },
-        { text: t('end_my_day'), style: 'destructive', onPress: () => confirmEndDay() },
+        { text: t('end_my_day'), style: 'destructive', onPress: () => { void confirmEndDay() } },
       ])
       return
     }
-    confirmEndDay()
+    void confirmEndDay()
   }
 
   // End my day asks first. "End and fix times" (lib/timeFix, True Shine 11/23:
   // "employees frequently forget to clock in or out"): the day ends at the tap
   // as always, then Fix my times opens on it, so they can ask the office for
   // the times they really worked. Nothing changes until the office approves.
-  function confirmEndDay() {
-    if (!activeShift) return
+  // Not offered at a company that turned Fix my times off (tenants
+  // .crew_time_fixes, CKS 11/25): its switch is read at the tap, waiting at
+  // most 1.5 s before the copy saved on this phone and 2 s in all; anything
+  // the phone can't tell offers it, as before the switch (the server refuses
+  // the ask anyway).
+  async function confirmEndDay() {
+    if (!activeShift || askingEnd.current) return
+    askingEnd.current = true
+    let fixes = true
+    let timer: any
+    try {
+      const read = await Promise.race([
+        readSoon<any>(crewTimeFixesRead(user.tenant_id), 1_500),
+        new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 2_000) }),
+      ])
+      fixes = timeFixesOn(read)
+    } catch { /* can't tell: offered, as before */ } finally {
+      clearTimeout(timer)
+      askingEnd.current = false
+    }
     Alert.alert(t('end_my_day'), t('on_shift_since') + ' ' + shiftSince(activeShift.clocked_in_at), [
       { text: t('cancel') || 'Cancel', style: 'cancel' },
-      { text: t('fix_end_and_fix'), onPress: async () => {
+      ...(fixes ? [{ text: t('fix_end_and_fix'), onPress: async () => {
         const ended = await endDayNow()
         if (ended === 'queued') { Alert.alert('📡', t('fix_day_ended_offline')); return }
         if (ended) {
@@ -510,7 +532,7 @@ export function DashboardScreen({ user, onJobPress, onNavigate, onSOS }: { user:
             inMs: Date.parse(ended.clocked_in_at), outMs: Date.parse(ended.clocked_out_at),
           })
         }
-      } },
+      } }] : []),
       { text: t('end_my_day'), style: 'destructive', onPress: () => { void endDayNow() } },
     ])
   }

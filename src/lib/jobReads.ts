@@ -459,6 +459,16 @@ export const cleanStartNeedsDayRead = (tenantId: string): CacheRead => ({
   q: () => supabase.from('tenants').select('clean_start_needs_day').eq('id', tenantId).maybeSingle(),
 })
 
+/** The company's "Fix my times" switch (tenants.crew_time_fixes, rinsebase-app
+ *  crew_time_fixes migration, CKS Perfections 2026-11-25; lib/timeFix
+ *  timeFixesOn). Its own request, read when End my day is tapped and with My
+ *  week's asks, so a clean's screen asks for nothing more. Before that
+ *  migration it fails, which means on (as before the switch). */
+export const crewTimeFixesRead = (tenantId: string): CacheRead => ({
+  key: `ctfx:${tenantId}`,
+  q: () => supabase.from('tenants').select('crew_time_fixes').eq('id', tenantId).maybeSingle(),
+})
+
 /** The company's clock-in location switch and office pin (lib/clockInLocation).
  *  On its own: before its migration this read errors, which means off. */
 export const clockInRuleRead = (tenantId: string): CacheRead => ({

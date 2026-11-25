@@ -190,6 +190,8 @@ const scenarios: Record<string, () => Promise<void>> = {
       stayAtArrivalTenantRead: () => R.stayAtArrivalTenantRead(T),
       // "Start my day before a clean" (lib/timeFix): one key per company, kept.
       cleanStartNeedsDayRead: () => R.cleanStartNeedsDayRead(T),
+      // "Fix my times" switch (lib/timeFix timeFixesOn): one key per company, kept.
+      crewTimeFixesRead: () => R.crewTimeFixesRead(T),
       stayPhotosRead: () => R.stayPhotosRead(J),
       videosOwedRead: () => R.videosOwedRead(J),
       walkthroughLinesRead: () => R.walkthroughLinesRead(J),
