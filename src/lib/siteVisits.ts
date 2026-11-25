@@ -34,7 +34,7 @@ import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { uuid4 } from './outbox'
 import {
   decideSiteEvent, isSetupEcho, pruneSiteQueue, siteSendOutcome, readFenceMark, pruneTrail, departureFromTrail, arrivalToOffer,
-  OFFICE_FENCE, type SiteEventRow, type TrailFix,
+  fenceKind, siteRowPlace, MAX_COMPANY_PLACES, type SiteEventRow, type TrailFix,
 } from './siteVisitRules'
 
 const QUEUE_KEY = 'site_events:queue'
@@ -60,6 +60,18 @@ export async function siteVisitsOn(tenantId: string | null | undefined): Promise
   } catch { return false }
 }
 
+/** Does the company start a forgotten day from the arrival record
+ *  (tenants.location_starts_forgotten_days, rinsebase-app 20261125200000)?
+ *  Saved-copy read; any error, the column not existing included, is "no". */
+export async function startsForgottenDays(tenantId: string | null | undefined): Promise<boolean> {
+  if (!tenantId) return false
+  try {
+    const { data } = await cachedQuery(`site:fill:${tenantId}`,
+      supabase.from('tenants').select('location_starts_forgotten_days').eq('id', tenantId).maybeSingle())
+    return (data as any)?.location_starts_forgotten_days === true
+  } catch { return false }
+}
+
 /** Where the office is: the company's address (tenants.lat/lng, Settings).
  *  Its own saved-copy read, so a headless wake offline still knows; null when
  *  there's none (no fence). */
@@ -73,6 +85,22 @@ export async function officeLocation(tenantId: string | null | undefined): Promi
     const lat = Number(row.lat), lng = Number(row.lng)
     return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null
   } catch { return null }
+}
+
+/** The company's other places (rinsebase-app 20261125200100_company_places;
+ *  CKS 2026-11-25: Catherine's house, where the linens go), fenced like the
+ *  office. Its own saved-copy read; [] when there are none, or before the
+ *  table exists. */
+export async function companyPlaces(tenantId: string | null | undefined): Promise<{ id: string; lat: number; lng: number }[]> {
+  if (!tenantId) return []
+  try {
+    const { data } = await cachedQuery(`site:places:${tenantId}`,
+      supabase.from('company_places').select('id, lat, lng').eq('tenant_id', tenantId).is('archived_at', null)
+        .order('created_at').limit(MAX_COMPANY_PLACES))
+    return ((data as any[]) ?? [])
+      .map(r => ({ id: String(r.id), lat: Number(r.lat), lng: Number(r.lng) }))
+      .filter(r => r.id && Number.isFinite(r.lat) && Number.isFinite(r.lng))
+  } catch { return [] }
 }
 
 // The phone's own calendar day. The fences are registered and checked on the
@@ -106,16 +134,14 @@ async function msSinceRegistered(atIso: string): Promise<number | null> {
   } catch { return null }
 }
 
-/** Is this fence one of today's arrive/leave fences? 'stale' = it was, on an
- *  earlier day (the fences are re-registered when Home next loads; until then
- *  a crossing at yesterday's home is not recorded). */
+/** Is this fence one of today's arrive/leave fences? 'stale' = a home's, from
+ *  an earlier day (the fences are re-registered when Home next loads; until
+ *  then a crossing at yesterday's home is not recorded). The office and the
+ *  company places record on any day (siteVisitRules fenceKind). */
 export async function siteFenceKind(jobId: string): Promise<'site' | 'stale' | 'other'> {
   try {
     const raw = await AsyncStorage.getItem(ARMED_KEY)
-    if (!raw) return 'other'
-    const armed = JSON.parse(raw) as { day: string; jobIds: string[] }
-    if (!armed?.jobIds?.includes(jobId)) return 'other'
-    return armed.day === today() ? 'site' : 'stale'
+    return fenceKind(raw ? JSON.parse(raw) : null, jobId, today())
   } catch { return 'other' }
 }
 
@@ -126,8 +152,8 @@ const chains: Record<string, Promise<void>> = {}
 /** The fence the OS reported: its centre and radius (the region it watched). */
 export type FenceCentre = { lat: number; lng: number; radius: number }
 
-/** An OS fence report for an arrive/leave fence (a clean's home, or
- *  OFFICE_FENCE). The time is taken now, before anything waits. */
+/** An OS fence report for an arrive/leave fence (a clean's home, OFFICE_FENCE
+ *  or a company place's). The time is taken now, before anything waits. */
 export function onSiteCrossing(jobId: string, report: 'enter' | 'exit', centre: FenceCentre | null = null): Promise<void> {
   const at = new Date().toISOString()
   const run = (chains[jobId] ?? Promise.resolve()).then(() => handleCrossing(jobId, report, at, centre)).catch(() => {})
@@ -150,13 +176,15 @@ async function handleCrossing(jobId: string, report: 'enter' | 'exit', reportedA
   const user = await signedInUser()
   if (!user?.id || !user?.tenant_id) return
   const fix = await quickFix(5000)
-  const office = jobId === OFFICE_FENCE
-  const clean = office ? null : jobId
-  const place = office ? 'office' : 'home'
-  await recordSiteEvent({
-    id: uuid4(), tenant_id: user.tenant_id, job_id: clean, user_id: user.id, kind, at, place,
+  const { place, job_id, place_id } = siteRowPlace(jobId)
+  const row: SiteEventRow = {
+    id: uuid4(), tenant_id: user.tenant_id, job_id, user_id: user.id, kind, at, place,
     lat: fix?.lat ?? null, lng: fix?.lng ?? null, accuracy_m: fix?.accuracy ?? null,
-  })
+  }
+  // Only a company place's row names one: a server before
+  // 20261125200100_company_places has no such column and would refuse it.
+  if (place_id) row.place_id = place_id
+  await recordSiteEvent(row)
 }
 
 async function readTrail(): Promise<TrailFix[]> {
