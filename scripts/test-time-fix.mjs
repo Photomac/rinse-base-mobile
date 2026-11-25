@@ -15,13 +15,17 @@
 //     switch on, for crew with no day running, never when the phone can't tell;
 //   • an approved fix's note on the time list in the crew's language;
 //   • every new string in English, Spanish and Portuguese, same {placeholders};
+//   • a company that turned Fix my times off (tenants.crew_time_fixes, CKS
+//     11/25): off only on the company's own false; no answer, nothing saved or
+//     a database without the column = on; the server's refusal in their words;
 // and, in the screens, that the sheet calls request_time_fix with its
 // parameter names and a stable id, Home offers "End and fix times" and ends the
 // day before the sheet, My week offers the links at a day-shift company only,
-// and the clean screen checks before the note and Check first windows.
+// neither offers them where the company turned them off, and the clean screen
+// checks before the note and Check first windows.
 //
 // Usage: node scripts/test-time-fix.mjs
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -74,6 +78,8 @@ check('the start on another day', e('The start has to be on the same day.'), 'fi
 check('not found', e('That day could not be found.'), 'fix_e_not_found')
 check('the database before its migration', e('Could not find the function public.request_time_fix(p_entry_id, p_id, p_in, p_out, p_reason) in the schema cache'), 'fix_e_not_ready')
 check('a per-clean company', e('Fixing a day\'s times is for day-shift companies.'), 'fix_e_not_ready')
+check('the company turned Fix my times off', e('Your company doesn\'t take time fixes in the app. Ask the office.'), 'fix_e_off')
+check('…not read as payroll approved (both say Ask the office)', e('Payroll already approved that day. Ask the office.'), 'fix_e_paid')
 check('anything else shows as the server wrote it', e('Sign in again to do this.'), null)
 // The web repo's migration, when that repo is on this machine (as test-i18n:
 // RINSEBASE_WEB_REPO, else a sibling checkout).
@@ -86,6 +92,28 @@ if (SERVER) {
   check('every refusal request_time_fix raises has the crew\'s words (web migration on this machine)',
     crewSide.filter(m => !F.fixErrorKey({ message: m })), [])
 }
+
+// The switch's own migration in the web repo, when it's on this machine.
+let OFF_MIG = ''
+try {
+  const dir = join(WEB, 'supabase/migrations')
+  const f = readdirSync(dir).filter(n => /_crew_time_fixes/.test(n)).sort().pop()
+  if (f) OFF_MIG = readFileSync(join(dir, f), 'utf8')
+} catch { /* not here: skipped */ }
+if (OFF_MIG) {
+  const offRaised = [...OFF_MIG.matchAll(/raise exception '([^']*(?:''[^']*)*)' using errcode = '42501'/g)].map(m => m[1].replace(/''/g, "'"))
+    .filter(m => /time fixes/i.test(m))
+  check('the switch\'s refusal (web migration on this machine) has the crew\'s words', offRaised.length > 0 && offRaised.every(m => F.fixErrorKey({ message: m }) === 'fix_e_off'), true)
+}
+
+// ── The company's switch ────────────────────────────────────────────────────
+check('the company said off: off', F.timeFixesOn({ data: { crew_time_fixes: false }, error: null }), false)
+check('the company said on: on', F.timeFixesOn({ data: { crew_time_fixes: true }, error: null }), true)
+check('a database without the column (42703): on, as before', F.timeFixesOn({ data: null, error: { code: '42703', message: 'column tenants.crew_time_fixes does not exist' } }), true)
+check('no signal and nothing saved: on', F.timeFixesOn({ data: null, error: { message: 'Network request failed', offline: true } }), true)
+check('no answer at all (the 2 s cap): on', [F.timeFixesOn(null), F.timeFixesOn(undefined)], [true, true])
+check('no company row: on', F.timeFixesOn({ data: null, error: null }), true)
+check('a null in the column: on (only false turns it off)', F.timeFixesOn({ data: { crew_time_fixes: null }, error: null }), true)
 
 // ── My week's line ──────────────────────────────────────────────────────────
 const ask = (o) => ({ id: 'x', time_entry_id: null, work_date: '2026-11-22', asked_in: '', asked_out: '', status: 'pending', review_note: null, created_at: '2026-11-23T01:00:00Z', ...o })
@@ -152,10 +180,22 @@ check('Home offers End and fix times beside End my day', confirm.includes("t('fi
 check('…which ends the day first, then opens the sheet on it', confirm.indexOf('await endDayNow()') < confirm.indexOf('setFixFor('), true)
 check('…and says so when the end only queued', confirm.includes("ended === 'queued'") && confirm.includes("t('fix_day_ended_offline')"), true)
 check('Home renders the sheet', home.includes('<TimeFixSheet target={fixFor}'), true)
+check('…offers End and fix times only where the company keeps Fix my times on',
+  confirm.includes('...(fixes ? [{ text: t(\'fix_end_and_fix\')') && confirm.includes('fixes = timeFixesOn(read)'), true)
+check('…reading the switch at the tap: 1.5 s before the saved copy, 2 s in all, anything else = on',
+  ['crewTimeFixesRead(user.tenant_id), 1_500', 'setTimeout(() => resolve(null), 2_000)', 'let fixes = true', 'catch { /* can\'t tell'].every(w => confirm.includes(w)), true)
+check('…End my day and Cancel stay whatever the switch says',
+  /\{ text: t\('cancel'\) \|\| 'Cancel', style: 'cancel' \},\n\s+\.\.\.\(fixes/.test(confirm) && /: \[\]\),\n\s+\{ text: t\('end_my_day'\), style: 'destructive', onPress: \(\) => \{ void endDayNow\(\) \} \}/.test(confirm), true)
+check('…and a second tap while it reads stacks no second dialog', confirm.includes('if (!activeShift || askingEnd.current) return') && confirm.includes('askingEnd.current = false'), true)
 const week = read('src/screens/MyWeekScreen.tsx')
 check('My week offers it at a day-shift company only', week.includes("const dailyMode = user._timeMode === 'daily'") && week.includes('if (!dailyMode || asks === null) return null'), true)
 check('…reads only the person\'s own asks', week.includes(".from('time_fix_requests')") && week.includes(".eq('user_id', user.id)"), true)
 check('…within the window, not on a running or coming day', week.includes('withinFixWindow(d.ymd, todayKey())') && week.includes("d.state !== 'upcoming' && !d.open"), true)
+check('…no links where the company turned Fix my times off', week.includes('const canAsk = fixesOn && withinFixWindow('), true)
+check('…the switch read beside the asks, a failed read = on', week.includes('cachedRead(crewTimeFixesRead(user.tenant_id)).catch(') && week.includes('setFixesOn(timeFixesOn(on))') && week.includes('const [fixesOn, setFixesOn] = useState(true)'), true)
+const lines = week.slice(week.indexOf('function fixLines('), week.indexOf('const canAsk'))
+check('…answers to asks already sent still show when it\'s off', lines.includes('dayFixLine(asks, d.ymd)') && !lines.includes('fixesOn'), true)
+check('only Home and My week open the sheet', ['src/screens/JobDetailScreen.tsx', 'src/screens/ScheduleScreen.tsx', 'src/screens/ProfileScreen.tsx', 'App.tsx'].filter(f => read(f).includes('TimeFixSheet')), [])
 const job = read('src/screens/JobDetailScreen.tsx')
 const start = job.slice(job.indexOf('async function handleStartDaily()'), job.indexOf('async function dayNotStarted()'))
 check('the clean screen checks the day before the note and Check first',
@@ -166,6 +206,9 @@ check('…reads the switch and the open day, a queued Start counting', ['cleanSt
 check('…and lets the start go when anything fails', gate.includes('} catch {\n      return false'), true)
 const reads = read('src/lib/jobReads.ts')
 check('the switch is its own request, not on every clean\'s shared one', reads.includes("select('clean_start_needs_day')") && !read('src/lib/tenantColumnsCore.ts').includes('clean_start_needs_day'), true)
+check('Fix my times\' switch too: its own cached request of its own column, one key per company',
+  reads.includes("key: `ctfx:${tenantId}`,\n  q: () => supabase.from('tenants').select('crew_time_fixes').eq('id', tenantId).maybeSingle(),")
+  && !read('src/lib/tenantColumnsCore.ts').includes('crew_time_fixes'), true)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

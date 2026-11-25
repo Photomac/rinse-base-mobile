@@ -32,7 +32,8 @@ import {
 } from '../lib/myWeek'
 import { myWeekPaydayRead, myWeekRead, myWeekScheduleRead, scheduleOf, type WeekData } from '../lib/myWeekReads'
 import { supabase } from '../lib/supabase'
-import { dayFixLine, fixableShift, withinFixWindow, type FixAsk } from '../lib/timeFix'
+import { dayFixLine, fixableShift, timeFixesOn, withinFixWindow, type FixAsk } from '../lib/timeFix'
+import { crewTimeFixesRead } from '../lib/jobReads'
 import { TimeFixSheet, type TimeFixTarget } from '../components/TimeFixSheet'
 
 function boundsOf(start: string): DayBounds[] {
@@ -62,6 +63,9 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
   // This week's time fix asks (day-shift companies only). null = can't offer
   // it here: per-clean clock, no signal, or a database without the table.
   const [asks, setAsks] = useState<FixAsk[] | null>(null)
+  // The company's Fix my times switch (tenants.crew_time_fixes, CKS 11/25):
+  // off = no links to ask (the answers to asks already sent still show).
+  const [fixesOn, setFixesOn] = useState(true)
   const [fixFor, setFixFor] = useState<TimeFixTarget | null>(null)
   const dailyMode = user._timeMode === 'daily'
   // Bumped per load: an older load's late answer must not replace a newer week.
@@ -133,16 +137,21 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
   // The person's own asks for the week (time_fix_requests: they read only
   // their own). Live only: an ask is sent live, so with no signal there is
   // nothing to offer, and a failed read hides the links rather than offering
-  // something that can't be sent.
+  // something that can't be sent. The company's switch is read beside them
+  // (its own cached request; anything the phone can't tell = on).
   async function loadAsks(start: string, gen: number) {
     try {
-      const { data: rows, error } = await supabase.from('time_fix_requests')
-        .select('id, time_entry_id, work_date, asked_in, asked_out, status, review_note, created_at')
-        .eq('user_id', user.id)
-        .gte('work_date', start).lte('work_date', addDays(start, 6))
-        .order('created_at', { ascending: false })
-        .limit(100)
+      const [{ data: rows, error }, on] = await Promise.all([
+        supabase.from('time_fix_requests')
+          .select('id, time_entry_id, work_date, asked_in, asked_out, status, review_note, created_at')
+          .eq('user_id', user.id)
+          .gte('work_date', start).lte('work_date', addDays(start, 6))
+          .order('created_at', { ascending: false })
+          .limit(100),
+        cachedRead(crewTimeFixesRead(user.tenant_id)).catch(err => ({ data: null, error: err, fromCache: false })),
+      ])
       if (gen !== loadGen.current) return
+      setFixesOn(timeFixesOn(on))
       setAsks(error ? null : ((rows ?? []) as FixAsk[]))
     } catch {
       if (gen === loadGen.current) setAsks(null)
@@ -256,7 +265,7 @@ export function MyWeekScreen({ user, navigation, onBack }: { user: any; navigati
     const noted = d.notes.some(n => /(^|· )(Time fix approved|Added from a time fix): /.test(n))
     const found = dayFixLine(asks, d.ymd)
     const line = found && !(found.status === 'approved' && noted) ? found : null
-    const canAsk = withinFixWindow(d.ymd, todayKey()) && d.state !== 'upcoming' && !d.open
+    const canAsk = fixesOn && withinFixWindow(d.ymd, todayKey()) && d.state !== 'upcoming' && !d.open
     const closed = d.entries.filter(e => fixableShift(e))
     const span = (e: { clocked_in_at: string; clocked_out_at?: string | null }) =>
       ti(t('team_in_to_out'), { in: timeOf(Date.parse(e.clocked_in_at)), out: timeOn(Date.parse(e.clocked_out_at as string), d.ymd) })
