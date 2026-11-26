@@ -36,6 +36,13 @@ const SYSTEM_NOTES: Record<string, TranslationKey> = {
   // on (rinsebase-app 20261023210200_complete_cleans_left_behind).
   'Auto-closed: ended when they left the last home': 'pr_auto_left_home',
   'Auto-closed: ended when they left the office': 'pr_auto_left_office',
+  // ...or one of the company's places (a laundry drop-off), and a day the server
+  // started from the recorded arrival because Start my day was forgotten
+  // (rinsebase-app 20261125200200_start_forgotten_days_from_location; CKS 2026-11-25)
+  'Auto-closed: ended when they left a company place': 'pr_auto_left_place',
+  'Started from location: arrived at the office': 'pr_loc_start_office',
+  'Started from location: arrived at a company place': 'pr_loc_start_place',
+  'Started from location: arrived at a home on their list': 'pr_loc_start_home',
   'Manual entry by owner': 'pr_manual_owner',
   'Clocked out by owner (left open)': 'pr_clocked_out_owner_open',
   // "Can't finish today" closing a per-clean punch (lib/unfinishedReason

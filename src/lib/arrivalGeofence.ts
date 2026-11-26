@@ -21,8 +21,8 @@ import { savePunch } from './timeTracker'
 import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti, localeStatic } from './i18n'
-import { siteVisitsOn, officeLocation, markSiteFences, siteFenceKind, onSiteCrossing, flushSiteEvents, noteFencesRegistered } from './siteVisits'
-import { SITE_FENCE_STATUSES, OFFICE_FENCE } from './siteVisitRules'
+import { siteVisitsOn, officeLocation, companyPlaces, markSiteFences, siteFenceKind, onSiteCrossing, flushSiteEvents, noteFencesRegistered } from './siteVisits'
+import { SITE_FENCE_STATUSES, OFFICE_FENCE, MAX_SITE_HOMES, placeFence } from './siteVisitRules'
 import { effectiveTimeMode } from './dayClock'
 import { accuracyMOf, type Stamp } from './punchStamp'
 
@@ -86,7 +86,8 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
 // minutes after Complete), and each crossing is recorded, silently. With it
 // off they get none. On a day with any of those, the office (the company's
 // address) gets one too, so leaving it after the last home (the linens) is
-// recorded: MAX_REGIONS homes + the office stays under iOS's 20.
+// recorded, and so does each of the company's places (a laundry drop-off):
+// MAX_SITE_HOMES homes + the office + 2 places is iOS's 20.
 export async function refreshArrivalGeofences(user: any) {
   try {
     if (!user?.id) return
@@ -108,7 +109,8 @@ export async function refreshArrivalGeofences(user: any) {
       .gte('scheduled_start', dayStart.toISOString())
       .lte('scheduled_start', dayEnd.toISOString())
       .order('scheduled_start')
-      .limit(MAX_REGIONS)
+      // day-shift fences leave room for the office and the company places
+      .limit(site ? MAX_SITE_HOMES : MAX_REGIONS)
 
     const regions = (jobs ?? [])
       .filter((j: any) => canFenceOn(j.client_addresses))
@@ -125,6 +127,10 @@ export async function refreshArrivalGeofences(user: any) {
     const office = site ? await officeLocation(user.tenant_id) : null
     if (office) {
       regions.push({ identifier: OFFICE_FENCE, latitude: office.lat, longitude: office.lng, radius: RADIUS_M, notifyOnEnter: true, notifyOnExit: true })
+    }
+    // The company's other places (a laundry drop-off: CKS 2026-11-25), like the office.
+    for (const p of site ? await companyPlaces(user.tenant_id) : []) {
+      regions.push({ identifier: placeFence(p.id), latitude: p.lat, longitude: p.lng, radius: RADIUS_M, notifyOnEnter: true, notifyOnExit: true })
     }
     // Before registering: the OS reports every fence the phone is already
     // inside as soon as it's registered, and the handler must know what kind

@@ -6,18 +6,66 @@
 
 export type SiteKind = 'arrive' | 'depart'
 export type FenceState = 'in' | 'out'
-/** A home on the person's list (the fence is named by its clean) or the
- *  company's office (rinsebase-app 20261023210100_job_site_events_office). */
-export type SitePlace = 'home' | 'office'
+/** A home on the person's list (the fence is named by its clean), the
+ *  company's office (rinsebase-app 20261023210100_job_site_events_office), or
+ *  one of the company's other places, like a laundry drop-off (rinsebase-app
+ *  20261125200100_company_places; CKS 2026-11-25). */
+export type SitePlace = 'home' | 'office' | 'place'
 
 /** The office fence's name beside the day's cleans: the company's address
  *  (tenants.lat/lng). Crossing it is recorded with no clean. */
 export const OFFICE_FENCE = 'office'
 
+/** A company place's fence is named PLACE_FENCE_PREFIX + its id. Crossing it is
+ *  recorded with no clean and that place's id (place 'place'). */
+export const PLACE_FENCE_PREFIX = 'place:'
+export const placeFence = (placeId: string) => PLACE_FENCE_PREFIX + placeId
+/** The company place a fence watches, or null for a home or the office. */
+export function placeIdOfFence(fence: string | null | undefined): string | null {
+  return typeof fence === 'string' && fence.startsWith(PLACE_FENCE_PREFIX) && fence.length > PLACE_FENCE_PREFIX.length
+    ? fence.slice(PLACE_FENCE_PREFIX.length) : null
+}
+/** What a crossing of this fence is recorded as: its place, its clean, its company place. */
+export function siteRowPlace(fence: string): { place: SitePlace; job_id: string | null; place_id: string | null } {
+  if (fence === OFFICE_FENCE) return { place: 'office', job_id: null, place_id: null }
+  const placeId = placeIdOfFence(fence)
+  if (placeId) return { place: 'place', job_id: null, place_id: placeId }
+  return { place: 'home', job_id: fence, place_id: null }
+}
+
+/** A company that starts forgotten days from the arrival record asks a crew
+ *  member whose phone isn't on Location "Always" again, at a Start my day,
+ *  once a week at most (only "Always" records with the app closed; on
+ *  2026-11-25 that was 1 of CKS's 13 cleaners). */
+export const SITE_NUDGE_EVERY_MS = 7 * 24 * 60 * 60 * 1000
+export function siteNudgeDue(lastShownMs: number | null | undefined, nowMs: number): boolean {
+  return lastShownMs == null || !Number.isFinite(lastShownMs) || nowMs - lastShownMs >= SITE_NUDGE_EVERY_MS || lastShownMs > nowMs + 60_000
+}
+
+/** The most fences a day-shift phone watches around homes: 17, plus the office
+ *  and up to MAX_COMPANY_PLACES places, within the 20 regions iOS allows. */
+export const MAX_SITE_HOMES = 17
+export const MAX_COMPANY_PLACES = 2
+
+/**
+ * Is this fence one of the armed arrive/leave fences? A home's fence belongs to
+ * the day it was armed for: on a later day it's 'stale' (yesterday's clean) and
+ * records nothing until Home loads again. The office's and the company places'
+ * fences mean the same place every day, so they record as long as arrive/leave
+ * fences were ever armed on this phone: the morning they forget to open the app
+ * before reaching the office (or the linens) is the morning that matters most
+ * (a forgotten Start my day is started from that arrival).
+ */
+export function fenceKind(armed: { day?: string; jobIds?: string[] } | null | undefined, fence: string, today: string): 'site' | 'stale' | 'other' {
+  if (!armed || !Array.isArray(armed.jobIds) || !armed.jobIds.includes(fence)) return 'other'
+  if (fence === OFFICE_FENCE || placeIdOfFence(fence)) return 'site'
+  return armed.day === today ? 'site' : 'stale'
+}
+
 export interface SiteEventRow {
   id: string
   tenant_id: string
-  /** null for the office */
+  /** null for the office and a company place */
   job_id: string | null
   user_id: string
   kind: SiteKind
@@ -26,6 +74,8 @@ export interface SiteEventRow {
   lng?: number | null
   accuracy_m?: number | null
   place?: SitePlace
+  /** the company place, when place is 'place' */
+  place_id?: string | null
 }
 
 /** Statuses whose homes keep a fence all day in day-shift mode. A completed
@@ -165,11 +215,11 @@ export const START_FROM_ARRIVAL_MIN_MS = 5 * 60 * 1000
 export const START_FROM_ARRIVAL_MAX_MS = 12 * 60 * 60 * 1000
 
 /** The arrival Start my day offers: the newest home fence they're still
- *  inside, within the window. Never the office. */
+ *  inside, within the window. Never the office or a company place. */
 export function arrivalToOffer(marks: { jobId: string; mark: FenceMark | null }[], nowMs: number): { jobId: string; at: number } | null {
   let best: { jobId: string; at: number } | null = null
   for (const { jobId, mark } of marks ?? []) {
-    if (!jobId || jobId === OFFICE_FENCE || mark?.s !== 'in' || mark.t == null) continue
+    if (!jobId || jobId === OFFICE_FENCE || placeIdOfFence(jobId) || mark?.s !== 'in' || mark.t == null) continue
     const age = nowMs - mark.t
     if (age < START_FROM_ARRIVAL_MIN_MS || age > START_FROM_ARRIVAL_MAX_MS) continue
     if (!best || mark.t > best.at) best = { jobId, at: mark.t }
