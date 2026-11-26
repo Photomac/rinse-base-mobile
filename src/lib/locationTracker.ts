@@ -15,7 +15,8 @@ import { myUsersRowFilter, pickMyUsersRow } from './myUsersRow'
 import { byCrewDayOrder } from './jobOrder'
 import { ensureForegroundLocation, ensureBackgroundLocation, getBackgroundLocationStatus } from './permissions'
 import { tStatic, ti } from './i18n'
-import { noteTrail } from './siteVisits'
+import { noteTrail, startsForgottenDays } from './siteVisits'
+import { siteNudgeDue } from './siteVisitRules'
 import { effectiveTimeMode } from './dayClock'
 import { noteRoute, flushRoute, maybeShowRouteNotice } from './routeTrail'
 import type { TrailBasis } from './routeTrailRules'
@@ -318,7 +319,24 @@ export async function startLocationTracking(user: any, opts?: { requestBackgroun
   if (opts?.requestBackground && bgStatus !== 'granted') {
     try {
       const NUDGE_KEY = 'bg_location_map_nudge_shown'
-      if (!(await AsyncStorage.getItem(NUDGE_KEY))) {
+      // A company that starts a forgotten day from when the phone recorded
+      // them arriving (CKS 2026-11-25) asks again, weekly at most: without
+      // "Always" that arrival is never recorded.
+      const SITE_NUDGE_KEY = 'bg_location_site_nudge_at'
+      const last = Number(await AsyncStorage.getItem(SITE_NUDGE_KEY))
+      if (await startsForgottenDays(user.tenant_id)) {
+        if (siteNudgeDue(last > 0 ? last : null, Date.now())) {
+          await AsyncStorage.setItem(SITE_NUDGE_KEY, String(Date.now()))
+          Alert.alert(
+            tStatic('bg_nudge_site_title'),
+            Platform.OS === 'ios' ? tStatic('bg_nudge_site_ios') : tStatic('bg_nudge_site_android'),
+            [
+              { text: tStatic('bg_nudge_later'), style: 'cancel' },
+              { text: tStatic('bg_nudge_settings'), onPress: () => Linking.openSettings() },
+            ],
+          )
+        }
+      } else if (!(await AsyncStorage.getItem(NUDGE_KEY))) {
         await AsyncStorage.setItem(NUDGE_KEY, '1')
         Alert.alert(
           tStatic('bg_nudge_title'),
