@@ -118,7 +118,8 @@ check('…recording only, and only for today\'s fences', /if \(fence === 'site' 
 // Since the per-person day clock (test-day-clock-per-person.mjs) "day-shift"
 // is the person's clock over the company's.
 check('the arrival clock-in still never runs for someone on the day clock', /effectiveTimeMode\(\(mine as any\)\?\.time_tracking_mode, tenant\?\.time_tracking_mode\) === 'daily'[\s\S]{0,80}tenant\?\.auto_clock_in && !daily && windowOpen/.test(fence), true)
-check('a fence from an earlier day is "stale" and records nothing', /return armed\.day === today\(\) \? 'site' : 'stale'/.test(site), true)
+check('a home\'s fence from an earlier day is "stale" and records nothing (the office and company places record any day: siteVisitRules fenceKind)',
+  /return fenceKind\(raw \? JSON\.parse\(raw\) : null, jobId, today\(\)\)/.test(site) && R.fenceKind({ day: 'Mon', jobIds: ['j'] }, 'j', 'Tue') === 'stale', true)
 check('crossings at one fence are handled one at a time, in order (a leave right after an arrive is kept)',
   /chains\[jobId\] \?\? Promise\.resolve\(\)\)\.then\(\(\) => handleCrossing\(jobId, report, at, centre\)\)/.test(site), true)
 check('the crossing time is taken before anything waits', /export function onSiteCrossing\(jobId: string, report: 'enter' \| 'exit', centre: FenceCentre \| null = null\): Promise<void> \{\n  const at = new Date\(\)\.toISOString\(\)/.test(site), true)
@@ -209,7 +210,7 @@ check('the office is fenced only for arrive/leave, and only on a day with homes'
   reg.indexOf("if (regions.length === 0) { await stopArrivalGeofences(); return }") > -1
   && reg.indexOf('const office = site ? await officeLocation(user.tenant_id) : null') > reg.indexOf("if (regions.length === 0) { await stopArrivalGeofences(); return }")
   && /regions\.push\(\{ identifier: OFFICE_FENCE, latitude: office\.lat, longitude: office\.lng, radius: RADIUS_M, notifyOnEnter: true, notifyOnExit: true \}\)/.test(reg), true)
-check('…and its row names no clean', /const clean = office \? null : jobId\n  const place = office \? 'office' : 'home'/.test(site), true)
+check('…and its row names no clean', /const \{ place, job_id, place_id \} = siteRowPlace\(jobId\)/.test(site) && R.siteRowPlace(R.OFFICE_FENCE).job_id === null, true)
 check('a leave is timed from the trail (inside since the arrival it recorded); an arrive at the report', /const at = kind === 'depart' && centre \? await leaveTimeFromTrail\(centre, reportedAt, last\?\.s === 'in' \? last\.t : null\) : reportedAt/.test(site), true)
 check('positions are kept only while today\'s arrive/leave fences are up, and dropped with them', [
   /if \(!raw \|\| JSON\.parse\(raw\)\?\.day !== today\(\)\) return/.test(site),
@@ -225,7 +226,7 @@ check('Start my day offers the arrival and marks a picked one; the tap otherwise
 
 // The row's columns are exactly what the database lets the crew insert.
 const rowKeys = (() => {
-  const m = site.match(/await recordSiteEvent\(\{([\s\S]*?)\}\)/)
+  const m = site.match(/const row: SiteEventRow = \{([\s\S]*?)\n  \}/)
   // `key: value` and shorthand `key`; no value in this literal holds a comma
   return m ? m[1].split(',').map(p => p.trim()).filter(Boolean).map(p => p.split(':')[0].trim()).sort() : []
 })()
@@ -273,6 +274,70 @@ if (!mig) {
     /if \(site\) await noteFencesRegistered\(\)\n    await Location\.startGeofencingAsync\(ARRIVAL_TASK, regions\)/.test(reg), true)
   check('…and only when they really are registered (after the same-set check)',
     reg.indexOf('sameRegionsRegistered(regions)') > -1 && reg.indexOf('sameRegionsRegistered(regions)') < reg.indexOf('noteFencesRegistered()'), true)
+}
+
+// ── Company places (CKS 2026-11-25: Catherine's house, where the linens go) ──
+{
+  check('a place fence is named place:<id>, and read back', [R.placeFence('p1'), R.placeIdOfFence('place:p1'), R.placeIdOfFence('place:'), R.placeIdOfFence('office'), R.placeIdOfFence('job-1')],
+    ['place:p1', 'p1', null, null, null])
+  check('a crossing records its place: home (its clean), office (neither), place (its id)',
+    [R.siteRowPlace('job-1'), R.siteRowPlace(R.OFFICE_FENCE), R.siteRowPlace('place:p1')],
+    [{ place: 'home', job_id: 'job-1', place_id: null }, { place: 'office', job_id: null, place_id: null }, { place: 'place', job_id: null, place_id: 'p1' }])
+  const armed = { day: 'Mon Nov 24 2026', jobIds: ['job-1', R.OFFICE_FENCE, 'place:p1'] }
+  check('today: every armed fence records',
+    [R.fenceKind(armed, 'job-1', 'Mon Nov 24 2026'), R.fenceKind(armed, R.OFFICE_FENCE, 'Mon Nov 24 2026'), R.fenceKind(armed, 'place:p1', 'Mon Nov 24 2026')], ['site', 'site', 'site'])
+  check('the next morning, before Home loads: yesterday\'s home is stale, the office and the places still record (the forgotten Start my day starts from them)',
+    [R.fenceKind(armed, 'job-1', 'Tue Nov 25 2026'), R.fenceKind(armed, R.OFFICE_FENCE, 'Tue Nov 25 2026'), R.fenceKind(armed, 'place:p1', 'Tue Nov 25 2026')], ['stale', 'site', 'site'])
+  check('a fence that was never armed for arrive/leave is someone else\'s',
+    [R.fenceKind(armed, 'place:p2', 'Mon Nov 24 2026'), R.fenceKind(null, R.OFFICE_FENCE, 'Mon Nov 24 2026'), R.fenceKind({ day: 'x' }, 'job-1', 'x')], ['other', 'other', 'other'])
+  check('17 homes + the office + 2 places is iOS\'s 20', R.MAX_SITE_HOMES + 1 + R.MAX_COMPANY_PLACES, 20)
+  const now = Date.parse('2026-11-25T16:00:00Z')
+  check('Start my day never offers a company place\'s arrival', R.arrivalToOffer([{ jobId: 'place:p1', mark: { s: 'in', t: now - 20 * 60_000 } }], now), null)
+  check('the Always reminder: first time, after a week, not within it, not with a clock from the future',
+    [R.siteNudgeDue(null, now), R.siteNudgeDue(now - R.SITE_NUDGE_EVERY_MS, now), R.siteNudgeDue(now - 6 * 24 * 3600_000, now), R.siteNudgeDue(now + 3600_000, now)],
+    [true, true, false, true])
+
+  const siteSrc = read('src/lib/siteVisits.ts'), fenceSrc = read('src/lib/arrivalGeofence.ts'), trackSrc = read('src/lib/locationTracker.ts')
+  check('only a company place\'s row sends place_id (an older server has no such column)',
+    /if \(place_id\) row\.place_id = place_id\n  await recordSiteEvent\(row\)/.test(siteSrc) && !rowKeys.includes('place_id'), true)
+  check('the places are read like the office (saved copy, open ones, at most 2)',
+    /from\('company_places'\)\.select\('id, lat, lng'\)\.eq\('tenant_id', tenantId\)\.is\('archived_at', null\)/.test(siteSrc) && /\.limit\(MAX_COMPANY_PLACES\)/.test(siteSrc), true)
+  check('day-shift phones fence 17 homes, the office, then each place with enter and exit',
+    /\.limit\(site \? MAX_SITE_HOMES : MAX_REGIONS\)/.test(fenceSrc)
+      && /identifier: placeFence\(p\.id\), latitude: p\.lat, longitude: p\.lng, radius: RADIUS_M, notifyOnEnter: true, notifyOnExit: true/.test(fenceSrc)
+      && fenceSrc.indexOf('identifier: OFFICE_FENCE') < fenceSrc.indexOf('identifier: placeFence(p.id)')
+      && fenceSrc.indexOf('identifier: placeFence(p.id)') < fenceSrc.indexOf('markSiteFences(site ?'), true)
+  check('the fence kind comes from the rule (office and places any day)', /return fenceKind\(raw \? JSON\.parse\(raw\) : null, jobId, today\(\)\)/.test(siteSrc), true)
+  check('the weekly reminder runs only where the company starts forgotten days, and keeps the old once-only one otherwise',
+    /if \(await startsForgottenDays\(user\.tenant_id\)\) \{\n        if \(siteNudgeDue\(/.test(trackSrc) && /\} else if \(!\(await AsyncStorage\.getItem\(NUDGE_KEY\)\)\) \{/.test(trackSrc), true)
+  const P = await import(join(repo, 'src/lib/pauseReason.ts'))
+  const t = k => `[${k}]`
+  check('the server\'s new notes show in the crew\'s language',
+    ['Auto-closed: ended when they left a company place', 'Started from location: arrived at the office',
+     'Started from location: arrived at a company place', 'Started from location: arrived at a home on their list',
+     'Started from location: arrived at the office · Auto-closed: ended when they left a company place'].map(n => P.pauseReasonLabel(n, t)),
+    ['[pr_auto_left_place]', '[pr_loc_start_office]', '[pr_loc_start_place]', '[pr_loc_start_home]', '[pr_loc_start_office] · [pr_auto_left_place]'])
+  const i18n = read('src/lib/i18n.ts')
+  for (const k of ['pr_auto_left_place', 'pr_loc_start_office', 'pr_loc_start_place', 'pr_loc_start_home', 'bg_nudge_site_title', 'bg_nudge_site_ios', 'bg_nudge_site_android'])
+    check(`${k} is in English, Spanish and Portuguese`, (i18n.match(new RegExp(`\\n    ${k}: '`, 'g')) || []).length, 3)
+
+  // The server side, when the web repo is here: the notes it writes and the grant
+  let web = null
+  try {
+    const dir = join(webRepo, 'supabase/migrations')
+    const f = readdirSync(dir)
+    const pick = s => f.find(n => n.endsWith(s))
+    if (pick('_company_places.sql') && pick('_start_forgotten_days_from_location.sql'))
+      web = readFileSync(join(dir, pick('_company_places.sql')), 'utf8') + readFileSync(join(dir, pick('_start_forgotten_days_from_location.sql')), 'utf8')
+  } catch { /* no web repo here */ }
+  if (!web) console.log('–  company places server checks skipped: no company_places + start_forgotten_days_from_location migrations at', webRepo, '(set RINSEBASE_WEB_REPO)')
+  else {
+    check('the server lets the crew insert place_id, and calls a place crossing \'place\'',
+      /grant insert \(place_id\) on public\.job_site_events to authenticated/.test(web) && /check \(place in \('home', 'office', 'place'\)\)/.test(web), true)
+    for (const n of ['Auto-closed: ended when they left a company place', 'Started from location: arrived at the office',
+                     'Started from location: arrived at a company place', 'Started from location: arrived at a home on their list'])
+      check(`the server writes "${n}"`, web.includes(`'${n}'`), true)
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)
